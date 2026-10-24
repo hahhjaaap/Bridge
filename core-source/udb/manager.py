@@ -74,7 +74,7 @@ QMessageBox QPushButton:hover, QInputDialog QPushButton:hover {{ background:#314
 QSplitter::handle {{ background:transparent; width:1px; }}
 '''
 
-def label(text='', name='', wrap=False):
+def label(text: str = '', name: str = '', wrap: bool = False) -> QLabel:
     w=QLabel(text);w.setTextFormat(Qt.TextFormat.PlainText)
     if name:w.setObjectName(name)
     w.setWordWrap(wrap)
@@ -82,17 +82,17 @@ def label(text='', name='', wrap=False):
     w.setMinimumHeight(22)
     return w
 
-def row(*widgets):
+def row(*widgets: QWidget | None) -> QHBoxLayout:
     layout=QHBoxLayout();layout.setContentsMargins(0,0,0,0);layout.setSpacing(12)
     for w in widgets:
         if w is None:layout.addStretch()
         else:layout.addWidget(w)
     return layout
 
-def panel():
+def panel() -> QFrame:
     w=QFrame();w.setObjectName('Panel');return w
 
-def empty_state(title, description, glyph='check'):
+def empty_state(title: str, description: str, glyph: str = 'check') -> QFrame:
     card=panel();lay=QVBoxLayout(card);lay.setContentsMargins(28,24,28,24);lay.setSpacing(12)
     lay.addStretch()
     mark=QLabel();mark.setPixmap(icon(glyph,ACCENT,40).pixmap(40,40));mark.setAlignment(Qt.AlignmentFlag.AlignCenter);mark.setMinimumHeight(48);lay.addWidget(mark)
@@ -100,7 +100,7 @@ def empty_state(title, description, glyph='check'):
     body=label(description,'Muted',True);body.setAlignment(Qt.AlignmentFlag.AlignCenter);body.setMinimumHeight(64);lay.addWidget(body)
     lay.addStretch();return card
 
-def icon(name, color=TEXT, size=20):
+def icon(name: str, color: str = TEXT, size: int = 20) -> QIcon:
     pm=QPixmap(size*2,size*2);pm.fill(Qt.GlobalColor.transparent)
     p=QPainter(pm);p.setRenderHint(QPainter.RenderHint.Antialiasing);p.scale(size*2/24,size*2/24)
     p.setPen(QPen(QColor(color),1.6,Qt.PenStyle.SolidLine,Qt.PenCapStyle.RoundCap,Qt.PenJoinStyle.RoundJoin))
@@ -641,11 +641,11 @@ class MainWindow(QMainWindow):
             self._closing=True;self.timer.stop();self.controller.close()
         event.accept()
 
-def make_app():
+def make_app() -> QApplication:
     app=QApplication.instance() or QApplication(sys.argv[:1]);app.setApplicationName('Universal Desktop Bridge');app.setOrganizationName('UniversalDesktopBridge');app.setStyle(QStyleFactory.create('Fusion'));app.setFont(QFont('Segoe UI',10));app.setStyleSheet(STYLE);app.setProperty('motion',True)
     palette=QPalette();palette.setColor(QPalette.ColorRole.Window,QColor(BG));palette.setColor(QPalette.ColorRole.Base,QColor(BG));palette.setColor(QPalette.ColorRole.Text,QColor(TEXT));palette.setColor(QPalette.ColorRole.WindowText,QColor(TEXT));palette.setColor(QPalette.ColorRole.Button,QColor(PANEL));palette.setColor(QPalette.ColorRole.ButtonText,QColor(TEXT));palette.setColor(QPalette.ColorRole.Highlight,QColor('#345040'));app.setPalette(palette);return app
 
-def run(home:Path,start_tunnel=False,screenshot=None):
+def run(home: Path, start_tunnel: bool = False, screenshot: str | Path | None = None) -> int | None:
     if os.name=='nt':
         import ctypes
         ctypes.windll.kernel32.FreeConsole()
@@ -653,18 +653,28 @@ def run(home:Path,start_tunnel=False,screenshot=None):
     lock=QLockFile(str(controller.agent.state/'manager.lock'));lock.setStaleLockTime(30000)
     if not lock.tryLock(50):
         QMessageBox.information(None,'Bridge đang mở','Ứng dụng đã được mở. Kiểm tra cửa sổ hoặc thanh tác vụ Windows.');return
-    controller.start_host()
-    window=MainWindow(home,controller);window.show()
-    if start_tunnel or settings.get('autoconnect',False):QTimer.singleShot(350,window.toggle_tunnel)
-    if screenshot:
-        dest=Path(screenshot)
-        def capture():
-            if not window.grab().save(str(dest)):raise OSError('GUI screenshot failed')
-            app.quit()
-        QTimer.singleShot(7000 if start_tunnel else 550,capture)
-    code=app.exec();controller.close();lock.unlock();return code
+    try:
+        controller.start_host()
+        window = MainWindow(home, controller)
+        window.show()
+        if start_tunnel or settings.get('autoconnect', False):
+            QTimer.singleShot(350, window.toggle_tunnel)
+        if screenshot:
+            dest = Path(screenshot)
 
-def self_test(preview_dir=None):
+            def capture() -> None:
+                if not window.grab().save(str(dest)):
+                    raise OSError('GUI screenshot failed')
+                app.quit()
+
+            QTimer.singleShot(7000 if start_tunnel else 550, capture)
+        return app.exec()
+    finally:
+        # Always release locally owned resources, even if the UI cannot start.
+        controller.close()
+        lock.unlock()
+
+def self_test(preview_dir: str | Path | None = None) -> None:
     """Exercise the frozen Qt UI with disposable synthetic data, not the user's state."""
     import tempfile
     from PySide6.QtTest import QTest
