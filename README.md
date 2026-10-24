@@ -23,3 +23,11 @@ Windows acceptance: four native ConPTY tests (console mode, VT arrow/Unicode/res
 Run test.cmd in a configured Windows installation. Native tests create and close their own forms/processes; GUI tests need an unlocked attended desktop. Multi-DPI/application compatibility is not comprehensively certified.
 
 The repo contains source and tests. Local deployment reports, machine paths and private work records are excluded.
+
+## Source maintenance
+
+- Run **python scripts/validate_source.py** to check version consistency, required source files, safe configuration placeholders, local runtime artifacts, and selected high-confidence credential patterns in the current tracked working tree.
+- Run **python -m compileall -q .** to catch Python syntax errors before review.
+- The Windows source-validation workflow runs the portable regression tests on pushes and pull requests. The full test.cmd suite remains a local acceptance test because some checks depend on the configured UDB installation and an unlocked desktop.
+- Keep the version in plugin.json identical to VERSION in udb_unified.py. The README heading uses the stable major.minor.patch part of that version.
+- See CONTRIBUTING.md for development steps and SECURITY.md for credential-handling rules. The source validator does not scan the entire Git history; rotate any real credential that may have been committed.

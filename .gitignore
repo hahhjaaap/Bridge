@@ -1,9 +1,49 @@
+# Python source and test caches
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+htmlcov/
+.venv/
+venv/
+env/
+
+# Local credentials and MCP runtime configuration
+.env
+.env.*
+!.env.example
+mcp.json
+mcp.local.json
+MCP_CONFIGURATION.local.json
+secrets/
+local-config/
+private-config/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Machine-specific UDB state and reports
+state/
+.udb-state/
+.udb-recovery/
+logs/
+reports/
+deployment/
+
+# Build output and vendored dependencies
+build/
+dist/
+release/
+*.exe
+*.dll
+*.zip
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.bak
 vendor/
 vendor-office/
-state/
-.env
-*.exe
-*.zip
