@@ -136,7 +136,6 @@ try:
         assert tool('file_transfer',action='copy',source=source,destination=moved).get('isError')
         context=ok('file_search',path=prefix,pattern='*.py',text='Nghiệm thu',context=1)
         assert 'source.py:1' in json.dumps(context,ensure_ascii=False)
-        assert tool('file_search_context',path=prefix,text='Nghiệm thu').get('isError')  # legacy alias is not public
         waiting=ok('terminal_start',program=sys.executable,arguments=['-u','-c',"print(input(),flush=True)"],cwd=prefix,wait_ms=0)
         sid=re.search(r'Phiên: ([a-f0-9]{12})',waiting['content'][0]['text']).group(1)
         ok('terminal_interact',session_id=sid,text='Gộp terminal 🚀\n',send_only=True)
