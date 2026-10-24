@@ -28,6 +28,12 @@ class Client:
         self.rpc('initialize',dict(protocolVersion='2024-11-05',capabilities={},clientInfo=dict(name='UDB UIA regression',version='1')))
         self.p.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n');self.p.stdin.flush()
     def rpc(self,method,params):
+        if method == 'tools/call' and isinstance(params,dict) and params.get('name') != 'udb':
+            params = {'name':'udb','arguments':{
+                'action':'call',
+                'tool':params.get('name'),
+                'arguments':params.get('arguments',{})
+            }}
         ident=next(self.ids)
         self.p.stdin.write((json.dumps(dict(jsonrpc='2.0',id=ident,method=method,params=params),ensure_ascii=False)+'\n').encode());self.p.stdin.flush()
         deadline=time.monotonic()+30
