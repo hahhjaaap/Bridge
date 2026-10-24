@@ -29,6 +29,13 @@ _WORKER_SUFFIXES = {
     "docs": frozenset({".md", ".json", ".png"}),
     "command": frozenset({".py", ".ps1", ".json", ".md"}),
 }
+_NOTICE_SUFFIXES = frozenset({"", ".txt", ".md", ".rst", ".html"})
+_NOTICE_LICENSE_ENDINGS = (
+    ".apache", ".apache-2.0", ".bsd", ".bsd-2-clause", ".bsd-3-clause",
+    ".mit", ".lgplv2.1", ".lgplv3", ".gplv2", ".gplv3", ".psf",
+    ".mpl", ".mpl-2.0", ".zlib", ".cc0", ".unlicense", ".epl-2.0",
+    ".cddl-1.0", ".qt", ".lesser",
+)
 _SECRET_PATTERNS = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
     rb"(?<![A-Za-z0-9_])(?:ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{30,}",
     rb"(?<![A-Za-z0-9_])github_pat_[A-Za-z0-9_]{40,}",
@@ -64,9 +71,10 @@ def allowed_release_member(name: str, root_files: tuple[str, ...]) -> bool:
         return suffix in _WORKER_SUFFIXES[family] or name == "udb/build_info.json"
     if family == "THIRD_PARTY_NOTICES" and len(parts) >= 3:
         leaf = lower_parts[-1]
+        text_notice = suffix in _NOTICE_SUFFIXES or any(leaf.endswith(end) for end in _NOTICE_LICENSE_ENDINGS)
         return (lower_parts[1].endswith(".dist-info")
                 and any(word in leaf for word in ("license", "copying", "notice"))
-                and suffix in ("", ".txt", ".md", ".rst", ".html"))
+                and text_notice)
     if family != "vendor":
         return False
 

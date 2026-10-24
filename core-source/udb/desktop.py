@@ -278,16 +278,37 @@ class DesktopController:
 
     def close(self):
         # The GUI close event and run() finalizer may both call close().
-        # Mark closed under the lock so owned handles are never closed twice.
+        # Claim cleanup once and snapshot owned resources under the lock.
         with self.lock:
             if self.closed.is_set():
                 return
             self.closed.set()
-        if self.host_service is not None:
-            self.host_service.close(); self.host_service = None
-        from .desktop_vm import close_owned
-        close_owned(self.agent)
-        for name in list(self.children):
-            self.stop_process(name)
-        for handle in self.handles.values():
-            handle.close()
+            host_service, self.host_service = self.host_service, None
+            children = list(self.children)
+            handles = list(self.handles.values())
+            self.handles.clear()
+
+        errors = []
+        if host_service is not None:
+            try:
+                host_service.close()
+            except Exception as error:
+                errors.append(type(error).__name__)
+        try:
+            from .desktop_vm import close_owned
+            close_owned(self.agent)
+        except Exception as error:
+            errors.append(type(error).__name__)
+        for name in children:
+            try:
+                self.stop_process(name)
+            except Exception as error:
+                errors.append(type(error).__name__)
+        for handle in handles:
+            try:
+                handle.close()
+            except Exception as error:
+                errors.append(type(error).__name__)
+        if errors:
+            # Never expose exception text, which may contain local paths or secrets.
+            self.error = 'Cleanup completed with errors: ' + ', '.join(errors)

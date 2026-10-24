@@ -1804,9 +1804,11 @@ def run(home: Path, start_tunnel: bool = False, screenshot: str | Path | None = 
             QTimer.singleShot(7000 if start_tunnel else 550, capture)
         return app.exec()
     finally:
-        # Always release locally owned resources, even if the UI cannot start.
-        controller.close()
-        lock.unlock()
+        # Always release the instance lock even if owned-resource cleanup fails.
+        try:
+            controller.close()
+        finally:
+            lock.unlock()
 
 
 def self_test(preview_dir: str | Path | None = None) -> None:

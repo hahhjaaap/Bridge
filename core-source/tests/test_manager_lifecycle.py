@@ -48,6 +48,8 @@ def _simulate(*, stage="ok", lock_held=True):
 
         def close(self):
             events.append("close")
+            if stage == "close":
+                raise RuntimeError("controller cleanup failed")
 
     class FakeLock:
         def __init__(self, path):
@@ -112,6 +114,14 @@ def test_gui_run_releases_resources_after_success():
     assert result == 11
     assert events.count("close") == 1
     assert events.count("unlock") == 1
+
+
+def test_gui_run_unlocks_even_if_controller_close_raises():
+    events, result = _simulate(stage="close")
+    assert result == "error"
+    assert events.count("close") == 1
+    assert events.count("unlock") == 1
+    assert events.index("unlock") > events.index("close")
 
 
 def test_second_instance_does_not_start_host():

@@ -33,6 +33,7 @@ from udb.release_policy import allowed_release_member, assert_safe_payload
     "udb/HTTP-TOKEN",
     "vendor/unknown.exe",
     "tests/test_release_security.py",
+    "THIRD_PARTY_NOTICES/example.dist-info/LICENSE.dll",
     "arbitrary/README.md",
     "../bridge.py",
     r"udb\bridge.py",
@@ -52,6 +53,9 @@ def test_release_path_denials(name):
     "vendor/python-runtime/DLLs/_ssl.pyd",
     "vendor/python-runtime/Lib/encodings/__init__.py",
     "THIRD_PARTY_NOTICES/example.dist-info/LICENSE.txt",
+    "THIRD_PARTY_NOTICES/example.dist-info/LICENSE.APACHE",
+    "THIRD_PARTY_NOTICES/example.dist-info/LICENSE.BSD-3-Clause",
+    "THIRD_PARTY_NOTICES/example.dist-info/LICENSE.LGPLv2.1",
 ])
 def test_release_path_allowlist(name):
     assert allowed_release_member(name, ROOT_FILES)
@@ -119,6 +123,10 @@ def package_fixture(tmp_path):
 
     base = tmp_path / "source"
     (base / "udb").mkdir(parents=True)
+    (base / "tests").mkdir()
+    (base / "tests" / "test_release_security.py").write_text(
+        'fake = b"ghp_" + b"A1" * 20\\n', encoding="utf-8"
+    )
     for name in ROOT_FILES:
         (base / name).write_text("fixture\n", encoding="utf-8")
     for name in WORKERS:
