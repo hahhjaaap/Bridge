@@ -21,7 +21,8 @@ def main():
             assert row['state']=='completed',row
             return row['result']
         try:
-            assert len(client.rpc('tools/list',{})['tools'])==60
+            assert [t['name'] for t in client.rpc('tools/list',{})['tools']]==['udb']
+        assert len(client.rpc('tools/call',dict(name='udb',arguments={'action':'list'}))['structuredContent']['tools'])==60
             name=prefix+'/data.xlsx'
             created=job('spreadsheet',action='write',path=name,sheets={'Data':[['Tiếng Việt',3]]})
             assert created['committed']
