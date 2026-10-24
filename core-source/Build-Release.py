@@ -7,8 +7,10 @@ import sys
 from pathlib import Path
 from udb.release import write_build_info, validate_vendor_directory
 
-def run(*args, stdout=None):
-    subprocess.run([str(x) for x in args],check=True,stdout=stdout)
+def run(*args, stdout=None, timeout=300):
+    command = [str(x) for x in args]
+    print("RUN:", " ".join(command), flush=True)
+    subprocess.run(command, check=True, stdout=stdout, timeout=timeout)
 
 def main():
     parser=argparse.ArgumentParser()
@@ -36,15 +38,15 @@ def main():
         run(exe,'--list-tools',stdout=destination)
     if json.loads((output/'tool-catalog.json').read_text('utf-8'))['tool_count'] != 35:
         raise RuntimeError('Unexpected tool catalog; review API before release')
-    run(exe,'--self-test-credentials')
-    run(exe,'--gui-check','--gui-qa-dir',output/'gui-qa')
-    run(sys.executable,'tests/smoke_mcp.py','--exe',exe,'--isolated')
+    run(exe,'--self-test-credentials',timeout=60)
+    run(exe,'--gui-check','--gui-qa-dir',output/'gui-qa',timeout=120)
+    run(sys.executable,'tests/smoke_mcp.py','--exe',exe,'--isolated',timeout=90)
     with (output/'headless-live-acceptance.json').open('w',encoding='utf-8') as destination:
-        run(sys.executable,'tests/live_headless.py','--exe',exe,stdout=destination)
+        run(sys.executable,'tests/live_headless.py','--exe',exe,stdout=destination,timeout=90)
     with (output/'computer-live-acceptance.json').open('w',encoding='utf-8') as destination:
-        run(sys.executable,'tests/live_computer.py','--exe',exe,stdout=destination)
+        run(sys.executable,'tests/live_computer.py','--exe',exe,stdout=destination,timeout=150)
     with (output/'host-live-acceptance.json').open('w',encoding='utf-8') as destination:
-        run(sys.executable,'tests/live_host_background.py','--exe',exe,stdout=destination)
+        run(sys.executable,'tests/live_host_background.py','--exe',exe,stdout=destination,timeout=180)
     from udb import __version__
     run(sys.executable,'Make-Package.py','--exe',exe,'--output',
         output/f'Universal-Desktop-Bridge-{__version__}-Windows.zip')
