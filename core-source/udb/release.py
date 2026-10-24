@@ -152,7 +152,7 @@ def package_inputs(base, exe):
             if p.is_file():
                 name = p.relative_to(base).as_posix()
                 if not allowed_release_member(name, ROOT_FILES):
-                    raise ValueError('Disallowed vendor release component')
+                    raise ValueError('Disallowed vendor release component: ' + name)
                 files[name] = regular_file(p)
     site = base/'.venv'/'Lib'/'site-packages'
     for metadata in sorted(site.glob('*.dist-info')):
