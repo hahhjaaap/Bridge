@@ -64,3 +64,13 @@ jobs:
           & ".\ci-dist\UniversalDesktopBridge.exe" --list-tools | Out-File -LiteralPath .\ci-tool-catalog.json -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw "Frozen tool catalog failed" }
           python -c "import json; d=json.load(open('ci-tool-catalog.json',encoding='utf-8-sig')); print('FROZEN_TOOL_COUNT',d['tool_count']); assert d['tool_count']==35"
+
+      - name: Verify ZIP packaging with synthetic non-runnable vendor fixture
+        shell: pwsh
+        run: |
+          python scripts/ci_stage_synthetic_vendor.py
+          if ($LASTEXITCODE -ne 0) { throw "Synthetic vendor staging failed" }
+          python Make-Package.py --exe .\ci-dist\UniversalDesktopBridge.exe --output .\ci-dist\ci-synthetic-package.zip
+          if ($LASTEXITCODE -ne 0) { throw "Synthetic package creation failed" }
+          python Verify-Package.py .\ci-dist\ci-synthetic-package.zip
+          if ($LASTEXITCODE -ne 0) { throw "Synthetic package verification failed" }
