@@ -277,7 +277,12 @@ class DesktopController:
                 'local_running':self.alive('mcp'), 'sandbox':self.agent.diagnostics()['sandbox_available']}
 
     def close(self):
-        self.closed.set()
+        # The GUI close event and run() finalizer may both call close().
+        # Mark closed under the lock so owned handles are never closed twice.
+        with self.lock:
+            if self.closed.is_set():
+                return
+            self.closed.set()
         if self.host_service is not None:
             self.host_service.close(); self.host_service = None
         from .desktop_vm import close_owned
