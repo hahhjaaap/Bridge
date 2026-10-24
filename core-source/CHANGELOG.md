@@ -6,6 +6,8 @@
 - Add isolated Windows GUI and frozen-EXE acceptance checks.
 - Separate root proxy metadata/versioning from the standalone core EXE package.
 - Require a complete, checksummed offline runtime before creating or verifying a release ZIP.
+- Verify the official tunnel-client release and matching license bundle; include source-hash provenance in the offline package.
+- Make controller shutdown best-effort and ensure the GUI instance lock is released even if cleanup fails.
 - Make CI read-only; formatting is check-only by default and writing requires an explicit local `--write` flag.
 
 ## 0.7.0-dev.1

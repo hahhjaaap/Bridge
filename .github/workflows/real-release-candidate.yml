@@ -1,0 +1,129 @@
+name: Verified real-runtime release candidate (preview)
+
+on:
+  push:
+    branches:
+      - refactor/manager-safety-and-ci
+    paths:
+      - ".github/workflows/real-release-candidate.yml"
+      - "core-source/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-real-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: core-source
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned build and test requirements
+        run: python -m pip install -r requirements-build.txt
+      - name: Download and verify official tunnel-client v0.0.18
+        shell: pwsh
+        run: |
+          ./Install-Tunnel.ps1 -Tag v0.0.18
+          if ($LASTEXITCODE -ne 0) { throw "Official tunnel-client download/verification failed" }
+          $source = Get-Content -LiteralPath ./tools/tunnel-client-source.json -Raw | ConvertFrom-Json
+          if ($source.tag_name -ne "v0.0.18") { throw "Unexpected tunnel-client tag" }
+          if ($source.asset_sha256 -ne "sha256:8d0da1ce79532d44ccc5ed5d8bd36cdfffba37dfd287c602d69635c8bb5db2b2") {
+            throw "Official tunnel-client archive digest changed; review upstream before updating the pin"
+          }
+          if ($source.license_asset_sha256 -ne "sha256:2b1def83c55dea817579ea1a7206119356c6a97a190c31181fe7817ae60c29ec") {
+            throw "Official tunnel-client license digest changed; review upstream before updating the pin"
+          }
+      - name: Stage and verify real offline CPython runtime
+        shell: pwsh
+        run: |
+          $PythonHome = (python -c "import sys; print(sys.prefix)").Trim()
+          python Prepare-Vendor.py --python-home $PythonHome --tunnel ./tools/tunnel-client.exe --tunnel-licenses ./tools/tunnel-LICENSES.txt --tunnel-source-manifest ./tools/tunnel-client-source.json
+          if ($LASTEXITCODE -ne 0) { throw "Real offline runtime staging failed" }
+      - name: Full source tests, frozen build, isolated MCP and host acceptance
+        shell: pwsh
+        run: |
+          $BuildDir = Join-Path $env:RUNNER_TEMP "udb-real-release-build"
+          python Build-Release.py --revision $env:GITHUB_SHA --output $BuildDir
+          if ($LASTEXITCODE -ne 0) { throw "Full real-runtime release build or acceptance failed" }
+          $Zip = Join-Path $BuildDir "Universal-Desktop-Bridge-0.7.0-dev.1-Windows.zip"
+          $ExpectedHash = (Get-Content -LiteralPath ($Zip + ".sha256") -Raw).Trim().Split(' ')[0]
+          python Verify-Package.py $Zip --sha256 $ExpectedHash
+          if ($LASTEXITCODE -ne 0) { throw "Real-runtime release archive verification failed" }
+      - name: Verify clean install, upgrade, and rollback in disposable profile
+        shell: pwsh
+        run: |
+          $BuildDir = Join-Path $env:RUNNER_TEMP "udb-real-release-build"
+          $Zip = Join-Path $BuildDir "Universal-Desktop-Bridge-0.7.0-dev.1-Windows.zip"
+          $Extract1 = Join-Path $env:RUNNER_TEMP "udb-extract-first"
+          $Extract2 = Join-Path $env:RUNNER_TEMP "udb-extract-second"
+          $InstallDir = Join-Path $env:RUNNER_TEMP "udb-install-test"
+          $Build2 = Join-Path $env:RUNNER_TEMP "udb-rollback-build"
+          try {
+            Expand-Archive -LiteralPath $Zip -DestinationPath $Extract1
+            $Package1 = Join-Path $Extract1 "universal-desktop-bridge"
+            & (Join-Path $Package1 "Install.ps1") -VerifyOnly
+            if ($LASTEXITCODE -ne 0) { throw "Install.ps1 VerifyOnly failed" }
+            & (Join-Path $Package1 "Install.ps1") -InstallDir $InstallDir -NoShortcut -NoLaunch
+            if ($LASTEXITCODE -ne 0) { throw "First disposable install failed" }
+
+            $Manifest1 = Get-Content -LiteralPath (Join-Path $Package1 "RELEASE-MANIFEST.json") -Raw | ConvertFrom-Json
+            $ExeHash1 = $Manifest1.files.PSObject.Properties["UniversalDesktopBridge.exe"].Value.sha256
+            $Release1 = $Manifest1.version + "-" + $ExeHash1.Substring(0,12)
+            $State1 = Get-Content -LiteralPath (Join-Path $InstallDir "installation.json") -Raw | ConvertFrom-Json
+            if ($State1.active -ne $Release1) { throw "First installed release pointer mismatch" }
+
+            New-Item -ItemType Directory -Path $Build2 | Out-Null
+            python -c "from pathlib import Path; from udb.release import write_build_info; write_build_info(Path('.'), 'rollback-fixture')"
+            if ($LASTEXITCODE -ne 0) { throw "Rollback fixture provenance generation failed" }
+            $Dist2 = Join-Path $Build2 "bin"
+            $Work2 = Join-Path $Build2 "work"
+            python -m PyInstaller --noconfirm --clean --distpath $Dist2 --workpath $Work2 UniversalDesktopBridge.spec
+            if ($LASTEXITCODE -ne 0) { throw "Second frozen EXE build failed" }
+            $Zip2 = Join-Path $Build2 "Universal-Desktop-Bridge-0.7.0-dev.1-Windows.zip"
+            python Make-Package.py --exe (Join-Path $Dist2 "UniversalDesktopBridge.exe") --output $Zip2
+            if ($LASTEXITCODE -ne 0) { throw "Second release package failed" }
+            $Hash2 = (Get-Content -LiteralPath ($Zip2 + ".sha256") -Raw).Trim().Split(' ')[0]
+            python Verify-Package.py $Zip2 --sha256 $Hash2
+            if ($LASTEXITCODE -ne 0) { throw "Second release package verification failed" }
+
+            Expand-Archive -LiteralPath $Zip2 -DestinationPath $Extract2
+            $Package2 = Join-Path $Extract2 "universal-desktop-bridge"
+            & (Join-Path $Package2 "Install.ps1") -InstallDir $InstallDir -NoShortcut -NoLaunch
+            if ($LASTEXITCODE -ne 0) { throw "Upgrade install failed" }
+            $State2 = Get-Content -LiteralPath (Join-Path $InstallDir "installation.json") -Raw | ConvertFrom-Json
+            if ($State2.previous -ne $Release1) { throw "Upgrade did not preserve previous release pointer" }
+
+            & (Join-Path $InstallDir "Rollback.ps1")
+            if ($LASTEXITCODE -ne 0) { throw "Rollback script failed" }
+            $State3 = Get-Content -LiteralPath (Join-Path $InstallDir "installation.json") -Raw | ConvertFrom-Json
+            if ($State3.active -ne $Release1 -or $State3.sha256 -ne $ExeHash1) { throw "Rollback did not restore the first release" }
+            $InstalledExe = Join-Path (Join-Path $InstallDir "releases") (Join-Path $State3.active "UniversalDesktopBridge.exe")
+            & $InstalledExe --version
+            if ($LASTEXITCODE -ne 0) { throw "Rolled-back EXE did not start" }
+            Write-Output "REAL_RUNTIME_INSTALL_UPGRADE_ROLLBACK_PASS"
+          } finally {
+            foreach ($path in @($InstallDir, $Extract1, $Extract2, $Build2)) {
+              if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+            }
+          }
+      - name: Upload verified preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: udb-real-runtime-preview-${{ github.sha }}
+          path: |
+            \${{ runner.temp }}/udb-real-release-build/Universal-Desktop-Bridge-0.7.0-dev.1-Windows.zip
+            \${{ runner.temp }}/udb-real-release-build/Universal-Desktop-Bridge-0.7.0-dev.1-Windows.zip.sha256
+            \${{ runner.temp }}/udb-real-release-build/headless-live-acceptance.json
+            \${{ runner.temp }}/udb-real-release-build/computer-live-acceptance.json
+            \${{ runner.temp }}/udb-real-release-build/host-live-acceptance.json
+          if-no-files-found: error
+          retention-days: 7

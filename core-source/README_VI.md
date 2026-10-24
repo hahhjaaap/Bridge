@@ -10,12 +10,13 @@ Dùng checkout sạch, CPython 3.11 Windows x64 đáng tin cậy và dependency 
 
 ```powershell
 python -m pip install -r requirements-build.txt
-python Prepare-Vendor.py --python-home C:\Python311 --tunnel .\tools\tunnel-client.exe --tunnel-licenses .\tools\tunnel-LICENSES.txt
+.Install-Tunnel.ps1 -Tag v0.0.18
+python Prepare-Vendor.py --python-home C:\Python311 --tunnel .\tools\tunnel-client.exe --tunnel-licenses .\tools\tunnel-LICENSES.txt --tunnel-source-manifest .\tools\tunnel-client-source.json
 python Build-Release.py --revision "YOUR_GIT_COMMIT_SHA" --output .\release-output
 python Verify-Package.py .\release-output\Universal-Desktop-Bridge-0.7.0-dev.1-Windows.zip
 ```
 
-Thay đường dẫn và tên file ví dụ bằng giá trị cục bộ đã xác minh. `Prepare-Vendor.py` không tải dependency: cần cung cấp CPython runtime, tunnel client và gói giấy phép từ nguồn đáng tin, sau khi kiểm tra nguồn và digest. Build sẽ dừng trước PyInstaller nếu runtime offline thiếu file, chứa liên kết hoặc sai inventory/checksum.
+Thay đường dẫn và tên file ví dụ bằng giá trị cục bộ đã xác minh. `Install-Tunnel.ps1` tải tunnel-client chính thức của OpenAI cùng gói giấy phép tương ứng, xác minh SHA-256 công bố và tạo manifest nguồn. Ví dụ ghim phiên bản `v0.0.18` để tái lập; workflow kiểm tra lại digest upstream đã biết. `Prepare-Vendor.py` không tự tải dependency và từ chối binary hoặc gói giấy phép không khớp manifest nguồn. Build sẽ dừng trước PyInstaller nếu runtime offline thiếu file, chứa liên kết hoặc sai inventory/checksum.
 
 ## Cài đặt và rollback
 

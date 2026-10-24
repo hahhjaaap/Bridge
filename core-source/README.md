@@ -10,12 +10,13 @@ Use a clean checkout, trusted Windows x64 CPython 3.11, and the pinned build req
 
 ```powershell
 python -m pip install -r requirements-build.txt
-python Prepare-Vendor.py --python-home C:\Python311 --tunnel .\tools\tunnel-client.exe --tunnel-licenses .\tools\tunnel-LICENSES.txt
+.Install-Tunnel.ps1 -Tag v0.0.18
+python Prepare-Vendor.py --python-home C:\Python311 --tunnel .\tools\tunnel-client.exe --tunnel-licenses .\tools\tunnel-LICENSES.txt --tunnel-source-manifest .\tools\tunnel-client-source.json
 python Build-Release.py --revision "YOUR_GIT_COMMIT_SHA" --output .\release-output
 python Verify-Package.py .\release-output\Universal-Desktop-Bridge-0.7.0-dev.1-Windows.zip
 ```
 
-Replace example paths and versioned filenames with verified local values. `Prepare-Vendor.py` does not download dependencies: supply a trusted local CPython runtime, tunnel client and its license bundle after checking their source and digest. Build fails before PyInstaller if the offline runtime is missing, linked or inconsistent with its dependency inventory.
+Replace example paths and versioned filenames with verified local values. `Install-Tunnel.ps1` downloads the official OpenAI tunnel-client release and matching license bundle, verifies both published SHA-256 digests, and writes a source manifest. The example pins `v0.0.18` for reproducibility; the workflow checks the expected upstream digests. `Prepare-Vendor.py` does not download dependencies and refuses a tunnel executable or license bundle that differs from the source manifest. Build fails before PyInstaller if the offline runtime is missing, linked or inconsistent with its dependency inventory.
 
 ## Install and rollback
 

@@ -29,3 +29,7 @@ vendor-office/
 .env
 *.exe
 *.zip
+tools/tunnel-LICENSES.txt
+tools/tunnel-client-source.json
+tools/tunnel-client-v*-windows-amd64-licenses.txt
+tools/tunnel-unpack-*/
