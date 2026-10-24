@@ -12,6 +12,12 @@ New-Item -ItemType Directory -Path $OutputDir | Out-Null
 $OutputDir = (Resolve-Path -LiteralPath $OutputDir).Path
 Push-Location -LiteralPath $PSScriptRoot
 try {
+    & $Python -m ruff format --check udb/manager.py
+    if ($LASTEXITCODE -ne 0) { throw 'Manager format check failed' }
+    & $Python -m ruff check udb/manager.py udb/release_policy.py tests/test_manager_lifecycle.py
+    if ($LASTEXITCODE -ne 0) { throw 'Ruff static checks failed' }
+    & $Python -m mypy --config-file pyproject.toml udb/manager.py udb/release_policy.py
+    if ($LASTEXITCODE -ne 0) { throw 'Mypy static checks failed' }
     & $Python -m pytest tests -q
     if ($LASTEXITCODE -ne 0) { throw 'Unit tests failed' }
     & $Python -c 'from pathlib import Path; from udb.release import write_build_info; import sys; write_build_info(Path.cwd(), sys.argv[1])' $Revision
