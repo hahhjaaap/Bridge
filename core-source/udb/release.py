@@ -10,7 +10,7 @@ from pathlib import Path
 from . import __version__
 from .release_policy import allowed_release_member, assert_safe_payload
 
-ROOT_FILES = ('plugin.json','mcp.json','bridge.py','setup_local.py','requirements.txt',
+ROOT_FILES = ('bridge.py','setup_local.py','requirements.txt',
     'requirements-build.txt','requirements-gui.txt','Install.ps1','Install-Tunnel.ps1',
     'Enable-Sandbox.ps1','Build-Release.ps1','Build-Release.py','Make-Package.py','Verify-Package.py',
     'UniversalDesktopBridge.spec','README.md','README_VI.md','VERIFICATION.md',
@@ -18,6 +18,21 @@ ROOT_FILES = ('plugin.json','mcp.json','bridge.py','setup_local.py','requirement
     'Install-UDB-OneCommand.ps1')
 WORKERS = ('desktop_guest.py','desktop_uia.ps1','desktop_overlay.ps1','desktop_accessibility.ps1')
 PREFIX = 'universal-desktop-bridge/'
+REQUIRED_VENDOR_FILES = (
+    'vendor/python-runtime/python.exe',
+    'vendor/python-runtime/python3.dll',
+    'vendor/python-runtime/python311.dll',
+    'vendor/python-runtime/vcruntime140.dll',
+    'vendor/python-runtime/vcruntime140_1.dll',
+    'vendor/python-runtime/LICENSE.txt',
+    'vendor/python-runtime/python311._pth',
+    'vendor/python-runtime/DLLs/_ssl.pyd',
+    'vendor/python-runtime/Lib/encodings/__init__.py',
+    'vendor/python-runtime/Lib/os.py',
+    'vendor/tunnel-client.exe',
+    'vendor/tunnel-LICENSES.txt',
+    'vendor/DEPENDENCIES.json',
+)
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
@@ -30,6 +45,54 @@ def regular_file(path):
     if not path.is_file():
         raise ValueError('Missing release component: '+path.name)
     return path
+
+def validate_vendor_payload(data):
+    """Fail closed unless the offline runtime and its dependency inventory agree."""
+    vendor_names = {name for name in data if name.startswith('vendor/')}
+    if not vendor_names:
+        raise ValueError('Offline vendor runtime missing; run Prepare-Vendor.py before packaging')
+    missing = set(REQUIRED_VENDOR_FILES) - vendor_names
+    if missing:
+        raise ValueError('Offline vendor runtime incomplete: ' + ', '.join(sorted(missing)))
+    if not any(name.startswith('vendor/python-runtime/DLLs/') and Path(name).suffix.lower() in ('.dll', '.pyd')
+               for name in vendor_names):
+        raise ValueError('Offline Python runtime has no native DLL/PYD files')
+    if not any(name.startswith('vendor/python-runtime/Lib/') and name.endswith('.py') for name in vendor_names):
+        raise ValueError('Offline Python runtime has no unpacked standard library')
+    if not data['vendor/tunnel-LICENSES.txt'].strip():
+        raise ValueError('Tunnel client license notice is empty')
+    try:
+        pth = data['vendor/python-runtime/python311._pth'].decode('ascii').splitlines()
+        dependencies = json.loads(data['vendor/DEPENDENCIES.json'].decode('utf-8'))
+    except (UnicodeError, ValueError, TypeError):
+        raise ValueError('Invalid offline runtime configuration or dependency manifest') from None
+    if pth != ['Lib', '.', 'DLLs']:
+        raise ValueError('Portable Python path file must use the isolated Lib/DLLs layout')
+    if not isinstance(dependencies, dict) or not str(dependencies.get('python_version', '')).startswith('Python 3.11.'):
+        raise ValueError('Offline runtime must be Python 3.11')
+    records = dependencies.get('files')
+    actual = vendor_names - {'vendor/DEPENDENCIES.json'}
+    if not isinstance(records, dict) or set(records) != actual:
+        raise ValueError('Offline runtime dependency inventory mismatch')
+    for name, record in records.items():
+        if not isinstance(record, dict) or record.get('sha256') != sha256(data[name]) or record.get('bytes') != len(data[name]):
+            raise ValueError('Offline runtime dependency checksum mismatch: ' + name)
+    return {'files': len(vendor_names), 'python_version': dependencies['python_version']}
+
+def validate_vendor_directory(base):
+    """Validate staged runtime files before a potentially long build."""
+    base = Path(base)
+    vendor = base / 'vendor'
+    if not vendor.is_dir() or vendor.is_symlink():
+        raise ValueError('Offline vendor directory is not staged')
+    data = {}
+    for path in [vendor, *vendor.rglob('*')]:
+        if path.is_symlink() or getattr(path.lstat(), 'st_file_attributes', 0) & 0x400:
+            raise ValueError('Linked vendor component refused')
+        if path.is_file():
+            regular_file(path)
+            data[path.relative_to(base).as_posix()] = path.read_bytes()
+    return validate_vendor_payload(data)
 
 def runtime_manifest(base):
     base = Path(base)
@@ -81,13 +144,6 @@ def create_archive(base, exe, output, binary_info, notices_site=None):
         raise ValueError('Refusing to overwrite an existing release')
     if binary_info.get('version') != __version__ or binary_info.get('source_files') != runtime_manifest(base):
         raise ValueError('Candidate binary and source provenance mismatch')
-    plugin = json.loads((base/'plugin.json').read_text('utf-8'))
-    if plugin['name'] != 'universal-desktop-bridge' or plugin['version'] != __version__:
-        raise ValueError('Plugin identity/version mismatch')
-    if len(plugin['extensions']['com.openai']['interface']['shortDescription']) > 30:
-        raise ValueError('Plugin shortDescription is too long')
-    if not json.loads((base/'mcp.json').read_text('utf-8'))['mcpServers']:
-        raise ValueError('Missing MCP server configuration')
     inputs = package_inputs(base, exe)
     if notices_site:
         for metadata in sorted(Path(notices_site).glob('*.dist-info')):
@@ -99,6 +155,7 @@ def create_archive(base, exe, output, binary_info, notices_site=None):
         if not allowed_release_member(name, ROOT_FILES):
             raise ValueError('Disallowed release component')
         assert_safe_payload(content)
+    validate_vendor_payload(data)
     if json.loads(data['udb/build_info.json']) != binary_info:
         raise ValueError('Embedded build provenance mismatch')
     inventory = {'version':__version__, 'code_signed':False, 'integrity_only':True, 'files':{
@@ -151,15 +208,23 @@ def verify_archive(path, expected_sha256=None):
         expected = {PREFIX+n for n in inventory['files']} | {PREFIX+'RELEASE-MANIFEST.json'}
         if set(names) != expected:
             raise ValueError('Release file set mismatch')
-        required = {'UniversalDesktopBridge.exe','plugin.json','mcp.json','THIRD_PARTY.md',
-                    'UniversalDesktopBridge.spec','udb/build_info.json'} | {'udb/'+w for w in WORKERS}
+        required = set(ROOT_FILES) | {'UniversalDesktopBridge.exe', 'udb/build_info.json'} | {'udb/'+w for w in WORKERS}
         if not required <= set(inventory['files']):
             raise ValueError('Required release component missing')
+        payloads = {}
         for name, record in inventory['files'].items():
             b = archive.read(PREFIX+name)
+            payloads[name] = b
             assert_safe_payload(b)
             if len(b) != record['size_bytes'] or sha256(b) != record['sha256']:
                 raise ValueError('Release checksum mismatch: '+name)
+        validate_vendor_payload(payloads)
+        try:
+            build_info = json.loads(payloads['udb/build_info.json'])
+        except (ValueError, TypeError):
+            raise ValueError('Invalid embedded build provenance') from None
+        if build_info.get('version') != inventory.get('version'):
+            raise ValueError('Release manifest/build version mismatch')
     return {'verified':True,'version':inventory['version'],'files':len(inventory['files']),
             'publisher_authenticated':False}
 

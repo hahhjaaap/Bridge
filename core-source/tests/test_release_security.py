@@ -83,6 +83,36 @@ def test_synthetic_test_credentials_are_not_treated_as_real_keys():
     assert_safe_payload(b"sk-synthetic-NOT-A-REAL-KEY_123-")
 
 
+def _write_synthetic_vendor(base):
+    from udb.release import sha256
+
+    payloads = {
+        'vendor/python-runtime/python.exe': b'synthetic-python-runtime',
+        'vendor/python-runtime/python3.dll': b'synthetic-python3-dll',
+        'vendor/python-runtime/python311.dll': b'synthetic-python311-dll',
+        'vendor/python-runtime/vcruntime140.dll': b'synthetic-vcruntime140',
+        'vendor/python-runtime/vcruntime140_1.dll': b'synthetic-vcruntime140_1',
+        'vendor/python-runtime/LICENSE.txt': b'synthetic-python-license',
+        'vendor/python-runtime/python311._pth': b'Lib\n.\nDLLs\n',
+        'vendor/python-runtime/DLLs/_ssl.pyd': b'synthetic-ssl-extension',
+        'vendor/python-runtime/Lib/encodings/__init__.py': b'# synthetic encodings\n',
+        'vendor/python-runtime/Lib/os.py': b'# synthetic os module\n',
+        'vendor/tunnel-client.exe': b'synthetic-tunnel-client',
+        'vendor/tunnel-LICENSES.txt': b'synthetic-tunnel-license-notice',
+    }
+    for name, content in payloads.items():
+        path = base / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    records = {name: {'sha256': sha256(content), 'bytes': len(content)}
+               for name, content in payloads.items()}
+    (base / 'vendor' / 'DEPENDENCIES.json').write_text(json.dumps({
+        'python_version': 'Python 3.11.9',
+        'origin': 'synthetic test fixture',
+        'files': records,
+    }, sort_keys=True), encoding='utf-8')
+
+
 @pytest.fixture()
 def package_fixture(tmp_path):
     from udb.release import WORKERS
@@ -91,16 +121,10 @@ def package_fixture(tmp_path):
     (base / "udb").mkdir(parents=True)
     for name in ROOT_FILES:
         (base / name).write_text("fixture\n", encoding="utf-8")
-    from udb import __version__
-    (base / "plugin.json").write_text(json.dumps({
-        "name": "universal-desktop-bridge",
-        "version": __version__,
-        "extensions": {"com.openai": {"interface": {"shortDescription": "UDB"}}},
-    }), encoding="utf-8")
-    (base / "mcp.json").write_text('{"mcpServers":{"test":{}}}', encoding="utf-8")
     for name in WORKERS:
         (base / "udb" / name).write_text("# worker\n", encoding="utf-8")
     (base / "udb" / "__init__.py").write_text("# module\n", encoding="utf-8")
+    _write_synthetic_vendor(base)
     exe = tmp_path / "candidate.exe"
     exe.write_bytes(b"synthetic-not-executable")
     return base, exe, tmp_path / "candidate.zip"
@@ -158,9 +182,13 @@ def test_rehashed_manifest_cannot_hide_nested_zip(package_fixture):
 def test_vendor_runtime_allowlisted_and_private_vendor_fails(package_fixture):
     base, _, output = package_fixture
     stdlib = base / "vendor" / "python-runtime" / "Lib" / "encodings"
-    stdlib.mkdir(parents=True)
-    (stdlib / "__init__.py").write_text("# stdlib\n", encoding="utf-8")
+    assert (stdlib / "__init__.py").is_file()
     _pack(package_fixture)
+    with zipfile.ZipFile(output) as archive:
+        names = set(archive.namelist())
+        assert PREFIX + "vendor/python-runtime/python.exe" in names
+        assert PREFIX + "plugin.json" not in names
+        assert PREFIX + "mcp.json" not in names
     assert verify_archive(output)["verified"]
 
     (base / "vendor" / "state").mkdir()

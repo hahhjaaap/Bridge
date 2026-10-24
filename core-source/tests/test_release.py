@@ -11,14 +11,42 @@ def release(tmp_path):
     base=tmp_path/'source';base.mkdir();(base/'udb').mkdir()
     for name in ROOT_FILES:
         (base/name).write_text('synthetic fixture\n',encoding='utf-8')
-    (base/'plugin.json').write_text(json.dumps({'name':'universal-desktop-bridge','version':__version__,
-        'extensions':{'com.openai':{'interface':{'shortDescription':'Controlled Windows projects'}}}}))
-    (base/'mcp.json').write_text('{"mcpServers":{"synthetic":{}}}')
     for name in WORKERS:
         (base/'udb'/name).write_text('# synthetic worker\n')
     (base/'udb'/'__init__.py').write_text('# synthetic module\n')
+    _write_synthetic_vendor(base)
     exe=tmp_path/'candidate.exe';exe.write_bytes(b'SYNTHETIC-NOT-EXECUTABLE')
     return base,exe,tmp_path/'candidate.zip',write_build_info(base,'fixture-revision')
+
+def _write_synthetic_vendor(base):
+    from udb.release import sha256
+
+    payloads = {
+        'vendor/python-runtime/python.exe': b'synthetic-python-runtime',
+        'vendor/python-runtime/python3.dll': b'synthetic-python3-dll',
+        'vendor/python-runtime/python311.dll': b'synthetic-python311-dll',
+        'vendor/python-runtime/vcruntime140.dll': b'synthetic-vcruntime140',
+        'vendor/python-runtime/vcruntime140_1.dll': b'synthetic-vcruntime140_1',
+        'vendor/python-runtime/LICENSE.txt': b'synthetic-python-license',
+        'vendor/python-runtime/python311._pth': b'Lib\n.\nDLLs\n',
+        'vendor/python-runtime/DLLs/_ssl.pyd': b'synthetic-ssl-extension',
+        'vendor/python-runtime/Lib/encodings/__init__.py': b'# synthetic encodings\n',
+        'vendor/python-runtime/Lib/os.py': b'# synthetic os module\n',
+        'vendor/tunnel-client.exe': b'synthetic-tunnel-client',
+        'vendor/tunnel-LICENSES.txt': b'synthetic-tunnel-license-notice',
+    }
+    for name, content in payloads.items():
+        path = base / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    records = {name: {'sha256': sha256(content), 'bytes': len(content)}
+               for name, content in payloads.items()}
+    (base / 'vendor' / 'DEPENDENCIES.json').write_text(json.dumps({
+        'python_version': 'Python 3.11.9',
+        'origin': 'synthetic test fixture',
+        'files': records,
+    }, sort_keys=True), encoding='utf-8')
+
 
 def test_package_preserves_workers_and_excludes_private_data(release):
     base,exe,out,info=release
@@ -29,8 +57,20 @@ def test_package_preserves_workers_and_excludes_private_data(release):
     with zipfile.ZipFile(out) as z:
         assert {PREFIX+'udb/'+w for w in WORKERS} <= set(z.namelist())
         assert PREFIX+'THIRD_PARTY.md' in z.namelist()
+        assert PREFIX+'vendor/python-runtime/python.exe' in z.namelist()
+        assert PREFIX+'plugin.json' not in z.namelist()
+        assert PREFIX+'mcp.json' not in z.namelist()
         assert not any('DO-NOT-EXPORT' in n for n in z.namelist())
     assert out.with_suffix('.zip.sha256').is_file()
+
+def test_missing_vendor_runtime_fails_before_release(release):
+    import shutil
+
+    base,exe,out,info=release
+    shutil.rmtree(base/'vendor')
+    with pytest.raises(ValueError,match='Offline vendor runtime'):
+        create_archive(base,exe,out,info)
+    assert not out.exists()
 
 def test_modified_source_cannot_be_packaged_with_stale_binary(release):
     base,exe,out,info=release
