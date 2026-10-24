@@ -60,15 +60,15 @@ try:
     p.stdin.flush()
     tools = rpc(2,"tools/list")["tools"]
     names = {tool["name"] for tool in tools}
-    assert len(tools) == 58, f"Expected 58 tools, found {len(tools)}"
-    assert len(names) == 58
+    assert len(tools) == 60, f"Expected 60 tools, found {len(tools)}"
+    assert len(names) == 60
     from udb_tool_catalog import HIDDEN_ALIASES
     assert not names.intersection(HIDDEN_ALIASES)
     assert {'file_transfer','file_operation','host_workspace','propose_media_download',
             'propose_sandbox_job','propose_desktop_session','desktop_action',
             'check_python_syntax','system_process_terminate'}.issubset(names)
     assert {"bridge_status", "computer_execute", "file_list", "terminal_start", "terminal_read"}.issubset(names)
-    print("PASS | Unified tool discovery: 58 public tools (64 backend implementations retained)")
+    print("PASS | Unified tool discovery: 60 public tools (66 backend implementations retained)")
     status = rpc(3,"tools/call",{"name":"bridge_status","arguments":{}})
     assert status["content"][0]["text"].startswith("PASS |")
     assert len(status["content"]) >= 2

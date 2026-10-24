@@ -1,7 +1,7 @@
 """UDB v2 companion MCP server: scoped file tools and interactive terminal.
 
 Stdlib-only; no GUI; never changes existing UniversalDesktopBridge.exe or permissions.
-Example: python -u udb_companion.py --root <UDB_LOCAL_PATH>
+Example: python -u udb_companion.py --root PROJECT_ROOT
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from udb_managed_process import ManagedProcess, watch_parent
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 MAX_SESSIONS = 2
 MAX_RETAINED_SESSIONS = 64
 MAX_BUFFER_BYTES = 1024 * 1024
@@ -35,7 +35,7 @@ MAX_TERMINAL_OUTPUT_BYTES = 10 * 1024
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_SCAN_FILES = 20000
 MAX_OUTPUT_CHARS = 14000
-HIDDEN_DIRS = {".git", ".udb-recovery", "__pycache__", ".venv", "venv", "node_modules"}
+HIDDEN_DIRS = {".git", ".udb-recovery", ".udb-work-state", "__pycache__", ".venv", "venv", "node_modules"}
 HIDDEN_DIRS_CASEFOLD = {name.casefold() for name in HIDDEN_DIRS}
 PROTECTED_NAMES = {".env", "id_rsa", "id_ed25519", "credentials.json", "connection.json", "runtime.json", "http-token", "computer-access.dpapi"}
 PROTECTED_SUFFIXES = {".pem", ".p12", ".pfx", ".key", ".ckpt", ".safetensors", ".pt", ".pth"}
@@ -251,7 +251,7 @@ class TerminalSession:
         self.lock = threading.Lock()
         self.arrival = threading.Event()
         self.done = False
-        self.tail=b'';self.last_output=0;self.reason='';self.deadline=time.monotonic()+3600
+        self.tail=b'';self.last_output=0;self.reason='';self.deadline=time.monotonic()+3600;self.mode='pipe'
         self.input_queue=queue.Queue(maxsize=4);self.input_done=threading.Event()
         threading.Thread(target=self._write_input,daemon=True,name='UDB terminal input').start()
         self.thread = threading.Thread(target=self._pump, name=f"udb-pump-{self.id}", daemon=True)
@@ -310,7 +310,7 @@ class TerminalSession:
                 "exit_code": code, "output": decoded,
                 "next_offset": cursor, "earliest_offset": start, "output_truncated": stale,
                 "has_more": cursor < self.position, "completion_reason":self.reason,
-                "output_base64":__import__("base64").b64encode(raw).decode()}
+                "output_base64":__import__("base64").b64encode(raw).decode(),"terminal_mode":self.mode,"output_format":"vt_utf8" if self.mode=='conpty' else 'utf8'}
 
     def finish_io(self):
         self.input_done.set()
@@ -369,6 +369,7 @@ class Runtime:
         self.lock=threading.RLock();self.done=threading.Event();self.monitor_errors=0
         from udb_features import Features
         self.features=Features(self)
+        self.journal=self.features.background.journal;self.last_checkpoint=0
         threading.Thread(target=self._watch,daemon=True,name='UDB terminal deadlines').start()
 
     def _watch(self):
@@ -385,12 +386,26 @@ class Runtime:
                         self.monitor_errors+=1
                         try:session.stop('monitor_error')
                         except (OSError,RuntimeError,ValueError):pass
+                if time.monotonic()-self.last_checkpoint>.5:
+                    try:self.checkpoint()
+                    except (OSError,ValueError):self.monitor_errors+=1
+                    self.last_checkpoint=time.monotonic()
+
+    def checkpoint(self):
+        self.features.background.checkpoint()
+        for session in list(self.sessions.values()):
+            with session.lock:
+                chunks=b''.join(c for _,c in session.chunks)[-65536:]
+                row=dict(session_id=session.id,state='finished' if session.done else 'interrupted',exit_code=session.process.poll(),
+                    output_base64=__import__('base64').b64encode(chunks).decode(),earliest_offset=session.position-len(chunks),next_offset=session.position,
+                    terminal_mode=session.mode,process_restorable=False,replay_safe=False)
+            self.journal.save('terminal-'+session.id,row)
 
     def close(self):
         self.done.set();self.shutdown()
 
 
-    def start(self, program: str, arguments: list[str] | None = None, cwd: str = ".", wait_ms: int = 150, timeout_seconds: int = 3600, memory_mib: int = 1024) -> dict[str, Any]:
+    def start(self, program: str, arguments: list[str] | None = None, cwd: str = ".", wait_ms: int = 150, timeout_seconds: int = 3600, memory_mib: int = 1024, mode='pipe',columns=100,rows=30) -> dict[str, Any]:
         if not self.enable_terminal:
             raise PermissionError("Terminal disabled. Owner must restart with --enable-terminal")
         active = sum(session.process.poll() is None for session in self.sessions.values())
@@ -421,10 +436,13 @@ class Runtime:
         if not executable or not Path(executable).is_file():raise ValueError('Program was not found')
         argv[0]=str(Path(executable).resolve())
         if len(argv)>129 or any('\0' in a for a in argv) or sum(len(a) for a in argv)>24000:raise ValueError('Bounded program arguments required')
-        process=ManagedProcess(argv,str(location),memory_mib)
+        if mode not in ('pipe','conpty'):raise ValueError('Terminal mode pipe or conpty')
+        process=ManagedProcess(argv,str(location),memory_mib,conpty=mode=='conpty',columns=columns,rows=rows)
         session = TerminalSession(process, argv)
+        session.mode=mode
         session.deadline=time.monotonic()+timeout_seconds
         self.sessions[session.id] = session
+        self.checkpoint()
         return session.read(offset=0, wait_ms=wait_ms)
 
     def shutdown(self) -> None:
@@ -433,12 +451,13 @@ class Runtime:
             try:session.stop('shutdown')
             except (OSError, RuntimeError, subprocess.SubprocessError):pass
         self.features.close()
+        self.checkpoint()
 
     def tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         from udb_features import NAMES
         if name in NAMES:return self.features.tool(name,args)
         if name == "terminal_start":
-            r = self.start(args["program"], args.get("arguments", []), args.get("cwd", "."), args.get("wait_ms", 150),args.get('timeout_seconds',3600),args.get('memory_mib',1024))
+            r = self.start(args["program"], args.get("arguments", []), args.get("cwd", "."), args.get("wait_ms", 150),args.get('timeout_seconds',3600),args.get('memory_mib',1024),args.get('mode','pipe'),args.get('columns',100),args.get('rows',30))
             return respond_text(r["state"], "Lệnh đã bắt đầu" if r["state"] == "RUNNING" else "Lệnh đã hoàn tất",
                                 f"Phiên: {r['session_id']} | Exit: {r['exit_code']} | Next offset: {r['next_offset']}\n{r['output'][:MAX_OUTPUT_CHARS]}")
         if name in {"terminal_read", "terminal_send", "terminal_stop"}:
@@ -497,6 +516,7 @@ from udb_features import TOOLS as FEATURE_TOOLS
 TOOLS.extend(EXTENSION_TOOLS)
 TOOLS.extend(FEATURE_TOOLS)
 TOOLS[0]["inputSchema"]["properties"].update(timeout_seconds={"type":"integer"},memory_mib={"type":"integer"})
+TOOLS[0]['inputSchema']['properties'].update(mode={'type':'string','enum':['pipe','conpty']},columns={'type':'integer'},rows={'type':'integer'})
 install_extensions(Runtime, ScopedFiles, respond_text)
 
 
@@ -523,6 +543,9 @@ def serve(rt: Runtime) -> None:
                 value={'protocolVersion':'2024-11-05','capabilities':{'tools':{'listChanged':False}},'serverInfo':{'name':'UDB Companion v2','version':VERSION}}
             elif method=='ping':value={}
             elif method=='udb/close-sessions':rt.shutdown();value={}
+            elif method=='udb/close-desktop':
+                if hasattr(rt.features,'pointer'):rt.features.pointer.close();del rt.features.pointer
+                value={}
             elif method=='tools/list':value={'tools':TOOLS}
             elif method=='tools/call':
                 args=params.get('arguments') or {}

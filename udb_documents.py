@@ -140,7 +140,9 @@ class Documents:
                         try:stream.close()
                         except (OSError,ValueError):pass
                 if temp is not None and temp.exists() and identity(temp)[:2]==temporary_identity:temp.unlink()
-        return self.bg.new(format+'_'+action,run)
+        replay_args=dict(args)
+        if action in ('read','inspect'):replay_args['expected_sha256']=fingerprints[str(path)]
+        return self.bg.new(format+'_'+action,run,recovery=dict(tool=format,arguments=replay_args) if action in ('read','inspect') else None)
 
 
 def text(value,limit=200000):

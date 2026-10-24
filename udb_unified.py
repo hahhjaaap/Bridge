@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from udb_tool_catalog import public_catalog, resolve_call
 from udb_recovery import RecoveringChild
 
-VERSION = "0.7.0-proxy.1"
+VERSION = "0.8.0-proxy.1"
 MAX_LINE = 16 * 1024 * 1024
 MAX_WAIT = 90.0
 CHILD_SHUTDOWN_WAIT = 3.0
@@ -306,6 +306,8 @@ class UnifiedProxy:
                     grant = json.loads(next(b["text"] for b in result.get("content", []) if b.get("type") == "text"))
                 if result.get("isError") or not isinstance(grant, dict) or grant.get("enabled") is not True:
                     self.companion.request("udb/close-sessions", timeout=10)
+                elif 'desktop' not in grant.get('capabilities',[]):
+                    self.companion.request('udb/close-desktop',timeout=10)
             except (ValueError, KeyError, StopIteration, TypeError, RuntimeError, TimeoutError, OSError):
                 try:
                     self.companion.request("udb/close-sessions", timeout=10)
@@ -370,7 +372,9 @@ class UnifiedProxy:
                 self.companion.request("udb/close-sessions", timeout=10)
                 raise RuntimeError("Existing UDB owner computer access is required; AI cannot grant it")
             arguments=params.get('arguments', {})
-            job_control = (name == 'file_operation' and arguments.get('action') in ('read','list','cancel')) or (name == 'terminal_interact' and not arguments.get('text'))
+            if name=='virtual_pointer' and 'desktop' not in grant.get('capabilities',[]):raise RuntimeError('Existing desktop capability is required')
+            if name=='terminal_start' and arguments.get('mode')=='conpty' and 'execute' not in grant.get('capabilities',[]):raise RuntimeError('Existing execute capability is required')
+            job_control = (name == 'file_operation' and arguments.get('action') in ('read','list','cancel')) or (name == 'terminal_interact' and not arguments.get('text')) or (name=='virtual_pointer' and arguments.get('action') in ('hide','stop','status')) or (name=='work_recovery' and arguments.get('action','list')!='resume')
             if not job_control and name not in {"terminal_stop", "terminal_read", "terminal_list", "terminal_wait", "search_read", "search_stop", "system_process_terminate"}:
                 host = self.primary.request("tools/call", {"name": "host_status", "arguments": {}})
                 data = host.get("result", {})

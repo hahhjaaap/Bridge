@@ -61,7 +61,7 @@ class RecoveringChild:
                 if not reply.get('error'):self.initialization=copy.deepcopy(params or {})
                 return reply
         # Revocation/shutdown cleanup must never resurrect a dead Companion.
-        if method=='udb/close-sessions':
+        if method in ('udb/close-sessions','udb/close-desktop'):
             with self.lock:
                 if self.closed or not self._alive():return {'result':{'closed':True,'sessions_lost':True}}
                 child=self.child

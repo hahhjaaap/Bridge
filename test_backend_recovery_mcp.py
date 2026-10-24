@@ -39,7 +39,7 @@ def main():
     client=Client()
     def tool(name,**args):return client.rpc('tools/call',dict(name=name,arguments=args))
     try:
-        tools=client.rpc('tools/list',{})['tools'];assert len(tools)==58
+        tools=client.rpc('tools/list',{})['tools'];assert len(tools)==60
         assert not tool('bridge_status').get('isError')
         terminate_backend(client.p.pid,'original')
         assert not tool('bridge_status').get('isError'),'Real original backend did not recover'

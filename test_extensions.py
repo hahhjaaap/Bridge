@@ -14,7 +14,7 @@ def check(rt, name, expect_error=False, **kwargs):
     return body
 
 def main():
-    assert len(TOOLS) == 29, f"Expected 29 Companion tools, found {len(TOOLS)}"
+    assert len(TOOLS) == 31, f"Expected 31 Companion tools, found {len(TOOLS)}"
     with tempfile.TemporaryDirectory(prefix="udb-regression-") as root:
         rt = Runtime(root, enable_terminal=True)
         check(rt, "file_mkdir", path="work")

@@ -18,13 +18,23 @@ def result(data, state=None):
 class Features:
     def __init__(self,rt):self.rt=rt;self.background=Background(rt.files);self.catalog=ProcessCatalog(rt.files.root);self.documents=Documents(self.background)
     def close(self):
+        if hasattr(self,'pointer'):self.pointer.close();del self.pointer
         try:self.background.close()
         finally:self.catalog.observations.clear()
     def tool(self,name,a):
+        if name=='work_recovery':
+            from udb_work_journal import WorkRecovery
+            return result(WorkRecovery(self.rt).call(**a))
+        if name=='virtual_pointer':
+            if not hasattr(self,'pointer'):
+                from udb_virtual_pointer import VirtualPointer
+                self.pointer=VirtualPointer()
+            return result(self.pointer.call(**a))
         if name in ('spreadsheet','word_document','pdf_document'):return result(self.documents.start(name,**a))
         if name=='terminal_interact':
             session=self.rt.sessions.get(a['session_id'])
             if not session:raise ValueError('Unknown terminal session')
+            if 'columns' in a or 'rows' in a:session.process.resize(a.get('columns',100),a.get('rows',30))
             baseline=session.position
             if a.get('text'):session.send(a['text'])
             wait=max(0,min(1500,int(a.get('wait_ms',1000))));deadline=time.monotonic()+wait/1000
@@ -51,7 +61,7 @@ def schema(name,description,properties,required=()):
     return dict(name=name,description=description,inputSchema=dict(type='object',properties=properties,required=list(required),additionalProperties=False))
 S={'type':'string'};I={'type':'integer'};B={'type':'boolean'}
 TOOLS=[
- schema('terminal_interact','Queue input to an owned terminal and wait up to 1500ms for a heuristic or literal prompt. Prompt detection is not proof a command finished; inspect state/output.',dict(session_id=S,text=S,wait_ms=I,offset=I,expected_prompt=S),('session_id',)),
+ schema('terminal_interact','Queue input; ConPTY accepts VT keys and supports columns/rows resize. Output is VT UTF-8 for ConPTY, plain pipe otherwise. Prompt detection is heuristic.',dict(session_id=S,text=S,wait_ms=I,offset=I,expected_prompt=S,columns=I,rows=I),('session_id',)),
  schema('search_start','Start an isolated background filename/content search inside the project. Regex supported; worker time/memory bounded. Partial results can be paged while running. No secret/protected paths.',dict(path=S,pattern=S,text=S,search_type=dict(type='string',enum=['files','content']),regex=B,case_sensitive=B,timeout_seconds=I)),
  schema('search_read','Read progressive search results/status by job ID and offset, up to 100 rows. Retained jobs are lost on server restart.',dict(job_id=S,offset=I,limit=I),('job_id',)),
  schema('search_stop','Cancel this Companion-owned search only. Partial matches remain readable.',dict(job_id=S),('job_id',)),
@@ -63,6 +73,8 @@ TOOLS=[
 ]
 COMMON=dict(path=S,expected_sha256=S,destination=S,timeout_seconds=I)
 TOOLS.extend([
+ schema('work_recovery','Durable work list/inspect/resume. Recover saved job results and last 64 KiB terminal output after backend loss. Resume explicitly restarts searches, unchanged document reads, or unchanged create-only file copies; never replay terminals, moves or uncertain writes. Not a process-memory restore.',dict(action=dict(type='string',enum=['list','inspect','resume']),kind=dict(type='string',enum=['job','terminal']),work_id=S)),
+ schema('virtual_pointer','Independent visual AI pointer and bounded Win32 message mouse actions on observed windows. No SendInput/cursor relocation or automatic physical fallback. Compatibility depends on app; dispatched messages do not prove app success. Shared focus may change. list first; IDs expire 60s. Coordinates are physical screen pixels. Supports status/hide/move/click/drag/scroll.',dict(action=S,window_id=S,x=I,y=I,from_x=I,from_y=I,button=dict(type='string',enum=['left','right','middle']),clicks=I,delta=I,horizontal=B,duration_ms=I),('action',)),
  schema('spreadsheet','Project XLSX inspect/read/write/edit_cells in an isolated background job. Poll/cancel with file_operation. <=32 MiB compressed input, <=64 MiB expanded Office XML. read range default A1:J50, <=5000 cells; write sheets={name:2D rows}, <=10000 cells; edit_cells sheet/cells={A1:value} needs source expected_sha256. Writes default NEW; existing targets need SHA256. Optional destination is create-only. Strings stay text unless allow_formulas=true; formulas never evaluated. Other spreadsheet formats unsupported.',dict(COMMON,action=dict(type='string',enum=['inspect','read','write','edit_cells']),sheet=S,range=S,sheets={'type':'object'},cells={'type':'object'},data_only=B,allow_formulas=B),('action','path')),
  schema('word_document','Project DOCX inspect/read/write/replace_text background job; poll/cancel with file_operation. read uses 0-based paragraph offset/limit<=200, body/tables only. write text or paragraphs plus tables (array of 2D text arrays). replace_text old/new/occurrences requires current source expected_sha256 and preserves unaffected run formatting. Optional destination creates a new file. No headers/footers/track-change editing. Never execute macros or external resources.',dict(COMMON,action=dict(type='string',enum=['inspect','read','write','replace_text']),text=S,paragraphs={'type':'array','items':S},tables={'type':'array','items':{'type':'array','items':{'type':'array','items':S}}},old=S,new=S,occurrences=I,offset=I,limit=I),('action','path')),
  schema('pdf_document','Project PDF inspect/read/write/merge/extract background job; poll/cancel with file_operation. <=32 MiB input, <=200 pages; read start_page is 1-based, limit<=10, text extraction only (no OCR). write creates Unicode text PDF from text. merge inputs (2..20 project PDFs) into path. extract pages (1-based list) from path into new destination, needs source expected_sha256. Existing write/merge output needs SHA256; NEW is create-only. No encrypted PDFs.',dict(COMMON,action=dict(type='string',enum=['inspect','read','write','merge','extract']),text=S,inputs={'type':'array','items':S},pages={'type':'array','items':I},start_page=I,limit=I),('action','path')),

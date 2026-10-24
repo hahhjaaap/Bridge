@@ -24,11 +24,14 @@ def clean_env():
 
 
 class ManagedProcess:
-    def __init__(self, argv, cwd, memory_mib=1024):
+    def __init__(self, argv, cwd, memory_mib=1024, conpty=False, columns=100, rows=30):
         self.lock = threading.RLock()
         self.returncode = None
         self.job = self.handle = None
         self.stdin = self.stdout = None
+        self.hpc=None
+        if conpty and (os.name!='nt' or type(columns) is not int or type(rows) is not int or not 20<=columns<=400 or not 5<=rows<=200):
+            raise ValueError('ConPTY requires Windows, columns 20..400 and rows 5..200')
         if os.name != 'nt':
             self.proc = subprocess.Popen(argv, cwd=cwd, env=clean_env(), stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0, start_new_session=True)
@@ -45,6 +48,12 @@ class ManagedProcess:
         api('SetInformationJobObject', w.BOOL, HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD)
         api('TerminateJobObject', w.BOOL, HANDLE, w.UINT)
         api('CloseHandle', w.BOOL, HANDLE)
+        if conpty:
+            class Coord(ctypes.Structure):_fields_=[('X',ctypes.c_short),('Y',ctypes.c_short)]
+            self.Coord=Coord
+            api('CreatePseudoConsole',ctypes.c_long,Coord,HANDLE,HANDLE,w.DWORD,ctypes.POINTER(HANDLE))
+            api('ResizePseudoConsole',ctypes.c_long,HANDLE,Coord)
+            api('ClosePseudoConsole',None,HANDLE)
         api('GetExitCodeProcess', w.BOOL, HANDLE, ctypes.POINTER(w.DWORD))
         api('WaitForSingleObject', w.DWORD, HANDLE, w.DWORD)
         api('ResumeThread', w.DWORD, HANDLE)
@@ -81,25 +90,37 @@ class ManagedProcess:
             rin, win = os.pipe(); fds += [rin,win]
             rout, wout = os.pipe(); fds += [rout,wout]
             child = (HANDLE*2)(msvcrt.get_osfhandle(rin), msvcrt.get_osfhandle(wout))
+            if conpty:
+                hpc=HANDLE()
+                hr=k.CreatePseudoConsole(Coord(columns,rows),child[0],child[1],0,ctypes.byref(hpc))
+                if hr<0:raise OSError('CreatePseudoConsole failed: '+hex(hr&0xffffffff))
+                self.hpc=hpc
             jobs = (HANDLE*1)(self.job)
             size = ctypes.c_size_t()
-            k.InitializeProcThreadAttributeList(None,2,0,ctypes.byref(size))
+            count=2
+            k.InitializeProcThreadAttributeList(None,count,0,ctypes.byref(size))
             attrs = ctypes.create_string_buffer(size.value)
-            if not k.InitializeProcThreadAttributeList(attrs,2,0,ctypes.byref(size)):
+            if not k.InitializeProcThreadAttributeList(attrs,count,0,ctypes.byref(size)):
                 attrs = None; raise ctypes.WinError(ctypes.get_last_error())
             # HANDLE_LIST and JOB_LIST: no child can run or escape between
             # process creation and job assignment, even if this parent crashes.
-            for key, value in [(0x20002,child),(0x2000D,jobs)]:
+            attributes=[(0x2000D,jobs)] if conpty else [(0x20002,child),(0x2000D,jobs)]
+            for key, value in attributes:
                 if not k.UpdateProcThreadAttribute(attrs,0,key,value,ctypes.sizeof(value),None,None):
                     raise ctypes.WinError(ctypes.get_last_error())
+            if conpty and not k.UpdateProcThreadAttribute(attrs,0,0x20016,self.hpc,ctypes.sizeof(HANDLE),None,None):
+                raise ctypes.WinError(ctypes.get_last_error())
             si = StartupEx(); si.si.cb = ctypes.sizeof(si); si.attributes = ctypes.addressof(attrs)
-            si.si.flags = 0x100; si.si.stdin = child[0]; si.si.stdout = si.si.stderr = child[1]
+            si.si.flags=0x100
+            if not conpty:
+                si.si.flags = 0x100; si.si.stdin = child[0]; si.si.stdout = si.si.stderr = child[1]
             env = clean_env(); block = ctypes.create_unicode_buffer('\0'.join(k+'='+v for k,v in sorted(env.items(),key=lambda x:x[0].upper()))+'\0\0')
             line = ctypes.create_unicode_buffer(subprocess.list2cmdline(argv))
             with _LOCK:
                 os.set_inheritable(rin,True); os.set_inheritable(wout,True)
                 try:
-                    ok = k.CreateProcessW(argv[0],line,None,None,True,0x80000|0x4|0x08000000|0x400,block,str(cwd),ctypes.byref(si),ctypes.byref(pi))
+                    flags=0x80000|0x4|0x400|(0 if conpty else 0x08000000)
+                    ok = k.CreateProcessW(argv[0],line,None,None,not conpty,flags,block,str(cwd),ctypes.byref(si),ctypes.byref(pi))
                     if not ok: raise ctypes.WinError(ctypes.get_last_error())
                     self.handle = pi.process; self.pid = int(pi.pid)
                     if k.ResumeThread(pi.thread)==0xFFFFFFFF:raise ctypes.WinError(ctypes.get_last_error())
@@ -132,6 +153,7 @@ class ManagedProcess:
                 # A terminal root finishing must not leave background children.
                 if self.job:self.k.TerminateJobObject(self.job,1);self.k.CloseHandle(self.job);self.job=None
                 self.k.CloseHandle(self.handle);self.handle=None
+                self.close_console()
             return self.returncode
 
     def terminate(self):
@@ -151,6 +173,20 @@ class ManagedProcess:
             time.sleep(.02)
         return self.returncode if os.name=='nt' else self.proc.returncode
 
+    def resize(self,columns,rows):
+        with self.lock:
+            if not self.hpc or self.poll() is not None:raise RuntimeError('No active ConPTY')
+            if type(columns) is not int or type(rows) is not int or not 20<=columns<=400 or not 5<=rows<=200:raise ValueError('columns 20..400; rows 5..200')
+            hr=self.k.ResizePseudoConsole(self.hpc,self.Coord(columns,rows))
+            if hr<0:raise OSError('ResizePseudoConsole failed')
+
+    def close_console(self):
+        if self.hpc:
+            hpc=self.hpc;self.hpc=None
+            # Older Windows blocks here while a final output frame is drained.
+            # Keep the reader live; never close on the MCP/request thread.
+            threading.Thread(target=self.k.ClosePseudoConsole,args=(hpc,),daemon=True,name='UDB ConPTY close').start()
+
     def close(self):
         with self.lock:
             if os.name!='nt':
@@ -165,6 +201,7 @@ class ManagedProcess:
                 self.k.WaitForSingleObject(self.handle,2000)
                 self.k.CloseHandle(self.handle);self.handle=None
             if self.returncode is None:self.returncode=1
+            self.close_console()
 
 
 def watch_parent(parent_pid, on_death):

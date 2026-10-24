@@ -1,5 +1,13 @@
 @echo off
 setlocal
+python "%~dp0test_next_mcp.py"
+if errorlevel 1 exit /b %ERRORLEVEL%
+python "%~dp0test_conpty.py"
+if errorlevel 1 exit /b %ERRORLEVEL%
+python "%~dp0test_work_recovery.py"
+if errorlevel 1 exit /b %ERRORLEVEL%
+python "%~dp0test_virtual_pointer_mcp.py"
+if errorlevel 1 exit /b %ERRORLEVEL%
 python "%~dp0test_backend_recovery_mcp.py"
 if errorlevel 1 exit /b %ERRORLEVEL%
 python "%~dp0test_backend_recovery.py"
@@ -32,6 +40,6 @@ python "%~dp0test_windows_durability.py"
 if errorlevel 1 exit /b %ERRORLEVEL%
 python "%~dp0test_optimization.py"
 set "RC=%ERRORLEVEL%"
-if "%RC%"=="0" (echo [PASS] UDB Unified 58 public tools) else (echo [ERROR] UDB Unified test failed exit=%RC%)
+if "%RC%"=="0" (echo [PASS] UDB Unified 60 public tools) else (echo [ERROR] UDB Unified test failed exit=%RC%)
 exit /b %RC%
 

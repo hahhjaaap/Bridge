@@ -16,6 +16,7 @@ import time
 import uuid
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from udb_managed_process import ManagedProcess
+from udb_work_journal import Journal
 
 MAX_LARGE = 16*1024**3
 CHUNK = 1024*1024
@@ -47,13 +48,13 @@ class Cancelled(Exception):pass
 class Task:
     def __init__(self,kind):
         self.id=uuid.uuid4().hex;self.kind=kind;self.state='running';self.error='';self.result={}
-        self.cancel=threading.Event();self.lock=threading.RLock();self.rows=[];self.progress={};self.worker=None;self.thread=None;self.committed=False;self.deadline=time.monotonic()+3600
+        self.cancel=threading.Event();self.lock=threading.RLock();self.rows=[];self.progress={};self.worker=None;self.thread=None;self.committed=False;self.deadline=time.monotonic()+3600;self.persist=lambda:None;self.release=lambda:None;self.recovery=None
     def check(self):
         if self.cancel.is_set():raise Cancelled()
         if time.monotonic()>self.deadline:raise TimeoutError("Background job exceeded 3600 seconds")
     def commit(self,fn):
         with self.lock:
-            self.check();fn();self.committed=True
+            self.check();self.persist();fn();self.committed=True;self.persist()
     def start(self,fn):
         def run():
             try:
@@ -61,6 +62,9 @@ class Task:
                 self.state='completed'
             except Cancelled:self.state='cancelled'
             except Exception as exc:self.state='error';self.error=type(exc).__name__+': '+str(exc)
+            finally:
+                try:self.persist()
+                finally:self.release()
         self.thread=threading.Thread(target=run,daemon=True,name='UDB '+self.kind);self.thread.start();return self.id
     def read(self,offset=0,limit=50):
         if not 0<=int(offset)<=2000 or not 1<=int(limit)<=100:raise ValueError('Job offset/limit out of range')
@@ -77,21 +81,34 @@ class Task:
 
 
 class Background:
-    def __init__(self,files):self.files=files;self.tasks={};self.uploads={};self.upload_history={}
-    def new(self,kind,fn,before_start=None):
+    def __init__(self,files):self.files=files;self.tasks={};self.uploads={};self.upload_history={};self.journal=Journal(files.root)
+    def checkpoint(self):
+        for task in list(self.tasks.values()):task.persist()
+    def new(self,kind,fn,before_start=None,recovery=None):
         if sum(t.state=='running' for t in self.tasks.values())>=2:raise RuntimeError('Maximum two background jobs')
         while len(self.tasks)>=32:
             old=next((k for k,t in self.tasks.items() if t.state!='running'),None)
             if old is None:break
             del self.tasks[old]
         task=Task(kind);self.tasks[task.id]=task
+        task.recovery=recovery
+        lease=self.journal.lease('job-'+task.id);task.release=lease.close
+        def persist():
+            with task.lock:
+                row=task.read(0,100);row['results']=task.rows[:2000];row['recovery']=task.recovery
+                self.journal.save('job-'+task.id,row)
+        task.persist=persist;task.persist()
         if before_start:before_start(task)
         try:task.start(fn)
-        except Exception:self.tasks.pop(task.id,None);raise
+        except Exception:lease.close();self.tasks.pop(task.id,None);raise
         return task.read()
     def task(self,jid,action='read',offset=0,limit=50):
         if action=='list':return {'jobs':[dict(job_id=t.id,kind=t.kind,state=t.state) for t in self.tasks.values()]}
-        if jid not in self.tasks:raise ValueError('Unknown job; background jobs do not survive restart')
+        if jid not in self.tasks:
+            row=self.journal.load('job-'+jid)
+            if action=='cancel':raise ValueError('Past work cannot be cancelled; inspect work_recovery')
+            if row['state']=='running':row['state']='interrupted';row['outcome_unknown']=True
+            return row
         return self.tasks[jid].stop() if action=='cancel' else self.tasks[jid].read(offset,limit)
     def close(self):
         for t in list(self.tasks.values()):
@@ -146,7 +163,7 @@ class Background:
                 for stream in (proc.stdin,proc.stdout):
                     try:stream.close()
                     except (OSError,ValueError):pass
-        return self.new('search',run)
+        return self.new('search',run,recovery=dict(tool='search_start',arguments=args))
 
     def read_chunk(self,path,offset=0,limit=65536,expected_version=''):
         p=self.files.path(path);start=int(offset);count=int(limit)
@@ -225,6 +242,7 @@ class Background:
         if dst.exists() or dst.is_symlink():raise FileExistsError('Destination exists; overwrite disabled')
         self.files.path(str(dst.parent))
         def run(task):
+            if kwargs.get('resume_version') and version(src)!=kwargs['resume_version']:raise ValueError('Source changed since interruption')
             entries=[];total=0
             def visit(p):
                 nonlocal total
@@ -269,7 +287,7 @@ class Background:
                 verify();task.commit(lambda:publish_new(target,dst))
                 return dict(destination=str(dst.relative_to(self.files.root)),entries=len(entries),bytes=total,sha256_verified=True)
             finally:shutil.rmtree(stage,ignore_errors=True)
-        return self.new('file_'+action,run)
+        return self.new('file_'+action,run,recovery=dict(tool='file_operation',arguments=dict(action=action,source=source,destination=destination),source_version=version(src)) if action=='copy' and src.is_file() else None)
 
 
 def search_worker():
