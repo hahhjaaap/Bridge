@@ -1,0 +1,288 @@
+"""Local desktop process owner. No methods here are exported through MCP."""
+from __future__ import annotations
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+from pathlib import Path
+from .core import Agent, PolicyError, reject_links
+from .credentials import load_key, save_key
+
+HEALTH_URL_NAME = 'tunnel-health.url'
+CREATE_FLAGS = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+def command(home: Path, *args):
+    return ([sys.executable] if getattr(sys, 'frozen', False)
+            else [sys.executable, str(Path(__file__).resolve().parents[1]/'bridge.py')]) + list(args) + ['--home', str(home)]
+
+def mcp_command(home: Path):
+    """Use the installed stdio manifest, retaining the legacy default.
+
+    This selects a transport process; it cannot create owner permissions.
+    Invalid existing manifests fail closed rather than silently downgrade.
+    """
+    manifest = home / 'mcp.json'
+    if not manifest.exists():
+        return command(home, '--stdio')
+    reject_links(manifest)
+    with manifest.open('rb') as stream:
+        raw = stream.read(65537)
+    if len(raw) > 65536:
+        raise PolicyError('MCP manifest exceeds size limit')
+    try:
+        config = json.loads(raw.decode('utf-8-sig'))['mcpServers']['universal-desktop-bridge']
+        exe, args = config['command'], config['args']
+        if config.get('type', 'stdio') != 'stdio' or not isinstance(exe, str):
+            raise ValueError()
+        if (not isinstance(args, list) or len(args) > 128 or
+                any(not isinstance(a, str) or '\0' in a for a in args)):
+            raise ValueError()
+        argv = [a.replace('${PLUGIN_ROOT}', str(home)) for a in [exe, *args]]
+        target = Path(argv[0])
+        if not target.is_absolute() or not target.is_file() or '\0' in argv[0]:
+            raise ValueError()
+        reject_links(target)
+        return argv
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        raise PolicyError('Invalid installed stdio MCP manifest') from None
+
+
+class DesktopController:
+    def __init__(self, home: Path, monitor=True):
+        self.home = Path(home)
+        self.agent = Agent(self.home)
+        self.children = {}
+        self.handles = {}
+        self.lock = threading.RLock()
+        self.closed = threading.Event()
+        self.ready = False
+        self.error = ''
+        self.host_service = None
+        self.tunnel_wanted = False
+        self._connecting = False
+        self._generation = 0
+        self._retry_attempt = 0
+        self._retry_at = 0.0
+        if monitor:
+            threading.Thread(target=self._monitor, daemon=True).start()
+            threading.Thread(target=self._sandbox_monitor, daemon=True).start()
+
+    def start_host(self):
+        if self.host_service is None:
+            from .host_service import HostService
+            self.host_service = HostService(self.agent)
+
+    def config(self):
+        p = self.agent.state/'connection.json'
+        return json.loads(p.read_text('utf-8-sig')) if p.exists() else {}
+
+    def settings(self):
+        p = self.agent.state/'gui.json'
+        try:
+            return json.loads(p.read_text('utf-8-sig')) if p.exists() else {}
+        except (ValueError, OSError):
+            return {}
+
+    def save_settings(self, settings):
+        # Only presentation/launch preferences; never credentials.
+        safe = {k: bool(settings.get(k)) for k in ('motion', 'autoconnect')}
+        (self.agent.state/'gui.json').write_text(json.dumps(safe), encoding='utf-8')
+
+    def configure(self, tunnel_id, key=''):
+        tunnel_id = tunnel_id.strip()
+        if not re.fullmatch(r'tunnel_[a-z0-9]{32}', tunnel_id):
+            raise PolicyError('Tunnel ID không hợp lệ. Dán ID bắt đầu bằng tunnel_, không phải API key.')
+        if key:
+            save_key(key)
+        elif not self.config().get('tunnel_id'):
+            raise PolicyError('Cần nhập runtime API key khi cấu hình lần đầu.')
+        (self.agent.state/'connection.json').write_text(json.dumps({'tunnel_id':tunnel_id}), encoding='utf-8')
+
+    def alive(self, name):
+        with self.lock:
+            p = self.children.get(name)
+            return p is not None and p.poll() is None
+
+    def start_process(self, name, argv, env=None):
+        with self.lock:
+            if self.closed.is_set():
+                raise PolicyError('Ứng dụng đang đóng.')
+            if self.alive(name):
+                return
+            previous = self.handles.pop(name, None)
+            if previous:
+                previous.close()
+            log = (self.agent.state/(name+'.log')).open('ab')
+            try:
+                self.children[name] = subprocess.Popen(argv, cwd=self.home, env=env,
+                    stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                    shell=False, creationflags=CREATE_FLAGS)
+            except Exception:
+                log.close()
+                raise
+            self.handles[name] = log
+
+    def start_tunnel(self, *, _retry_generation=None):
+        with self.lock:
+            if _retry_generation is not None and (not self.tunnel_wanted or _retry_generation != self._generation):
+                return
+            if self.closed.is_set():
+                raise PolicyError('Ứng dụng đang đóng.')
+            if not self.tunnel_wanted:
+                self._generation += 1
+                self.tunnel_wanted = True
+                self._retry_attempt = 0
+            if self._connecting or self.alive('tunnel'):
+                return
+            generation = self._generation
+            self._connecting = True
+        try:
+            self._launch_tunnel(generation)
+        except Exception:
+            with self.lock:
+                if generation == self._generation and self.tunnel_wanted:
+                    # Do not forward subprocess output or credential exceptions.
+                    self.error = 'Kết nối thất bại; sẽ thử lại. Kiểm tra cài đặt kết nối.'
+            raise PolicyError('Kết nối thất bại. Kiểm tra cấu hình và trạng thái mạng trong ứng dụng.') from None
+        finally:
+            with self.lock:
+                self._connecting = False
+                if generation == self._generation and self.tunnel_wanted:
+                    delay = min(30, 2 ** min(self._retry_attempt, 5))
+                    self._retry_attempt += 1
+                    self._retry_at = time.monotonic() + delay
+
+    def _launch_tunnel(self, generation):
+        cfg = self.config()
+        if not re.fullmatch(r'tunnel_[a-z0-9]{32}', cfg.get('tunnel_id', '')):
+            raise PolicyError('Mở Cài đặt kết nối và nhập Tunnel ID trước.')
+        binary = self.home/'tools'/'tunnel-client.exe'
+        if not binary.is_file() and getattr(sys,'frozen',False):
+            binary=Path(sys.executable).parent/'vendor'/'tunnel-client.exe'
+        if not binary.is_file():
+            raise PolicyError('Chưa có tunnel-client. Chạy Install-Tunnel.ps1 trong thư mục cài đặt.')
+        try:
+            secret = load_key()
+        except Exception:
+            raise PolicyError('Chưa đọc được runtime key. Nhập lại trong Cài đặt kết nối; không gửi key vào Chat.') from None
+        work = self.agent.state/'tunnel'
+        work.mkdir(exist_ok=True)
+        env = os.environ.copy()
+        env['CONTROL_PLANE_API_KEY'] = secret
+        env['TUNNEL_CLIENT_PROFILE_DIR'] = str(work)
+        cmdline = subprocess.list2cmdline([a.replace('\\', '/') for a in mcp_command(self.home)])
+        argv = [str(binary), 'init', '--force', '--profile-dir', str(work), '--sample',
+                'sample_mcp_stdio_local', '--profile', 'universal-desktop-bridge',
+                '--health-listen-addr', '127.0.0.1:0', '--tunnel-id', cfg['tunnel_id'],
+                '--mcp-command', cmdline]
+        result = subprocess.run(argv, cwd=work, env=env, capture_output=True,
+                                timeout=30, creationflags=CREATE_FLAGS)
+        if result.returncode:
+            # Never forward captured CLI output: it may contain authentication context.
+            raise PolicyError('Khởi tạo tunnel chưa thành công. Kiểm tra ID và quyền Tunnels Read + Use.')
+        try:
+            with self.lock:
+                # A local Disconnect/Close during init invalidates this launch.
+                if self.closed.is_set() or not self.tunnel_wanted or generation != self._generation:
+                    return
+                self.ready = False
+                self.error = ''
+                health_file=self.agent.state/HEALTH_URL_NAME
+                health_file.unlink(missing_ok=True)
+                self.start_process('tunnel', [str(binary), 'run', '--profile', 'universal-desktop-bridge',
+                                   '--health.url-file', str(health_file)], env)
+        finally:
+            secret = None
+            env.pop('CONTROL_PLANE_API_KEY', None)
+
+    def start_local(self):
+        self.start_process('mcp', command(self.home, '--serve'))
+
+    def stop_process(self, name):
+        with self.lock:
+            if name == 'tunnel':
+                self.tunnel_wanted = False
+                self._generation += 1
+                self.ready = False
+                self._retry_at = 0.0
+                self.error = ''
+            p = self.children.get(name)
+            if p is None or p.poll() is not None:
+                return
+            # Only a still-live child owned by THIS controller, never arbitrary user PIDs.
+            if os.name == 'nt':
+                subprocess.run(['taskkill','/PID',str(p.pid),'/T','/F'],
+                               capture_output=True, creationflags=CREATE_FLAGS, timeout=15)
+            else:
+                p.terminate()
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        if name == 'tunnel':
+            self.ready = False
+
+    def _sandbox_monitor(self):
+        while not self.closed.wait(1):
+            try:
+                self.agent.pump_sandbox_queue_local()
+                self.agent.pump_media_queue_local()
+            except Exception as e:self.error='Automation queue: '+str(e)
+
+    def _monitor(self):
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        while not self.closed.wait(1.5):
+            if not self.alive('tunnel'):
+                self.ready = False
+                self._retry_if_due()
+                continue
+            try:
+                health_file=self.agent.state/HEALTH_URL_NAME
+                if health_file.stat().st_size>128:
+                    raise ValueError('Invalid local health reference')
+                base=health_file.read_text('utf-8-sig').strip()
+                if not re.fullmatch(r'http://127\.0\.0\.1:[0-9]{1,5}',base):
+                    raise ValueError('Loopback health URL required')
+                with opener.open(base+'/readyz', timeout=.6) as response:
+                    with self.lock:
+                        self.ready = response.status == 200 and self.tunnel_wanted and self.alive('tunnel')
+                        if self.ready:
+                            self._retry_attempt = 0
+                            self._retry_at = 0.0
+                            self.error = ''
+            except Exception:
+                self.ready = False
+
+    def _retry_if_due(self, now=None):
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            due = (self.tunnel_wanted and not self._connecting and not self.closed.is_set()
+                   and not self.alive('tunnel') and now >= self._retry_at)
+            generation = self._generation
+        if due:
+            try:
+                self.start_tunnel(_retry_generation=generation)
+            except Exception:
+                pass  # start_tunnel stores a sanitized status and bounded backoff.
+
+    def status(self):
+        return {'tunnel_running':self.alive('tunnel'), 'ready':self.ready,
+                'tunnel_wanted':self.tunnel_wanted, 'connecting':self._connecting,
+                'retry_in_seconds':max(0, round(self._retry_at-time.monotonic(), 1)) if self.tunnel_wanted else 0,
+                'connection_error':self.error,
+                'local_running':self.alive('mcp'), 'sandbox':self.agent.diagnostics()['sandbox_available']}
+
+    def close(self):
+        self.closed.set()
+        if self.host_service is not None:
+            self.host_service.close(); self.host_service = None
+        from .desktop_vm import close_owned
+        close_owned(self.agent)
+        for name in list(self.children):
+            self.stop_process(name)
+        for handle in self.handles.values():
+            handle.close()

@@ -1,0 +1,118 @@
+"""Host isolation, resource admission, bounded sessions and conservative failures."""
+import json,time,threading
+from pathlib import Path
+from types import SimpleNamespace
+import pytest
+from udb.core import Agent,PolicyError
+from udb.resources import Governor,require_capacity,LIMITS
+from udb.host_browser import Browser,validate_url
+from udb.host_client import status,atomic_json
+from udb.host_service import HostService
+
+
+def sample(**kwargs):
+    return dict(at=time.time(),cpu_percent=20,ram_percent=40,available_mib=6000,commit_percent=50,**kwargs)
+
+def test_cpu_warmup_never_admits_without_a_delta():
+    s=sample();s['cpu_percent']=None
+    assert not Governor().update(s)['admission_ready']
+
+@pytest.mark.parametrize('key,value',[('cpu_percent',85),('ram_percent',85),('available_mib',1535),('commit_percent',90)])
+def test_pressure_pauses_and_needs_three_cool_samples(key,value):
+    g=Governor();s=sample();s[key]=value
+    assert g.update(s)['paused']
+    assert not g.update(sample())['admission_ready']
+    assert not g.update(sample())['admission_ready']
+    assert g.update(sample())['admission_ready']
+
+def test_recovery_hysteresis_resets_when_machine_busy_again():
+    g=Governor();s=sample();s['ram_percent']=90;g.update(s)
+    g.update(sample());g.update(sample())
+    s['ram_percent']=79;assert g.update(s)['paused']
+    assert not g.update(sample())['admission_ready']
+
+def test_stale_unknown_and_reserved_ram_reject_without_launch():
+    g=Governor();s=g.update(sample());require_capacity(s,512)
+    s['at']=time.time()-7
+    with pytest.raises(PolicyError):require_capacity(s)
+    s['at']=time.time();s['available_mib']=1600
+    with pytest.raises(PolicyError):require_capacity(s,512)
+
+def test_heavy_task_uses_live_governor_and_preserves_reserve(monkeypatch):
+    from udb import resources,host_client
+    monkeypatch.setattr(resources,'os',SimpleNamespace(name='nt'))
+    current=Governor().update(sample());current['available_mib']=2000
+    monkeypatch.setattr(host_client,'status',lambda a:dict(worker_ready=True,resources=current))
+    with pytest.raises(PolicyError,match='RAM'):resources.guard_new_heavy_task(object(),512)
+    current['available_mib']=7000
+    resources.guard_new_heavy_task(object(),4096)
+    current['admission_ready']=False
+    with pytest.raises(PolicyError):resources.guard_new_heavy_task(object(),256)
+
+@pytest.mark.parametrize('url',['file:///C:/secret.txt','javascript:alert(1)','data:text/html,x','chrome://settings','http://localhost','http://127.0.0.1:80','http://[::1]','http://192.168.0.1','https://u:p@example.com','https://example.com/\n'])
+def test_browser_rejects_local_file_internal_and_credential_urls(url):
+    with pytest.raises(PolicyError):validate_url(url)
+
+def test_public_url_and_blank_are_supported():
+    assert validate_url('https://example.com/test?q=1')
+    assert validate_url('about:blank')
+
+def test_foreign_tab_cannot_be_addressed():
+    b=Browser.__new__(Browser);b.tabs={'owned':'sid'}
+    with pytest.raises(PolicyError):b.sid('user-tab')
+
+@pytest.fixture
+def engine(tmp_path):
+    a=Agent(tmp_path/'home');atomic_json(a.state/'host-settings.json',{'enabled':True})
+    h=HostService.__new__(HostService);h.agent=a;h.sessions={};h.resource=Governor().update(sample())
+    h.folder=a.state/'host';h.folder.mkdir();h.current=None
+    return h
+
+def test_disabled_mode_cannot_start_but_owned_close_still_works(engine):
+    atomic_json(engine.agent.state/'host-settings.json',{'enabled':False})
+    with pytest.raises(PolicyError):engine.dispatch('start',{'kind':'browser','task':'test'})
+    assert engine.dispatch('close',{'session_id':'a'*32})['closed'] is False
+
+@pytest.mark.parametrize('args',[{'kind':'powershell','task':'x'}, {'kind':'browser','task':''}, {'kind':'browser','task':'x','duration_seconds':99999}])
+def test_no_arbitrary_app_or_unbounded_session(engine,args):
+    with pytest.raises(PolicyError):engine.dispatch('start',args)
+
+def test_pressure_blocks_open_and_allows_owned_cleanup(engine):
+    engine.resource['admission_ready']=False
+    with pytest.raises(PolicyError):engine.dispatch('start',{'kind':'browser','task':'test'})
+    assert engine.dispatch('close',{'session_id':'a'*32})['closed'] is False
+
+def test_single_browser_and_max_two_sessions(engine):
+    engine.sessions={'a':{'kind':'browser'},'b':{'kind':'workspace'}}
+    with pytest.raises(PolicyError,match='Maximum 2'):engine.dispatch('start',{'kind':'browser','task':'test'})
+    engine.sessions.pop('b')
+    with pytest.raises(PolicyError,match='Reuse'):engine.dispatch('start',{'kind':'browser','task':'test'})
+
+def test_tab_cap_prevents_new_target_creation():
+    b=Browser.__new__(Browser);b.listing=lambda:[{}]*4
+    b.call=lambda *a,**k:pytest.fail('must reject before browser side effect')
+    with pytest.raises(PolicyError,match='Maximum 4'):b.new('https://example.com')
+
+def test_stale_service_snapshot_not_accepted(tmp_path):
+    a=Agent(tmp_path/'home');(a.state/'host').mkdir()
+    atomic_json(a.state/'host/status.json',{'worker_ready':True,'resources':{'at':time.time()-8}})
+    assert not status(a)['worker_ready']
+
+def test_workspace_has_no_file_or_system_input_capability(engine):
+    engine.sessions={'a'*32:{'kind':'workspace','expires':time.time()+60,'object':object()}}
+    for action in ('shell','click','keys','save','focus'):
+        with pytest.raises(PolicyError):engine.dispatch('workspace',{'session_id':'a'*32,'action':action})
+
+def test_expired_command_is_not_replayed(engine):
+    h=engine;h.folder.mkdir(exist_ok=True)
+    for name in ('inbox','replies'): (h.folder/name).mkdir()
+    h.stop_event=threading.Event();h.maintenance=threading.Event();h.lock=threading.RLock();h.publish=lambda:None
+    h.dispatch=lambda *a:pytest.fail('Expired write must never be replayed')
+    rid='b'*32
+    atomic_json(h.folder/'inbox'/(rid+'.json'),dict(id=rid,expires=time.time()-1,op='workspace',args={}))
+    t=threading.Thread(target=h._work);t.start()
+    try:
+        end=time.time()+2;p=h.folder/'replies'/(rid+'.json')
+        while not p.exists() and time.time()<end:time.sleep(.01)
+        result=json.loads(p.read_text());assert not result['ok'] and 'expired' in result['error']
+    finally:h.stop_event.set();t.join(2)
