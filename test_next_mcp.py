@@ -22,7 +22,8 @@ def main():
         try:
             client=Client()
             def call(name,**a):return client.rpc('tools/call',dict(name=name,arguments=a))
-            tools=client.rpc('tools/list',{})['tools'];assert len(tools)==60
+            tools=client.rpc('tools/list',{})['tools'];assert [t['name'] for t in tools]==['udb']
+            catalog=client.rpc('tools/call',dict(name='udb',arguments={'action':'list'}))['structuredContent']['tools'];assert len(catalog)==60
             native=call('terminal_start',program=sys.executable,arguments=['-u','-c',"import time;print('CONPTY_MCP_READY',flush=True);input();print('CONPTY_MCP_DONE',flush=True)"],cwd=prefix,mode='conpty',columns=95,rows=28,wait_ms=0)
             assert not native.get('isError'),native
             text='\n'.join(b.get('text','') for b in native['content']);sid=re.search('Phiên: ([a-f0-9]{12})',text).group(1);records.append('terminal-'+sid)
