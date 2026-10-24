@@ -8,6 +8,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 from . import __version__
+from .release_policy import allowed_release_member, assert_safe_payload
 
 ROOT_FILES = ('plugin.json','mcp.json','bridge.py','setup_local.py','requirements.txt',
     'requirements-build.txt','requirements-gui.txt','Install.ps1','Install-Tunnel.ps1',
@@ -62,7 +63,11 @@ def package_inputs(base, exe):
     vendor=base/'vendor'
     if vendor.is_dir():
         for p in sorted(vendor.rglob('*')):
-            if p.is_file():files[p.relative_to(base).as_posix()]=regular_file(p)
+            if p.is_file():
+                name = p.relative_to(base).as_posix()
+                if not allowed_release_member(name, ROOT_FILES):
+                    raise ValueError('Disallowed vendor release component')
+                files[name] = regular_file(p)
     site = base/'.venv'/'Lib'/'site-packages'
     for metadata in sorted(site.glob('*.dist-info')):
         for p in sorted(metadata.rglob('*')):
@@ -90,11 +95,16 @@ def create_archive(base, exe, output, binary_info, notices_site=None):
                 if p.is_file() and any(w in p.name.lower() for w in ('license','copying','notice')):
                     inputs['THIRD_PARTY_NOTICES/'+metadata.name+'/'+p.relative_to(metadata).as_posix()] = regular_file(p)
     data = {name:p.read_bytes() for name,p in inputs.items()}
+    for name, content in data.items():
+        if not allowed_release_member(name, ROOT_FILES):
+            raise ValueError('Disallowed release component')
+        assert_safe_payload(content)
     if json.loads(data['udb/build_info.json']) != binary_info:
         raise ValueError('Embedded build provenance mismatch')
     inventory = {'version':__version__, 'code_signed':False, 'integrity_only':True, 'files':{
         n:{'sha256':sha256(b),'size_bytes':len(b)} for n,b in sorted(data.items())}}
     data['RELEASE-MANIFEST.json'] = json.dumps(inventory,sort_keys=True,indent=2).encode()
+    assert_safe_payload(data['RELEASE-MANIFEST.json'])
     output.parent.mkdir(parents=True,exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='udb-release-',suffix='.zip',dir=output.parent)
     os.close(fd)
@@ -124,7 +134,7 @@ def verify_archive(path, expected_sha256=None):
     with zipfile.ZipFile(path) as archive:
         entries = archive.infolist()
         names = [e.filename for e in entries]
-        if len(names) != len(set(names)):
+        if len(names) != len(set(names)) or len({n.casefold() for n in names}) != len(names):
             raise ValueError('Duplicate archive entry')
         if len(names) > 5000 or sum(e.file_size for e in entries) > 1024**3:
             raise ValueError('Archive exceeds release limits')
@@ -133,9 +143,11 @@ def verify_archive(path, expected_sha256=None):
             parts = name.split('/')
             if (not name.startswith(PREFIX) or any(x in ('','.', '..') for x in parts) or '\\' in name or ':' in name
                     or entry.is_dir() or (entry.external_attr >> 16) & 0o170000 == 0o120000
-                    or any(x.lower() in ('state','.venv','.git','tools','projects') for x in parts)):
+                    or not allowed_release_member(name[len(PREFIX):], ROOT_FILES)):
                 raise ValueError('Unsafe release entry')
-        inventory = json.loads(archive.read(PREFIX+'RELEASE-MANIFEST.json'))
+        manifest_payload = archive.read(PREFIX+'RELEASE-MANIFEST.json')
+        assert_safe_payload(manifest_payload)
+        inventory = json.loads(manifest_payload)
         expected = {PREFIX+n for n in inventory['files']} | {PREFIX+'RELEASE-MANIFEST.json'}
         if set(names) != expected:
             raise ValueError('Release file set mismatch')
@@ -145,6 +157,7 @@ def verify_archive(path, expected_sha256=None):
             raise ValueError('Required release component missing')
         for name, record in inventory['files'].items():
             b = archive.read(PREFIX+name)
+            assert_safe_payload(b)
             if len(b) != record['size_bytes'] or sha256(b) != record['sha256']:
                 raise ValueError('Release checksum mismatch: '+name)
     return {'verified':True,'version':inventory['version'],'files':len(inventory['files']),
