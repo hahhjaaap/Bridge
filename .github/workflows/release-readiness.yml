@@ -29,7 +29,7 @@ jobs:
           from udb import __version__ as core_version
           from udb.release import ROOT_FILES
 
-          source = Path(".")
+          source = Path(".").resolve()
           repository = source.parent
           missing = [name for name in ROOT_FILES if not (source / name).is_file()]
           print(f"CORE_REQUIRED_FILES={len(ROOT_FILES)}")
