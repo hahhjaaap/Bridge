@@ -1927,7 +1927,8 @@ def self_test(preview_dir: str | Path | None = None) -> None:
                     assert win.nav_buttons[i].isVisible()
                     if i == 0:
                         assert win.project_path.isReadOnly()
-                        assert win.project_path.text() == str(source)
+                        assert win.project_path.text() == win.selected_project['root']
+                        assert Path(win.project_path.text()).resolve() == source.resolve()
                         assert win.project_path.parentWidget().rect().contains(win.project_path.geometry()), (
                             'Project path overflows its card'
                         )
