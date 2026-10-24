@@ -32,6 +32,7 @@ from udb.release_policy import allowed_release_member, assert_safe_payload
     "udb/connection.json",
     "udb/HTTP-TOKEN",
     "vendor/unknown.exe",
+    "vendor/python-runtime/Lib/__pycache__/unexpected.pyc",
     "tests/test_release_security.py",
     "THIRD_PARTY_NOTICES/example.dist-info/LICENSE.dll",
     "arbitrary/README.md",

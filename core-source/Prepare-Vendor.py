@@ -59,11 +59,19 @@ def main():
     shutil.copy2(regular_file(a.tunnel_licenses),vendor/'tunnel-LICENSES.txt')
     (vendor/'tunnel-client-source.json').write_text(
         json.dumps(source_manifest, sort_keys=True, indent=2) + '\n', encoding='utf-8')
-    subprocess.run([str(runtime/'python.exe'),'-I','-c',
+    subprocess.run([str(runtime/'python.exe'),'-I','-B','-c',
         'import ctypes,json,sqlite3,ssl,subprocess,hashlib,encodings,xml.etree.ElementTree;print("PORTABLE_RUNTIME_OK")'],check=True)
+    # Keep the distributable runtime source-only even if a smoke test or toolchain
+    # accidentally produced bytecode caches.
+    for cache in runtime.rglob('__pycache__'):
+        if cache.is_symlink(): raise ValueError('Linked bytecode cache refused')
+        shutil.rmtree(cache)
+    for bytecode in runtime.rglob('*.pyc'):
+        if bytecode.is_symlink(): raise ValueError('Linked bytecode file refused')
+        bytecode.unlink()
     records={p.relative_to(root).as_posix():{'sha256':sha256(p.read_bytes()),'bytes':p.stat().st_size}
              for p in vendor.rglob('*') if p.is_file()}
-    (vendor/'DEPENDENCIES.json').write_text(json.dumps({'python_version':subprocess.check_output([str(runtime/'python.exe'),'--version'],text=True).strip(),
+    (vendor/'DEPENDENCIES.json').write_text(json.dumps({'python_version':subprocess.check_output([str(runtime/'python.exe'),'-B','--version'],text=True).strip(),
         'tunnel_client_release':source_manifest['tag_name'],
         'origin':'explicit CPython installation plus digest-verified official OpenAI tunnel-client release',
         'files':records},indent=2),encoding='utf8')
