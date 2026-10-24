@@ -33,7 +33,7 @@ def main():
     assert tool('file_read',path='fixture')['content'][0]['text'].startswith('PASS')
     before=len(companion.calls)
     try:
-        proxy.call_tool({'name':'terminal_start','arguments':{}})
+        tool('terminal_start')
     except RuntimeError:pass
     else:raise AssertionError('Heavy terminal launch ignored paused governor')
     assert len(companion.calls)==before
