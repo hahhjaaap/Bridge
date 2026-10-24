@@ -24,7 +24,7 @@ sys.path.insert(0,sys.argv[1])
 from udb_companion import Runtime
 rt=Runtime(sys.argv[2]);cfg=json.loads(sys.argv[3])
 def work(task):
- if cfg['effect']:(Path(sys.argv[2])/'effect').write_text('once')
+ if cfg['effect']:(Path(sys.argv[2])/'effect').write_text('once',encoding='utf-8')
  time.sleep(90)
 row=rt.features.background.new(cfg['kind'],work,recovery=cfg['descriptor'])
 print(row['job_id'],flush=True)
@@ -40,20 +40,20 @@ os._exit(12)
             time.sleep(.02);row=rt.features.background.task(row['job_id'])
         self.assertEqual(row['state'],'completed',row);return row
     def test_copy_recovers_after_actual_backend_exit_and_preserves_idempotency(self):
-        src=self.root/'source.txt';src.write_text('Tiếng Việt')
+        src=self.root/'source.txt';src.write_text('Tiếng Việt',encoding='utf-8')
         desc=dict(tool='file_operation',arguments=dict(action='copy',source='source.txt',destination='dest.txt'),source_version=version(src))
         jid=self.crashed(desc);rt=Runtime(str(self.root));recovery=WorkRecovery(rt)
         try:
             self.assertEqual(recovery.call('inspect','job',jid)['state'],'interrupted')
             row=self.wait(rt,recovery.call('resume','job',jid))
-            self.assertEqual((self.root/'dest.txt').read_text(),'Tiếng Việt')
+            self.assertEqual((self.root/'dest.txt').read_text(encoding='utf-8'),'Tiếng Việt')
             second=recovery.call('resume','job',jid)
             self.assertTrue(second['already_resumed']);self.assertEqual(second['job_id'],row['job_id'])
         finally:rt.close()
     def test_changed_copy_source_refuses_resume(self):
-        src=self.root/'source.txt';src.write_text('before')
+        src=self.root/'source.txt';src.write_text('before',encoding='utf-8')
         jid=self.crashed(dict(tool='file_operation',arguments=dict(action='copy',source='source.txt',destination='dest.txt'),source_version=version(src)))
-        src.write_text('changed');rt=Runtime(str(self.root))
+        src.write_text('changed',encoding='utf-8');rt=Runtime(str(self.root))
         try:
             with self.assertRaisesRegex(ValueError,'Source changed'):WorkRecovery(rt).call('resume','job',jid)
             self.assertFalse((self.root/'dest.txt').exists())
@@ -62,10 +62,10 @@ os._exit(12)
         jid=self.crashed(None,'document_write',True);rt=Runtime(str(self.root))
         try:
             with self.assertRaisesRegex(ValueError,'unknown'):WorkRecovery(rt).call('resume','job',jid)
-            self.assertEqual((self.root/'effect').read_text(),'once')
+            self.assertEqual((self.root/'effect').read_text(encoding='utf-8'),'once')
         finally:rt.close()
     def test_search_can_restart_but_old_results_are_retained(self):
-        (self.root/'a.txt').write_text('needle')
+        (self.root/'a.txt').write_text('needle',encoding='utf-8')
         jid=self.crashed(dict(tool='search_start',arguments=dict(path='.',text='needle')),'search');rt=Runtime(str(self.root))
         try:
             row=self.wait(rt,WorkRecovery(rt).call('resume','job',jid));self.assertEqual(row['result']['matches'],1)
