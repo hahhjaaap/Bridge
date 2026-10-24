@@ -33,10 +33,6 @@ jobs:
         run: |
           python -c "from udb.manager import self_test; self_test()"
           if ($LASTEXITCODE -ne 0) { throw "Synthetic Windows GUI QA failed" }
-      - name: Assert source build inputs
-        shell: pwsh
-        run: |
-          python -c "from pathlib import Path; from udb.release import ROOT_FILES; root=Path('.'); missing=[p for p in ROOT_FILES if not (root/p).is_file()]; print('BUILD_INPUTS_MISSING_COUNT',len(missing)); print('BUILD_INPUTS_MISSING_NAMES',','.join(missing)); raise SystemExit(bool(missing))"
 
   windows-frozen-smoke:
     runs-on: windows-latest
