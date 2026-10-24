@@ -28,7 +28,7 @@ jobs:
           python -m ruff format --check udb/manager.py
           python -m ruff check udb/manager.py udb/release_policy.py tests/test_manager_lifecycle.py
           python -m mypy --config-file pyproject.toml udb/manager.py udb/release_policy.py
-          python -m pytest tests/test_manager_lifecycle.py tests/test_release.py tests/test_release_security.py -q
+          python -m pytest tests/test_manager_lifecycle.py tests/test_desktop_close.py tests/test_release.py tests/test_release_security.py -q
       - name: Commit AST-preserving formatting to review branch
         if: github.event_name == 'push'
         run: |
