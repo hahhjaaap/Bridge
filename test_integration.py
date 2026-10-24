@@ -18,16 +18,19 @@ class Backend:
 def main():
     original,companion=Backend(False),Backend()
     proxy=UnifiedProxy(original,companion)
-    proxy.tool_routes={'terminal_start':companion,'bridge_status':original}
+    proxy.tool_routes={'terminal_start':companion,'bridge_status':original,'file_read':companion}
+    proxy.tool_cache=[{'name':'terminal_start'},{'name':'bridge_status'},{'name':'file_read'}]
+    def tool(name, **arguments):
+        return proxy.call_tool({'name':'udb','arguments':{'action':'call','tool':name,'arguments':arguments}})
     try:
-        proxy.call_tool({'name':'terminal_start','arguments':{}})
+        tool('terminal_start')
     except RuntimeError:pass
     else:raise AssertionError('Revoked access reached Companion')
     assert companion.calls==[('udb/close-sessions',None)]
-    assert proxy.call_tool({'name':'bridge_status','arguments':{}})['content'][0]['text'].startswith('PASS')
+    assert tool('bridge_status')['content'][0]['text'].startswith('PASS')
     original.enabled=True
     proxy.tool_routes.update(file_read=companion,terminal_start=companion)
-    assert proxy.call_tool({'name':'file_read','arguments':{'path':'fixture'}})['content'][0]['text'].startswith('PASS')
+    assert tool('file_read',path='fixture')['content'][0]['text'].startswith('PASS')
     before=len(companion.calls)
     try:
         proxy.call_tool({'name':'terminal_start','arguments':{}})
