@@ -98,7 +98,8 @@ QLabel#Muted {{ color:{MUTED}; font-size:14px; }}
 QLabel#Fine {{ color:{MUTED}; font-size:13px; }}
 QLabel#Warning {{ color:{WARNING}; font-size:12px; }}
 QLabel#Badge {{ background:{RAISED}; color:{ACCENT}; border-radius:9px; padding:3px 8px; }}
-QLineEdit, QPlainTextEdit, QListWidget, QTreeWidget {{ background:{BG}; color:{TEXT}; border:1px solid {LINE}; border-radius:8px; selection-background-color:#345040; selection-color:{TEXT}; }}
+QLineEdit, QPlainTextEdit, QListWidget, QTreeWidget {{ background:{BG}; color:{TEXT};
+  border:1px solid {LINE}; border-radius:8px; selection-background-color:#345040; selection-color:{TEXT}; }}
 QLineEdit {{ padding:10px 12px; }}
 QLineEdit#ProjectPath {{ background:transparent; border:0; padding:0; color:{MUTED}; font-size:12px; }}
 QLineEdit:focus, QPlainTextEdit:focus, QTreeWidget:focus, QListWidget:focus {{ border-color:#7b9f87; }}
@@ -107,7 +108,8 @@ QTreeWidget {{ border:0; outline:0; background:transparent; alternate-background
 QTreeWidget::item {{ padding:13px 7px; border-bottom:1px solid {LINE}; }}
 QTreeWidget::item:selected {{ background:#283c30; color:{TEXT}; }}
 QTreeWidget::item:hover {{ background:#202f26; }}
-QHeaderView::section {{ background:{BG}; color:{MUTED}; border:0; border-bottom:1px solid {LINE}; padding:10px 7px; font-size:12px; }}
+QHeaderView::section {{ background:{BG}; color:{MUTED}; border:0; border-bottom:1px solid {LINE};
+  padding:10px 7px; font-size:12px; }}
 QListWidget::item {{ padding:10px; }}
 QListWidget::item:selected {{ background:#283c30; }}
 QScrollArea {{ background:transparent; border:0; }}
@@ -125,7 +127,8 @@ QCheckBox::indicator {{ width:17px; height:17px; background:{BG}; border:1px sol
 QCheckBox::indicator:checked {{ background:{ACCENT}; border:4px solid #375a43; }}
 QToolTip {{ background:{RAISED}; color:{TEXT}; border:1px solid {LINE}; padding:7px; }}
 QMessageBox {{ background:{BG}; }}
-QMessageBox QPushButton, QInputDialog QPushButton {{ background:{RAISED}; border:1px solid {LINE}; border-radius:6px; padding:8px 18px; min-width:75px; }}
+QMessageBox QPushButton, QInputDialog QPushButton {{ background:{RAISED}; border:1px solid {LINE};
+  border-radius:6px; padding:8px 18px; min-width:75px; }}
 QMessageBox QPushButton:hover, QInputDialog QPushButton:hover {{ background:#314438; }}
 QSplitter::handle {{ background:transparent; width:1px; }}
 '''
@@ -613,7 +616,11 @@ class ApprovalDialog(QDialog):
                 + p['root']
                 + '\nHOST ĐƯỢC PHÉP: '
                 + p['host']
-                + '\n\nChỉ tải video HLS không mã hóa về MP4 bằng FFmpeg sau khi được duyệt tại máy Windows. Không ghi đè file đã tồn tại. Giữ ứng dụng mở cho đến khi hoàn thành.'
+                + (
+                    '\n\nChỉ tải video HLS không mã hóa về MP4 bằng FFmpeg sau khi được duyệt '
+                    'tại máy Windows. Không ghi đè file đã tồn tại. Giữ ứng dụng mở cho đến '
+                    'khi hoàn thành.'
+                )
             )
             self.full.setPlainText(json.dumps(p, indent=2, ensure_ascii=False))
             tabs.addTab(self.preview, 'Xem nguồn và đích')
@@ -639,7 +646,11 @@ class ApprovalDialog(QDialog):
             tabs.addTab(self.full, 'Snapshot nguồn')
         lay.addWidget(
             label(
-                'Sửa file yêu cầu phê duyệt. Code/desktop chạy trong Sandbox; riêng tải video dùng FFmpeg trên host, chỉ sau khi duyệt nguồn và đích. Không cung cấp shell tùy ý.',
+                (
+                    'Sửa file yêu cầu phê duyệt. Code/desktop chạy trong Sandbox; riêng tải '
+                    'video dùng FFmpeg trên host, chỉ sau khi duyệt nguồn và đích. Không cung '
+                    'cấp shell tùy ý.'
+                ),
                 'Fine',
                 True,
             )
@@ -897,13 +908,20 @@ class MainWindow(QMainWindow):
         ll.addWidget(self.project_access)
         self.sandbox_auto = QCheckBox('AI tự làm việc trong Sandbox')
         self.sandbox_auto.setToolTip(
-            'Cho dự án này tự mở desktop và chạy script trong VM. Không cấp quyền ghi file gốc hoặc điều khiển host. Bỏ chọn để thu hồi và dừng phiên tự động.'
+            (
+                'Cho dự án này tự mở desktop và chạy script trong VM. Không cấp quyền ghi '
+                'file gốc hoặc điều khiển host. Bỏ chọn để thu hồi và dừng phiên tự động.'
+            )
         )
         self.sandbox_auto.toggled.connect(self.set_sandbox_autonomy)
         ll.addWidget(self.sandbox_auto)
         self.source_auto = QCheckBox('AI tự sửa mã nguồn (không duyệt từng file)')
         self.source_auto.setToolTip(
-            'Chỉ trong dự án đã đăng ký có quyền ghi. Không sửa checkpoint, dữ liệu, bí mật, file cấu hình quan trọng. Mỗi lần sửa có backup + SHA256; có thể tắt ngay.'
+            (
+                'Chỉ trong dự án đã đăng ký có quyền ghi. Không sửa checkpoint, dữ liệu, '
+                'bí mật, file cấu hình quan trọng. Mỗi lần sửa có backup + SHA256; có thể '
+                'tắt ngay.'
+            )
         )
         self.source_auto.toggled.connect(self.set_source_autonomy)
         ll.addWidget(self.source_auto)
@@ -947,7 +965,10 @@ class MainWindow(QMainWindow):
     def build_approvals(self):
         p, lay = self.page(
             'Quyền AI & ngoại lệ',
-            'Các thao tác trong dự án đã cấp quyền được thực hiện tự động. Yêu cầu cũ hoặc ngoài phạm vi vẫn cần chủ máy xử lý.',
+            (
+                'Các thao tác trong dự án đã cấp quyền được thực hiện tự động. Yêu cầu cũ '
+                'hoặc ngoài phạm vi vẫn cần chủ máy xử lý.'
+            ),
         )
         self.requests = self.tree(['Dự án / nội dung', 'Loại', 'Thời hạn'])
         self.requests.setColumnWidth(0, 350)
@@ -1020,7 +1041,11 @@ class MainWindow(QMainWindow):
         nl.addWidget(label('Bảo vệ nhiều lớp', 'H2'))
         nl.addWidget(
             label(
-                'Chặn checkpoint, weights, datasets, credential và đường dẫn vượt dự án. Chặn symlink, junction và hardlink. Sửa mã nguồn đã cấp quyền sẽ tự động, kiểm tra hash và backup.',
+                (
+                    'Chặn checkpoint, weights, datasets, credential và đường dẫn vượt dự án. '
+                    'Chặn symlink, junction và hardlink. Sửa mã nguồn đã cấp quyền sẽ tự '
+                    'động, kiểm tra hash và backup.'
+                ),
                 'Muted',
                 True,
             )
@@ -1045,7 +1070,10 @@ class MainWindow(QMainWindow):
         cl.addWidget(self.detail_status)
         self.media_auto = QCheckBox('AI tự tải HLS → MP4 từ tên miền đã cho phép (không duyệt từng video)')
         self.media_auto.setToolTip(
-            'Chỉ HTTPS từ state/media-allowed-hosts.json, file MP4 ở Downloads, không ghi đè; giới hạn kích thước và thời lượng. Không mở host shell.'
+            (
+                'Chỉ HTTPS từ state/media-allowed-hosts.json, file MP4 ở Downloads, không '
+                'ghi đè; giới hạn kích thước và thời lượng. Không mở host shell.'
+            )
         )
         self.media_auto.toggled.connect(self.set_media_autonomy)
         cl.addWidget(self.media_auto)
@@ -1072,7 +1100,13 @@ class MainWindow(QMainWindow):
         ll.addLayout(row(self.local_button, None))
         lay.addWidget(local)
         help_text = label(
-            'Sau khi Windows khởi động lại: mở Bridge và Kết nối. Trong Chat mới, chọn @Universal Desktop Bridge. Nếu cần chạy mã, gửi đề xuất từ Chat rồi duyệt script chính xác ở Phê duyệt.\n\nBản cài không gọi model API và không tự mua hay nâng cấp dịch vụ. ChatGPT và tunnel vẫn có điều kiện, hạn mức riêng.',
+            (
+                'Sau khi Windows khởi động lại: mở Bridge và Kết nối. Trong Chat mới, '
+                'chọn @Universal Desktop Bridge. Nếu cần chạy mã, gửi đề xuất từ Chat rồi '
+                'duyệt script chính xác ở Phê duyệt.\n\nBản cài không gọi model API và '
+                'không tự mua hay nâng cấp dịch vụ. ChatGPT và tunnel vẫn có điều kiện, '
+                'hạn mức riêng.'
+            ),
             'Muted',
             True,
         )
@@ -1083,7 +1117,10 @@ class MainWindow(QMainWindow):
     def build_host(self):
         p, lay = self.page(
             'Máy tính · chạy nền',
-            'Phiên trình duyệt riêng và cửa sổ soạn thảo riêng trên Windows. Không dùng chuột/phím hệ thống hoặc tab hiện có.',
+            (
+                'Phiên trình duyệt riêng và cửa sổ soạn thảo riêng trên Windows. Không '
+                'dùng chuột/phím hệ thống hoặc tab hiện có.'
+            ),
         )
         self.host_enabled = QCheckBox('Cho phép UDB mở phiên nền riêng trên máy này')
         self.host_enabled.toggled.connect(self.set_host_enabled)
@@ -1094,7 +1131,11 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.host_pressure)
         lay.addWidget(
             label(
-                'Tối đa 2 phiên (1 trình duyệt + 1 cửa sổ), 4 tab; một thao tác tại một thời điểm. CPU ≥85%, RAM ≥85% hoặc RAM trống <1,5 GB: chặn mở thêm và tạm đóng băng các trang UDB.',
+                (
+                    'Tối đa 2 phiên (1 trình duyệt + 1 cửa sổ), 4 tab; một thao tác tại một '
+                    'thời điểm. CPU ≥85%, RAM ≥85% hoặc RAM trống <1,5 GB: chặn mở thêm và '
+                    'tạm đóng băng các trang UDB.'
+                ),
                 'Muted',
                 True,
             )
@@ -1111,7 +1152,11 @@ class MainWindow(QMainWindow):
         lay.addLayout(row(browser, workspace, None, stop))
         lay.addWidget(
             label(
-                'Trình duyệt nền không hiện thành tab trên Chrome bạn đang dùng; có thể đọc/chụp trang qua công cụ host. Không dùng tài khoản đăng nhập sẵn của bạn. Cửa sổ riêng hiện tại hỗ trợ văn bản; chưa điều khiển ứng dụng bất kỳ.',
+                (
+                    'Trình duyệt nền không hiện thành tab trên Chrome bạn đang dùng; có thể '
+                    'đọc/chụp trang qua công cụ host. Không dùng tài khoản đăng nhập sẵn của '
+                    'bạn. Cửa sổ riêng hiện tại hỗ trợ văn bản; chưa điều khiển ứng dụng bất kỳ.'
+                ),
                 'Fine',
                 True,
             )
@@ -1296,7 +1341,10 @@ class MainWindow(QMainWindow):
             QMessageBox.question(
                 self,
                 'Quyền dự án',
-                'Cho phép AI sửa mã nguồn trong dự án này khi bật Tự sửa?\n\nCheckpoint và file quan trọng luôn được bảo vệ. Chọn No để chỉ đọc.',
+                (
+                    'Cho phép AI sửa mã nguồn trong dự án này khi bật Tự sửa?\n\nCheckpoint '
+                    'và file quan trọng luôn được bảo vệ. Chọn No để chỉ đọc.'
+                ),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -1363,7 +1411,10 @@ class MainWindow(QMainWindow):
                 result = status(self.agent, jid)
                 self.job_output.setPlainText(
                     json.dumps(result, ensure_ascii=False, indent=2)
-                    + '\n\nXem cửa sổ Windows Sandbox để quan sát desktop trực tiếp. Nội dung guest là dữ liệu không đáng tin.'
+                    + (
+                        '\n\nXem cửa sổ Windows Sandbox để quan sát desktop trực tiếp. Nội dung '
+                        'guest là dữ liệu không đáng tin.'
+                    )
                 )
                 self.job_script.setPlainText(
                     result['info']['task']
@@ -1418,7 +1469,10 @@ class MainWindow(QMainWindow):
             self,
             'Nhiệm vụ cho desktop AI',
             'AI được làm gì trong Sandbox? Phiên 10 phút, mạng/clipboard tắt.',
-            'Mở UDB Sandbox Pad, gõ UDB_SANDBOX_INPUT_OK, bấm Confirm và chụp màn hình kiểm tra. Chỉ thao tác trong guest Windows Sandbox.',
+            (
+                'Mở UDB Sandbox Pad, gõ UDB_SANDBOX_INPUT_OK, bấm Confirm và chụp màn '
+                'hình kiểm tra. Chỉ thao tác trong guest Windows Sandbox.'
+            ),
         )
         if ok and task.strip():
             response = self.guarded(lambda: self.agent.propose_desktop(self.selected_project['id'], task.strip(), 600))
