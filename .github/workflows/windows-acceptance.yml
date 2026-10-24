@@ -1,0 +1,70 @@
+name: Windows UDB acceptance (isolated)
+
+on:
+  push:
+    branches:
+      - refactor/manager-safety-and-ci
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-gui:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: core-source
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Windows test requirements
+        run: python -m pip install -r requirements.txt -r requirements-gui.txt pytest
+      - name: Run offline release and owner-policy tests
+        run: python -m pytest tests/test_manager_lifecycle.py tests/test_release.py tests/test_release_security.py tests/test_policy.py -q
+      - name: Real PySide6 synthetic GUI acceptance
+        shell: pwsh
+        run: |
+          python -c "from udb.manager import self_test; self_test()"
+          if ($LASTEXITCODE -ne 0) { throw "Synthetic Windows GUI QA failed" }
+      - name: Assert source build inputs
+        shell: pwsh
+        run: |
+          python -c "from pathlib import Path; from udb.release import ROOT_FILES; root=Path('.'); missing=[p for p in ROOT_FILES if not (root/p).is_file()]; print('BUILD_INPUTS_MISSING_COUNT',len(missing)); print('BUILD_INPUTS_MISSING_NAMES',','.join(missing)); raise SystemExit(bool(missing))"
+
+  windows-frozen-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: core-source
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install frozen build dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Generate provenance for disposable EXE build
+        run: python -c "from pathlib import Path; from udb.release import write_build_info; write_build_info(Path('.'), 'windows-ci-synthetic')"
+      - name: Build frozen EXE (no install or credentials)
+        run: python -m PyInstaller --noconfirm --clean --distpath ci-dist --workpath ci-work UniversalDesktopBridge.spec
+      - name: Frozen command-line smoke
+        shell: pwsh
+        run: |
+          & ".\ci-dist\UniversalDesktopBridge.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "Frozen EXE version failed" }
+          & ".\ci-dist\UniversalDesktopBridge.exe" --build-info
+          if ($LASTEXITCODE -ne 0) { throw "Frozen EXE provenance failed" }
+          & ".\ci-dist\UniversalDesktopBridge.exe" --list-tools | Out-File -LiteralPath .\ci-tool-catalog.json -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "Frozen tool catalog failed" }
+          python -c "import json; d=json.load(open('ci-tool-catalog.json',encoding='utf-8-sig')); print('FROZEN_TOOL_COUNT',d['tool_count']); assert d['tool_count']==35"
