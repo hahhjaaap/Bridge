@@ -39,7 +39,8 @@ def main():
     client=Client()
     def tool(name,**args):return client.rpc('tools/call',dict(name=name,arguments=args))
     try:
-        tools=client.rpc('tools/list',{})['tools'];assert len(tools)==60
+        tools=client.rpc('tools/list',{})['tools'];assert [t['name'] for t in tools]==['udb']
+        catalog=client.rpc('tools/call',dict(name='udb',arguments={'action':'list'}))['structuredContent']['tools'];assert len(catalog)==60
         assert not tool('bridge_status').get('isError')
         terminate_backend(client.p.pid,'original')
         assert not tool('bridge_status').get('isError'),'Real original backend did not recover'
