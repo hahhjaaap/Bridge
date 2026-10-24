@@ -1,0 +1,31 @@
+# Local credentials, tunnel configuration, and owner-granted access
+state/
+**/state/
+http-token
+**/http-token
+**/connection.json
+**/computer-access.dpapi
+**/agent.sqlite3
+**/host-settings.json
+**/tunnel/*.yaml
+
+# Private agent work and recovery data
+projects/*/.udb-recovery/
+.udb-recovery/
+**/.udb-recovery/
+.udb-work-state/
+**/.udb-work-state/
+.udb-work-state
+**/.udb-work-state
+
+# Build artifacts, dependencies, backups, and nested archives
+__pycache__/
+*.pyc
+.pytest_cache/
+*.bak
+vendor/
+vendor-office/
+.venv/
+.env
+*.exe
+*.zip
