@@ -193,3 +193,23 @@ def test_gitignore_denies_machine_state():
     required = ["state/", ".udb-recovery/", ".udb-work-state/", "*.bak",
                 "__pycache__/", "*.pyc", "*.zip"]
     assert all(item in patterns for item in required)
+
+
+def test_verify_package_cli_fails_without_leaking_secret(package_fixture):
+    import subprocess
+    import sys
+
+    output = _pack(package_fixture)
+    fake_secret = b"ghp_" + b"A1" * 20
+    _rewrite_archive(output, PREFIX + "bridge.py", fake_secret)
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, str(root / "Verify-Package.py"), str(output)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "credential" in result.stderr
+    assert fake_secret.decode("ascii") not in result.stdout + result.stderr
