@@ -1,4 +1,5 @@
 -r requirements.txt
 pyinstaller==6.22.3
--r requirements-gui.txtruff==0.13.3
+-r requirements-gui.txt
+ruff==0.13.3
 mypy==1.18.2
