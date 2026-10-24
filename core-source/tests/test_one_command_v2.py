@@ -227,7 +227,7 @@ class StartupTests(Fixture):
         with patch.object(cli,'os',type('OS',(),{'name':'nt'})()),patch.object(cli,'start',return_value=dict(manager_running=True)), \
                 patch.object(cli.subprocess,'run',return_value=type('R',(),{'returncode':2})()) as run:
             self.assertEqual(cli.main(['test','--home',str(self.home)]),2)
-        run.assert_called_once_with([str(self.exe),'--probe','--home',str(self.home)],shell=False)
+        run.assert_called_once_with([str(self.exe.resolve()),'--probe','--home',str(self.home.resolve())],shell=False)
 
     def test_reuses_running_manager_without_launching_any_process(self):
         def forbidden(*a, **kw):
