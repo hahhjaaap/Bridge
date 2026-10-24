@@ -49,7 +49,7 @@ class Workspace:
         cmd = [sys.executable] if getattr(sys, 'frozen', False) else [sys.executable, str(Path(__file__).resolve().parents[1]/'bridge.py')]
         try:
             self.proc = OwnedProcess(cmd+['--host-workspace', token], home)
-            import win32gui, win32process
+            import pywintypes, win32gui, win32process
             deadline = time.monotonic()+12
             while time.monotonic() < deadline:
                 matches = []
@@ -58,7 +58,14 @@ class Workspace:
                         matches.append(hwnd)
                 win32gui.EnumWindows(visit, None)
                 if len(matches) == 1:
-                    self.hwnd = matches[0]; self.edit = win32gui.GetDlgItem(self.hwnd, 1001)
+                    self.hwnd = matches[0]
+                    # EnumWindows can observe the parent between CreateWindowEx
+                    # calls; GetDlgItem raises when the child Edit is not ready.
+                    # Treat that transient state as "not ready" and retry.
+                    try:
+                        self.edit = win32gui.GetDlgItem(self.hwnd, 1001)
+                    except pywintypes.error:
+                        self.edit = None
                     if self.edit: break
                 if not self.proc.alive(): raise PolicyError('Workspace exited during launch')
                 time.sleep(.05)
