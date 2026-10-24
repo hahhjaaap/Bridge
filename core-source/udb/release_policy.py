@@ -79,7 +79,8 @@ def allowed_release_member(name: str, root_files: tuple[str, ...]) -> bool:
         return False
 
     if len(parts) == 2:
-        return parts[1] in {"tunnel-client.exe", "tunnel-LICENSES.txt", "DEPENDENCIES.json"}
+        return parts[1] in {"tunnel-client.exe", "tunnel-LICENSES.txt",
+                            "tunnel-client-source.json", "DEPENDENCIES.json"}
     if parts[1] != "python-runtime":
         return False
     if len(parts) == 3:

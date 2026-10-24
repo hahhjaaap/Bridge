@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import zipfile
@@ -31,6 +32,7 @@ REQUIRED_VENDOR_FILES = (
     'vendor/python-runtime/Lib/os.py',
     'vendor/tunnel-client.exe',
     'vendor/tunnel-LICENSES.txt',
+    'vendor/tunnel-client-source.json',
     'vendor/DEPENDENCIES.json',
 )
 
@@ -64,8 +66,27 @@ def validate_vendor_payload(data):
     try:
         pth = data['vendor/python-runtime/python311._pth'].decode('ascii').splitlines()
         dependencies = json.loads(data['vendor/DEPENDENCIES.json'].decode('utf-8'))
+        source = json.loads(data['vendor/tunnel-client-source.json'].decode('utf-8'))
     except (UnicodeError, ValueError, TypeError):
         raise ValueError('Invalid offline runtime configuration or dependency manifest') from None
+    if not isinstance(source, dict) or not isinstance(dependencies, dict):
+        raise ValueError('Invalid offline runtime source metadata')
+    tag = source.get('tag_name', '')
+    if (source.get('repository') != 'openai/tunnel-client' or
+            not re.fullmatch(r'v[0-9]+[.][0-9]+[.][0-9]+', tag)):
+        raise ValueError('Invalid official tunnel-client source manifest')
+    if (source.get('asset_name') != f'tunnel-client-{tag}-windows-amd64.zip' or
+            source.get('license_asset_name') != f'tunnel-client-{tag}-windows-amd64-licenses.txt'):
+        raise ValueError('Tunnel-client release asset provenance mismatch')
+    for field in ('asset_sha256', 'license_asset_sha256'):
+        if not isinstance(source.get(field), str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', source[field]):
+            raise ValueError('Invalid published tunnel-client digest')
+    if source.get('tunnel_executable_sha256') != sha256(data['vendor/tunnel-client.exe']):
+        raise ValueError('Tunnel executable source hash mismatch')
+    if source.get('license_file_sha256') != sha256(data['vendor/tunnel-LICENSES.txt']):
+        raise ValueError('Tunnel license source hash mismatch')
+    if dependencies.get('tunnel_client_release') != tag:
+        raise ValueError('Offline runtime tunnel release metadata mismatch')
     if pth != ['Lib', '.', 'DLLs']:
         raise ValueError('Portable Python path file must use the isolated Lib/DLLs layout')
     if not isinstance(dependencies, dict) or not str(dependencies.get('python_version', '')).startswith('Python 3.11.'):

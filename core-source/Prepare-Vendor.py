@@ -1,5 +1,5 @@
 """Prepare offline dependencies from explicit trusted local installations; no downloads."""
-import argparse,json,shutil,subprocess,sys
+import argparse,json,re,shutil,subprocess,sys
 from pathlib import Path
 from udb.release import regular_file,sha256,validate_vendor_directory
 def stage_stdlib(python_home, runtime):
@@ -18,10 +18,34 @@ def stage_stdlib(python_home, runtime):
         shutil.copy2(regular_file(item), target)
 
 
+def read_tunnel_source_manifest(path, tunnel, licenses):
+    source = json.loads(regular_file(path).read_text(encoding='utf-8-sig'))
+    if not isinstance(source, dict):
+        raise ValueError('Invalid tunnel source manifest')
+    tag = source.get('tag_name', '')
+    if (source.get('repository') != 'openai/tunnel-client' or
+            not re.fullmatch(r'v[0-9]+[.][0-9]+[.][0-9]+', tag)):
+        raise ValueError('Tunnel source manifest must identify an official tagged OpenAI release')
+    if source.get('asset_name') != f'tunnel-client-{tag}-windows-amd64.zip':
+        raise ValueError('Tunnel source manifest asset name mismatch')
+    if source.get('license_asset_name') != f'tunnel-client-{tag}-windows-amd64-licenses.txt':
+        raise ValueError('Tunnel license asset name mismatch')
+    for field in ('asset_sha256', 'license_asset_sha256'):
+        if not isinstance(source.get(field), str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', source[field]):
+            raise ValueError('Tunnel source manifest has an invalid published digest')
+    if source.get('tunnel_executable_sha256') != sha256(regular_file(tunnel).read_bytes()):
+        raise ValueError('Tunnel executable does not match source manifest')
+    if source.get('license_file_sha256') != sha256(regular_file(licenses).read_bytes()):
+        raise ValueError('Tunnel license file does not match source manifest')
+    return source
+
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--python-home',type=Path,required=True)
     p.add_argument('--tunnel',type=Path,required=True);p.add_argument('--tunnel-licenses',type=Path,required=True)
+    p.add_argument('--tunnel-source-manifest',type=Path,required=True)
     a=p.parse_args();root=Path(__file__).resolve().parent;vendor=root/'vendor'
+    source_manifest = read_tunnel_source_manifest(a.tunnel_source_manifest, a.tunnel, a.tunnel_licenses)
     if vendor.exists():raise ValueError('Use a clean vendor directory')
     runtime=vendor/'python-runtime';runtime.mkdir(parents=True)
     for name in ('python.exe','python3.dll','python311.dll','vcruntime140.dll','vcruntime140_1.dll','LICENSE.txt'):
@@ -33,12 +57,15 @@ def main():
     (runtime/'python311._pth').write_text('Lib\n.\nDLLs\n',encoding='ascii')
     shutil.copy2(regular_file(a.tunnel),vendor/'tunnel-client.exe')
     shutil.copy2(regular_file(a.tunnel_licenses),vendor/'tunnel-LICENSES.txt')
+    (vendor/'tunnel-client-source.json').write_text(
+        json.dumps(source_manifest, sort_keys=True, indent=2) + '\n', encoding='utf-8')
     subprocess.run([str(runtime/'python.exe'),'-I','-c',
         'import ctypes,json,sqlite3,ssl,subprocess,hashlib,encodings,xml.etree.ElementTree;print("PORTABLE_RUNTIME_OK")'],check=True)
     records={p.relative_to(root).as_posix():{'sha256':sha256(p.read_bytes()),'bytes':p.stat().st_size}
              for p in vendor.rglob('*') if p.is_file()}
     (vendor/'DEPENDENCIES.json').write_text(json.dumps({'python_version':subprocess.check_output([str(runtime/'python.exe'),'--version'],text=True).strip(),
-        'origin':'explicit existing local CPython installation and tunnel client; no network download',
+        'tunnel_client_release':source_manifest['tag_name'],
+        'origin':'explicit CPython installation plus digest-verified official OpenAI tunnel-client release',
         'files':records},indent=2),encoding='utf8')
     validate_vendor_directory(root)
     print('VENDOR_FILES',len(records))

@@ -49,6 +49,7 @@ def test_release_path_denials(name):
     "udb/build_info.json",
     "command/udb_cli.py",
     "vendor/tunnel-client.exe",
+    "vendor/tunnel-client-source.json",
     "vendor/python-runtime/python.exe",
     "vendor/python-runtime/DLLs/_ssl.pyd",
     "vendor/python-runtime/Lib/encodings/__init__.py",
@@ -104,6 +105,19 @@ def _write_synthetic_vendor(base):
         'vendor/tunnel-client.exe': b'synthetic-tunnel-client',
         'vendor/tunnel-LICENSES.txt': b'synthetic-tunnel-license-notice',
     }
+    tunnel_hash = sha256(payloads['vendor/tunnel-client.exe'])
+    license_hash = sha256(payloads['vendor/tunnel-LICENSES.txt'])
+    source = {
+        'repository': 'openai/tunnel-client',
+        'tag_name': 'v0.0.18',
+        'asset_name': 'tunnel-client-v0.0.18-windows-amd64.zip',
+        'asset_sha256': 'sha256:' + 'a' * 64,
+        'license_asset_name': 'tunnel-client-v0.0.18-windows-amd64-licenses.txt',
+        'license_asset_sha256': 'sha256:' + 'b' * 64,
+        'tunnel_executable_sha256': tunnel_hash,
+        'license_file_sha256': license_hash,
+    }
+    payloads['vendor/tunnel-client-source.json'] = json.dumps(source, sort_keys=True).encode('utf-8')
     for name, content in payloads.items():
         path = base / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,6 +126,7 @@ def _write_synthetic_vendor(base):
                for name, content in payloads.items()}
     (base / 'vendor' / 'DEPENDENCIES.json').write_text(json.dumps({
         'python_version': 'Python 3.11.9',
+        'tunnel_client_release': 'v0.0.18',
         'origin': 'synthetic test fixture',
         'files': records,
     }, sort_keys=True), encoding='utf-8')
@@ -205,6 +220,28 @@ def test_vendor_runtime_allowlisted_and_private_vendor_fails(package_fixture):
     with pytest.raises(ValueError, match="Disallowed vendor"):
         create_archive(base, package_fixture[1], base.parent / "second.zip",
                        write_build_info(base, "synthetic"))
+
+
+def test_tunnel_source_manifest_requires_matching_binary_and_license(package_fixture):
+    from udb.release import validate_vendor_payload, sha256
+
+    base, _, _ = package_fixture
+    source_path = base / "vendor" / "tunnel-client-source.json"
+    source = json.loads(source_path.read_text(encoding="utf-8"))
+    source["tunnel_executable_sha256"] = "0" * 64
+    source_path.write_text(json.dumps(source), encoding="utf-8")
+    payloads = {
+        path.relative_to(base).as_posix(): path.read_bytes()
+        for path in (base / "vendor").rglob("*") if path.is_file()
+    }
+    records = json.loads(payloads["vendor/DEPENDENCIES.json"])
+    records["files"]["vendor/tunnel-client-source.json"] = {
+        "sha256": sha256(payloads["vendor/tunnel-client-source.json"]),
+        "bytes": len(payloads["vendor/tunnel-client-source.json"]),
+    }
+    payloads["vendor/DEPENDENCIES.json"] = json.dumps(records, indent=2).encode("utf-8")
+    with pytest.raises(ValueError, match="Tunnel executable source hash mismatch"):
+        validate_vendor_payload(payloads)
 
 
 def test_prepare_vendor_stages_unpacked_stdlib(tmp_path):

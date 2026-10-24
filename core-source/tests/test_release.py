@@ -35,6 +35,19 @@ def _write_synthetic_vendor(base):
         'vendor/tunnel-client.exe': b'synthetic-tunnel-client',
         'vendor/tunnel-LICENSES.txt': b'synthetic-tunnel-license-notice',
     }
+    tunnel_hash = sha256(payloads['vendor/tunnel-client.exe'])
+    license_hash = sha256(payloads['vendor/tunnel-LICENSES.txt'])
+    source = {
+        'repository': 'openai/tunnel-client',
+        'tag_name': 'v0.0.18',
+        'asset_name': 'tunnel-client-v0.0.18-windows-amd64.zip',
+        'asset_sha256': 'sha256:' + 'a' * 64,
+        'license_asset_name': 'tunnel-client-v0.0.18-windows-amd64-licenses.txt',
+        'license_asset_sha256': 'sha256:' + 'b' * 64,
+        'tunnel_executable_sha256': tunnel_hash,
+        'license_file_sha256': license_hash,
+    }
+    payloads['vendor/tunnel-client-source.json'] = json.dumps(source, sort_keys=True).encode('utf-8')
     for name, content in payloads.items():
         path = base / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -43,6 +56,7 @@ def _write_synthetic_vendor(base):
                for name, content in payloads.items()}
     (base / 'vendor' / 'DEPENDENCIES.json').write_text(json.dumps({
         'python_version': 'Python 3.11.9',
+        'tunnel_client_release': 'v0.0.18',
         'origin': 'synthetic test fixture',
         'files': records,
     }, sort_keys=True), encoding='utf-8')
