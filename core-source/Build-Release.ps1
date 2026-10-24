@@ -7,6 +7,12 @@ param(
 $ErrorActionPreference = 'Stop'
 # Developer build only; no pip install, elevation, login, or live EXE replacement.
 $Python = (Resolve-Path -LiteralPath $Python).Path
+$OutputDir = [IO.Path]::GetFullPath($OutputDir)
+Push-Location -LiteralPath $PSScriptRoot
+try {
+    & $Python -c 'from pathlib import Path; from udb.release import validate_vendor_directory; validate_vendor_directory(Path.cwd())'
+    if ($LASTEXITCODE -ne 0) { throw 'Offline vendor runtime validation failed' }
+} finally { Pop-Location }
 if (Test-Path -LiteralPath $OutputDir) { throw 'Use a new release directory for every build.' }
 New-Item -ItemType Directory -Path $OutputDir | Out-Null
 $OutputDir = (Resolve-Path -LiteralPath $OutputDir).Path
@@ -14,7 +20,7 @@ Push-Location -LiteralPath $PSScriptRoot
 try {
     & $Python -m ruff format --check udb/manager.py
     if ($LASTEXITCODE -ne 0) { throw 'Manager format check failed' }
-    & $Python -m ruff check udb/manager.py udb/release_policy.py tests/test_manager_lifecycle.py
+    & $Python -m ruff check udb/manager.py udb/release_policy.py tests/test_manager_lifecycle.py tests/test_desktop_close.py
     if ($LASTEXITCODE -ne 0) { throw 'Ruff static checks failed' }
     & $Python -m mypy --config-file pyproject.toml udb/manager.py udb/release_policy.py
     if ($LASTEXITCODE -ne 0) { throw 'Mypy static checks failed' }

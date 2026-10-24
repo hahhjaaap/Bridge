@@ -1,4 +1,4 @@
-name: Release inventory completeness
+name: Core source inventory completeness
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  verify-release-inventory:
+  verify-core-source-inventory:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -21,26 +21,33 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Require complete source manifests before Windows packaging
+      - name: Validate core source files and independent version boundaries
         run: |
           python - <<'PY'
+          import json
           from pathlib import Path
+          from udb import __version__ as core_version
           from udb.release import ROOT_FILES
 
-          source = Path('.')
+          source = Path(".")
+          repository = source.parent
           missing = [name for name in ROOT_FILES if not (source / name).is_file()]
-          print(f"RELEASE_REQUIRED_ROOT_FILES={len(ROOT_FILES)}")
-          print(f"RELEASE_MISSING_FILES={len(missing)}")
+          print(f"CORE_REQUIRED_FILES={len(ROOT_FILES)}")
+          print(f"CORE_MISSING_FILES={len(missing)}")
           for name in missing:
-              print(f"RELEASE_MISSING: {name}")
+              print(f"CORE_MISSING: {name}")
           if missing:
-              raise SystemExit("FAIL_CLOSED: incomplete release source inventory")
+              raise SystemExit("FAIL_CLOSED: core source inventory incomplete")
 
-          from udb import __version__
-          import json
+          proxy = json.loads((repository / "plugin.json").read_text(encoding="utf-8"))
+          if proxy.get("name") != "universal-desktop-bridge" or not proxy.get("version"):
+              raise SystemExit("FAIL_CLOSED: invalid repository-root proxy plugin manifest")
+          if "plugin.json" in ROOT_FILES or "mcp.json" in ROOT_FILES:
+              raise SystemExit("FAIL_CLOSED: proxy metadata must not be bundled with the standalone core EXE")
 
-          plugin = json.loads((source / "plugin.json").read_text(encoding="utf-8"))
-          if plugin.get("version") != __version__:
-              raise SystemExit("FAIL_CLOSED: plugin/core release version mismatch")
-          print("RELEASE_INVENTORY_READY")
+          print("PROXY_PLUGIN_VERSION=" + proxy["version"])
+          print("CORE_EXE_VERSION=" + core_version)
+          print("PROXY_METADATA_BUNDLED_WITH_CORE=NO")
+          print("OFFLINE_VENDOR_STAGED=" + str((source / "vendor" / "python-runtime" / "python.exe").is_file()))
+          print("CORE_SOURCE_INVENTORY_READY")
           PY

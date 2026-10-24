@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from udb.release import write_build_info
+from udb.release import write_build_info, validate_vendor_directory
 
 def run(*args, stdout=None):
     subprocess.run([str(x) for x in args],check=True,stdout=stdout)
@@ -17,12 +17,13 @@ def main():
     args=parser.parse_args()
     root=Path(__file__).resolve().parent
     os.chdir(root)
+    validate_vendor_directory(root)
     output=args.output.resolve()
     output.mkdir(parents=True,exist_ok=False)
     # Fail before freezing if the GUI source or release policy fails static checks.
     run(sys.executable,'-m','ruff','format','--check','udb/manager.py')
     run(sys.executable,'-m','ruff','check','udb/manager.py','udb/release_policy.py',
-        'tests/test_manager_lifecycle.py')
+        'tests/test_manager_lifecycle.py','tests/test_desktop_close.py')
     run(sys.executable,'-m','mypy','--config-file','pyproject.toml',
         'udb/manager.py','udb/release_policy.py')
     run(sys.executable,'-m','pytest','tests','-q')

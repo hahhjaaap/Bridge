@@ -1,7 +1,7 @@
 """Prepare offline dependencies from explicit trusted local installations; no downloads."""
 import argparse,json,shutil,subprocess,sys
 from pathlib import Path
-from udb.release import regular_file,sha256
+from udb.release import regular_file,sha256,validate_vendor_directory
 def stage_stdlib(python_home, runtime):
     """Stage an unpacked stdlib; a release must not contain nested ZIPs."""
     source = Path(python_home) / 'Lib'
@@ -40,5 +40,6 @@ def main():
     (vendor/'DEPENDENCIES.json').write_text(json.dumps({'python_version':subprocess.check_output([str(runtime/'python.exe'),'--version'],text=True).strip(),
         'origin':'explicit existing local CPython installation and tunnel client; no network download',
         'files':records},indent=2),encoding='utf8')
+    validate_vendor_directory(root)
     print('VENDOR_FILES',len(records))
 if __name__=='__main__':main()
