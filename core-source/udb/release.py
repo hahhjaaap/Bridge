@@ -155,8 +155,12 @@ def create_archive(base, exe, output, binary_info, notices_site=None):
     data = {name:p.read_bytes() for name,p in inputs.items()}
     for name, content in data.items():
         if not allowed_release_member(name, ROOT_FILES):
-            raise ValueError('Disallowed release component')
-        assert_safe_payload(content)
+            raise ValueError('Disallowed release component: ' + name)
+        try:
+            assert_safe_payload(content)
+        except ValueError as error:
+            # Identify the file, never the potentially sensitive bytes.
+            raise ValueError('Unsafe release payload ' + name + ': ' + str(error)) from None
     validate_vendor_payload(data)
     if json.loads(data['udb/build_info.json']) != binary_info:
         raise ValueError('Embedded build provenance mismatch')
