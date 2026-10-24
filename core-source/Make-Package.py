@@ -1,4 +1,4 @@
-"""Package the explicitly selected candidate EXE, never the installed EXE."""
+"""Package a selected EXE; release.py enforces an allowlist and content checks."""
 import argparse
 import json
 import sysconfig
