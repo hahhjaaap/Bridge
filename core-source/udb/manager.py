@@ -648,11 +648,11 @@ def make_app() -> QApplication:
 def run(home: Path, start_tunnel: bool = False, screenshot: str | Path | None = None) -> int | None:
     if os.name=='nt':
         import ctypes
-        ctypes.windll.kernel32.FreeConsole()
+        ctypes.windll.kernel32.FreeConsole()  # type: ignore[attr-defined]  # Windows-only API
     app=make_app();controller=DesktopController(home);settings=controller.settings();app.setProperty('motion',settings.get('motion',True))
     lock=QLockFile(str(controller.agent.state/'manager.lock'));lock.setStaleLockTime(30000)
     if not lock.tryLock(50):
-        QMessageBox.information(None,'Bridge đang mở','Ứng dụng đã được mở. Kiểm tra cửa sổ hoặc thanh tác vụ Windows.');return
+        QMessageBox.information(None,'Bridge đang mở','Ứng dụng đã được mở. Kiểm tra cửa sổ hoặc thanh tác vụ Windows.');return None
     try:
         controller.start_host()
         window = MainWindow(home, controller)
