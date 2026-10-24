@@ -40,6 +40,6 @@ python "%~dp0test_windows_durability.py"
 if errorlevel 1 exit /b %ERRORLEVEL%
 python "%~dp0test_optimization.py"
 set "RC=%ERRORLEVEL%"
-if "%RC%"=="0" (echo [PASS] UDB Unified 60 public tools) else (echo [ERROR] UDB Unified test failed exit=%RC%)
+if "%RC%"=="0" (echo [PASS] UDB Unified single public MCP tool / 60 operations) else (echo [ERROR] UDB Unified test failed exit=%RC%)
 exit /b %RC%
 
