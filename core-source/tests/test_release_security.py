@@ -32,6 +32,7 @@ from udb.release_policy import allowed_release_member, assert_safe_payload
     "udb/connection.json",
     "udb/HTTP-TOKEN",
     "vendor/unknown.exe",
+    "tests/test_release_security.py",
     "arbitrary/README.md",
     "../bridge.py",
     r"udb\bridge.py",
@@ -45,7 +46,6 @@ def test_release_path_denials(name):
     "udb/server.py",
     "udb/desktop_uia.ps1",
     "udb/build_info.json",
-    "tests/test_release.py",
     "command/udb_cli.py",
     "vendor/tunnel-client.exe",
     "vendor/python-runtime/python.exe",
@@ -189,6 +189,7 @@ def test_vendor_runtime_allowlisted_and_private_vendor_fails(package_fixture):
         assert PREFIX + "vendor/python-runtime/python.exe" in names
         assert PREFIX + "plugin.json" not in names
         assert PREFIX + "mcp.json" not in names
+        assert not any(name.startswith(PREFIX + "tests/") for name in names)
     assert verify_archive(output)["verified"]
 
     (base / "vendor" / "state").mkdir()

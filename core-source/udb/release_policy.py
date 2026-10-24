@@ -26,7 +26,6 @@ _RUNTIME_FILES = frozenset({
 })
 _WORKER_SUFFIXES = {
     "udb": frozenset({".py", ".ps1"}),
-    "tests": frozenset({".py", ".ps1"}),
     "docs": frozenset({".md", ".json", ".png"}),
     "command": frozenset({".py", ".ps1", ".json", ".md"}),
 }

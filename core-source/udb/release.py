@@ -113,7 +113,9 @@ def package_inputs(base, exe):
     base = Path(base)
     files = {n:regular_file(base/n) for n in ROOT_FILES}
     files['UniversalDesktopBridge.exe'] = regular_file(exe)
-    for folder, extensions in [('udb',('.py','.ps1')),('tests',('.py','.ps1')),('docs',('.md','.json','.png')),
+    # Test sources are intentionally excluded: they contain synthetic credential
+    # signatures used to exercise the release scanner and are not runtime assets.
+    for folder, extensions in [('udb',('.py','.ps1')),('docs',('.md','.json','.png')),
                                ('command',('.py','.ps1','.json','.md'))]:
         if (base/folder).is_dir():
             for p in sorted((base/folder).iterdir()):
