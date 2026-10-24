@@ -145,7 +145,8 @@ def test_refactor_preserves_original_qt_stylesheet():
     assert current is not None
     original = Path(__file__).with_name("fixtures").joinpath("manager_style_baseline.qss.txt")
     baseline = original.read_text(encoding="utf-8")
-    normalize = lambda s: re.sub(r";\s+", "; ", s).strip()
+    def normalize(text: str) -> str:
+        return re.sub(r";\s+", "; ", text).strip()
     assert normalize(current.group(1)) == normalize(baseline)
 
 
