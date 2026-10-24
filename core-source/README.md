@@ -19,7 +19,15 @@ Replace example paths and versioned filenames with verified local values. `Prepa
 
 ## Install and rollback
 
-Extract the verified ZIP to a new folder. Run `Install.ps1 -VerifyOnly` first, then `Install.ps1 -NoLaunch` for an attended installation. The default destination is under the current Windows user's Local AppData. Review the scripts before running them. `Rollback.ps1` restores the previous installed EXE release.
+Extract the verified ZIP to a new folder. Because archive paths are prefixed with `universal-desktop-bridge/`, enter that extracted subfolder before running the installer:
+
+```powershell
+Set-Location .\universal-desktop-bridge
+.\Install.ps1 -VerifyOnly
+.\Install.ps1 -NoLaunch
+```
+
+The default destination is under the current Windows user's Local AppData. Review the scripts before running them. `Rollback.ps1` restores the previous installed EXE release.
 
 The installer does not grant new owner permissions or package project files. Keep runtime state, grants, tokens and project data local; never commit them.
 

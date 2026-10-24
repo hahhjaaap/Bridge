@@ -114,6 +114,21 @@ def test_unsafe_unlisted_or_duplicate_entries_rejected(release,entry):
     with pytest.raises(ValueError):
         verify_archive(out)
 
+def test_archive_version_mismatch_rejected(release):
+    base,exe,out,info=release
+    create_archive(base,exe,out,info)
+    with zipfile.ZipFile(out) as archive:
+        contents={name:archive.read(name) for name in archive.namelist()}
+    manifest_name=PREFIX+'RELEASE-MANIFEST.json'
+    manifest=json.loads(contents[manifest_name])
+    manifest['version']='9.9.9'
+    contents[manifest_name]=json.dumps(manifest,sort_keys=True,indent=2).encode('utf-8')
+    with zipfile.ZipFile(out,'w') as archive:
+        for name,content in sorted(contents.items()):
+            archive.writestr(name,content)
+    with pytest.raises(ValueError,match='Release version mismatch'):
+        verify_archive(out)
+
 def test_wrong_archive_hash_rejected(release):
     base,exe,out,info=release
     create_archive(base,exe,out,info)

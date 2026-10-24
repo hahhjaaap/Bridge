@@ -19,7 +19,15 @@ Thay đường dẫn và tên file ví dụ bằng giá trị cục bộ đã x�
 
 ## Cài đặt và rollback
 
-Giải nén ZIP đã xác minh vào thư mục mới. Chạy `Install.ps1 -VerifyOnly` trước, rồi `Install.ps1 -NoLaunch` để cài đặt có kiểm soát. Mặc định cài dưới Local AppData của người dùng Windows hiện tại. Đọc script trước khi chạy. `Rollback.ps1` khôi phục bản EXE đã cài trước đó.
+Giải nén ZIP đã xác minh vào thư mục mới. Vì đường dẫn trong ZIP có tiền tố `universal-desktop-bridge/`, hãy vào thư mục con đó trước khi chạy installer:
+
+```powershell
+Set-Location .\universal-desktop-bridge
+.\Install.ps1 -VerifyOnly
+.\Install.ps1 -NoLaunch
+```
+
+Mặc định cài dưới Local AppData của người dùng Windows hiện tại. Đọc script trước khi chạy. `Rollback.ps1` khôi phục bản EXE đã cài trước đó.
 
 Installer không tự cấp quyền owner mới và không đóng gói dữ liệu dự án. Trạng thái runtime, quyền truy cập, token và dữ liệu dự án phải ở cục bộ, không commit lên Git.
 

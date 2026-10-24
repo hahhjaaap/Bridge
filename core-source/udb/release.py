@@ -205,6 +205,8 @@ def verify_archive(path, expected_sha256=None):
         manifest_payload = archive.read(PREFIX+'RELEASE-MANIFEST.json')
         assert_safe_payload(manifest_payload)
         inventory = json.loads(manifest_payload)
+        if not isinstance(inventory, dict) or inventory.get('version') != __version__:
+            raise ValueError('Release version mismatch')
         expected = {PREFIX+n for n in inventory['files']} | {PREFIX+'RELEASE-MANIFEST.json'}
         if set(names) != expected:
             raise ValueError('Release file set mismatch')
@@ -223,7 +225,7 @@ def verify_archive(path, expected_sha256=None):
             build_info = json.loads(payloads['udb/build_info.json'])
         except (ValueError, TypeError):
             raise ValueError('Invalid embedded build provenance') from None
-        if build_info.get('version') != inventory.get('version'):
+        if not isinstance(build_info, dict) or build_info.get('version') != inventory.get('version'):
             raise ValueError('Release manifest/build version mismatch')
     return {'verified':True,'version':inventory['version'],'files':len(inventory['files']),
             'publisher_authenticated':False}
