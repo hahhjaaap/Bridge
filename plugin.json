@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "universal-desktop-bridge",
-  "version": "0.8.0-proxy.1",
-  "description": "UDB: ConPTY, durable work records and a virtual AI pointer; 60 public tools.",
+  "version": "0.9.0-unified.1",
+  "description": "UDB: one public MCP entry point for 60 operations, ConPTY, durable work recovery and a virtual AI pointer.",
   "author": {
     "name": "Personal developer"
   },
@@ -13,11 +13,11 @@
       "interface": {
         "displayName": "Universal Desktop Bridge",
         "shortDescription": "Files, terminals and Windows",
-        "longDescription": "60 public tools. Win32 message AI pointer with visual overlay, Windows ConPTY terminals, durable work recovery for safe operations, file and Office jobs. Existing owner permissions retained. App compatibility varies; unknown writes and dead terminal processes are never replayed.",
+        "longDescription": "One public MCP tool named udb exposes a discoverable catalog of 60 operations through action=list and action=call. Includes a Win32-message AI pointer, Windows ConPTY terminals, durable work recovery, file and Office jobs. Existing owner permissions are retained. App compatibility varies; unknown writes and dead terminal processes are never replayed.",
         "developerName": "Personal developer",
         "category": "Developer Tools",
         "capabilities": [],
-        "defaultPrompt": "Use Universal Desktop Bridge Unified to check connection and complete a file or terminal task, then report its status."
+        "defaultPrompt": "Use the single udb tool. Call action=list to discover operations and schemas, then action=call with the selected operation name and its arguments. Check connection and verify the result before reporting completion."
       }
     }
   }
