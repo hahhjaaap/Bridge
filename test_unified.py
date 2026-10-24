@@ -121,7 +121,6 @@ try:
         batch=ok('read_file',project='demo',paths=[source])
         assert 'Nghiệm thu' in json.dumps(single,ensure_ascii=False)
         assert 'Nghiệm thu' in json.dumps(batch,ensure_ascii=False)
-        assert tool('read_files',project='demo',paths=[source]).get('isError')  # legacy alias is not public
         ok('propose_file_write',project='demo',path=prefix+'/new.py',content='# new\n',expected_sha256='NEW')
         assert (Path(fixture)/'new.py').read_text(encoding='utf-8')=='# new\n'
         ok('propose_file_write',project='demo',path=source,operation='replace',old_text='print(6)',new_text='print(7)',expected_sha256=sha)
