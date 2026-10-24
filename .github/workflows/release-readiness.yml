@@ -1,0 +1,46 @@
+name: Release inventory completeness
+
+on:
+  push:
+    branches:
+      - refactor/manager-safety-and-ci
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-release-inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: core-source
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Require complete source manifests before Windows packaging
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from udb.release import ROOT_FILES
+
+          source = Path('.')
+          missing = [name for name in ROOT_FILES if not (source / name).is_file()]
+          print(f"RELEASE_REQUIRED_ROOT_FILES={len(ROOT_FILES)}")
+          print(f"RELEASE_MISSING_FILES={len(missing)}")
+          for name in missing:
+              print(f"RELEASE_MISSING: {name}")
+          if missing:
+              raise SystemExit("FAIL_CLOSED: incomplete release source inventory")
+
+          from udb import __version__
+          import json
+
+          plugin = json.loads((source / "plugin.json").read_text(encoding="utf-8"))
+          if plugin.get("version") != __version__:
+              raise SystemExit("FAIL_CLOSED: plugin/core release version mismatch")
+          print("RELEASE_INVENTORY_READY")
+          PY
