@@ -120,10 +120,10 @@ jobs:
         with:
           name: udb-real-runtime-preview-${{ github.sha }}
           path: |
-            \${{ runner.temp }}/udb-real-release-build/Universal-Desktop-Bridge-0.7.0-dev.1-Windows.zip
-            \${{ runner.temp }}/udb-real-release-build/Universal-Desktop-Bridge-0.7.0-dev.1-Windows.zip.sha256
-            \${{ runner.temp }}/udb-real-release-build/headless-live-acceptance.json
-            \${{ runner.temp }}/udb-real-release-build/computer-live-acceptance.json
-            \${{ runner.temp }}/udb-real-release-build/host-live-acceptance.json
+            ${{ runner.temp }}/udb-real-release-build/Universal-Desktop-Bridge-0.7.0-dev.1-Windows.zip
+            ${{ runner.temp }}/udb-real-release-build/Universal-Desktop-Bridge-0.7.0-dev.1-Windows.zip.sha256
+            ${{ runner.temp }}/udb-real-release-build/headless-live-acceptance.json
+            ${{ runner.temp }}/udb-real-release-build/computer-live-acceptance.json
+            ${{ runner.temp }}/udb-real-release-build/host-live-acceptance.json
           if-no-files-found: error
           retention-days: 7
