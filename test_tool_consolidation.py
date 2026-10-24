@@ -1,4 +1,4 @@
-"""Public catalog regressions: routing, permission boundaries and side effects."""
+"""Single-entrypoint MCP regressions: routing, permissions, and side effects."""
 import copy
 import hashlib
 import json
@@ -46,16 +46,36 @@ class Consolidation(unittest.TestCase):
     def setUp(self):
         self.primary=Backend(CORE);self.companion=Backend(TOOLS)
         self.proxy=UnifiedProxy(self.primary,self.companion)
-        self.catalog=self.proxy.tools_list()['tools']
-    def call(self, name, **args):return self.proxy.call_tool(dict(name=name,arguments=args))
+        self.entrypoints=self.proxy.tools_list()['tools']
+        self.catalog=copy.deepcopy(self.proxy.tool_cache)
 
-    def test_only_duplicate_interfaces_leave_discovery(self):
+    def call(self, name, **args):
+        return self.proxy.call_tool(dict(name='udb',arguments=dict(action='call',tool=name,arguments=args)))
+
+    def entry(self, **args):
+        return self.proxy.call_tool(dict(name='udb',arguments=args))
+
+    def test_exactly_one_public_mcp_tool_and_internal_catalog_is_complete(self):
+        self.assertEqual([tool['name'] for tool in self.entrypoints], ['udb'])
         original={t['name'] for t in CORE+TOOLS};public={t['name'] for t in self.catalog}
         self.assertEqual(public,(original-HIDDEN_ALIASES)|{'file_transfer'})
         self.assertEqual(len(self.proxy.tool_routes),len(original))
         for name in ('propose_sandbox_job','propose_media_download','computer_desktop','host_browser',
                      'file_operation','file_read_chunk','file_upload','search_start','system_process_terminate'):
             self.assertIn(name,public)
+
+    def test_list_action_returns_schemas_without_exposing_many_mcp_tools(self):
+        result=self.entry(action='list')
+        self.assertEqual(result['structuredContent']['count'],len(self.catalog))
+        self.assertEqual({t['name'] for t in result['structuredContent']['tools']},
+                         {t['name'] for t in self.catalog})
+        self.assertEqual([t['name'] for t in self.proxy.tools_list()['tools']],['udb'])
+
+    def test_direct_tool_calls_are_rejected(self):
+        with self.assertRaisesRegex(ValueError,"Only the unified 'udb' MCP tool is public"):
+            self.proxy.call_tool(dict(name='read_file',arguments=dict(project='p',path='a')))
+        self.assertFalse(self.primary.calls)
+        self.assertFalse(self.companion.calls)
 
     def test_registered_project_batch_read_stays_on_primary(self):
         self.call('read_file',project='example',paths=['a.py','b.py'])
@@ -89,21 +109,25 @@ class Consolidation(unittest.TestCase):
                 with self.assertRaises(ValueError):self.call(name,**args)
         self.assertFalse(self.primary.calls);self.assertFalse(self.companion.calls)
 
-    def test_aliases_remain_callable_for_existing_clients(self):
+    def test_legacy_aliases_are_not_public_operations(self):
         args={'read_files':dict(project='p',paths=['a']),
               'propose_text_edit':dict(project='p',path='a',old_text='a',new_text='b',expected_sha256='x'),
               'terminal_send':dict(session_id='s',text='x'), 'terminal_wait':dict(session_id='s'),
               'file_search_context':dict(text='x'),'file_copy':dict(source='a',destination='b'),
               'file_move':dict(source='a',destination='b')}
         for name,a in args.items():
-            self.call(name,**a)
-            target=self.primary if name in ('read_files','propose_text_edit') else self.companion
-            self.assertEqual(target.calls[-1],dict(name=name,arguments=a))
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError,'Unknown UDB operation'):
+                    self.call(name,**a)
+        self.assertFalse(self.primary.calls)
+        self.assertFalse(self.companion.calls)
 
-    def test_grant_denial_also_blocks_merged_and_legacy_calls(self):
+    def test_grant_denial_blocks_companion_operations(self):
         self.primary.enabled=False
-        for name,a in [('file_transfer',dict(action='copy',source='a',destination='b')),('file_copy',dict(source='a',destination='b'))]:
-            with self.assertRaises(RuntimeError):self.call(name,**a)
+        with self.assertRaises(RuntimeError):
+            self.call('file_transfer',action='copy',source='a',destination='b')
+        with self.assertRaisesRegex(ValueError,'Unknown UDB operation'):
+            self.call('file_copy',source='a',destination='b')
         self.assertFalse(self.companion.calls)
         # Core registered-project reads keep their separate authorization path.
         self.call('read_file',project='p',paths=['a'])
@@ -117,8 +141,11 @@ class Consolidation(unittest.TestCase):
     def test_catalog_and_arguments_are_not_mutated(self):
         original=copy.deepcopy(CORE+TOOLS)
         self.catalog[0]['inputSchema']['properties'].clear()
-        self.assertTrue(self.proxy.tools_list()['tools'][0]['inputSchema']['properties'])
-        params=dict(name='propose_file_write',arguments=dict(project='p',path='a',operation='replace',old_text='a',new_text='b',expected_sha256='x'))
+        self.assertTrue(self.proxy.tool_cache[0]['inputSchema']['properties'])
+        self.assertEqual([t['name'] for t in self.proxy.tools_list()['tools']],['udb'])
+        params=dict(name='udb',arguments=dict(action='call',tool='propose_file_write',
+                    arguments=dict(project='p',path='a',operation='replace',old_text='a',
+                                   new_text='b',expected_sha256='x')))
         before=copy.deepcopy(params);self.proxy.call_tool(params)
         self.assertEqual(params,before);self.assertEqual(CORE+TOOLS,original)
 
