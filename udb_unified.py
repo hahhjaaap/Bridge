@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from udb_tool_catalog import public_catalog, resolve_call
 from udb_recovery import RecoveringChild
 
-VERSION = "0.8.0-proxy.1"
+VERSION = "0.9.0-unified.1"
 MAX_LINE = 16 * 1024 * 1024
 MAX_WAIT = 90.0
 CHILD_SHUTDOWN_WAIT = 3.0
@@ -314,13 +314,46 @@ class UnifiedProxy:
                 except (RuntimeError, TimeoutError, OSError):
                     return
 
+    def _entry_tool_schema(self) -> dict[str, Any]:
+        """The only MCP tool exposed to clients; operations remain internally routed."""
+        return {
+            "name": "udb",
+            "description": (
+                "Universal Desktop Bridge single entry point. Use action='list' to "
+                "discover supported operations and their schemas. Use action='call' "
+                "with tool=<operation name> and arguments=<operation arguments> to "
+                "execute one operation. All existing owner grants, project scopes, "
+                "resource limits, and confirmation rules remain enforced."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "call"],
+                        "description": "list discovers operations; call executes one operation.",
+                    },
+                    "tool": {
+                        "type": "string",
+                        "description": "Required for action=call; exact operation name from action=list.",
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "description": "Required for action=call; the selected operation's arguments.",
+                    },
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        }
+
     def tools_list(self) -> dict[str, Any]:
-        # Backends advertise tools.listChanged=False. Discovery is immutable
-        # during this proxy session; cache schemas rather than repeat 2 RPCs
-        # per tools/list request. Serialize concurrent first discoveries.
+        # Expose exactly one MCP tool. Keep the full, validated operation catalog
+        # private to the dispatcher and return it only when udb(action="list") is called.
         with self.route_lock:
             if self.tool_cache is not None:
-                return {"tools": copy.deepcopy(self.tool_cache)}
+                return {"tools": [self._entry_tool_schema()]}
             result: list[dict[str, Any]] = []
             routes: dict[str, StdioChild] = {}
             for backend in (self.primary, self.companion):
@@ -339,21 +372,62 @@ class UnifiedProxy:
             catalog = public_catalog(result, routes)
             self.tool_routes = routes
             self.tool_cache = catalog
-            return {"tools": copy.deepcopy(self.tool_cache)}
+            return {"tools": [self._entry_tool_schema()]}
 
     def call_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Handle the sole public MCP tool, named udb."""
+        name = params.get("name")
+        if name != "udb":
+            raise ValueError("Only the unified 'udb' MCP tool is public; use action='call'")
+        arguments = params.get("arguments", {})
+        if not isinstance(arguments, dict):
+            raise ValueError("UDB arguments must be an object")
+        if not self.tool_routes:
+            self.tools_list()
+
+        action = arguments.get("action")
+        if action == "list":
+            if set(arguments) != {"action"}:
+                raise ValueError("action='list' accepts only the action field")
+            payload = {
+                "count": len(self.tool_cache or []),
+                "tools": copy.deepcopy(self.tool_cache or []),
+            }
+            serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            return {
+                "content": [{"type": "text", "text": "UDB operation catalog\n" + serialized}],
+                "structuredContent": payload,
+            }
+
+        if action != "call":
+            raise ValueError("action must be 'list' or 'call'")
+        if set(arguments) != {"action", "tool", "arguments"}:
+            raise ValueError("action='call' requires exactly action, tool, and arguments")
+        target = arguments.get("tool")
+        operation_arguments = arguments.get("arguments")
+        if not isinstance(target, str) or not target:
+            raise ValueError("tool must be a non-empty operation name")
+        if not isinstance(operation_arguments, dict):
+            raise ValueError("arguments for the selected operation must be an object")
+        available = {tool["name"] for tool in (self.tool_cache or [])}
+        if target not in available:
+            raise ValueError("Unknown UDB operation; use action='list' to discover supported operations")
+        return self._dispatch_tool({"name": target, "arguments": operation_arguments})
+
+    def _dispatch_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Route one catalog operation internally while preserving its existing guards."""
         name = params.get("name")
         if not isinstance(name, str):
-            raise ValueError("Tool name must be a string")
+            raise ValueError("Operation name must be a string")
         public_name = name
         arguments = params.get("arguments", {})
         if not isinstance(arguments, dict):
             raise ValueError("Tool arguments must be an object")
-        # Refresh tool routing on first invocation. Do not retry side effects.
+        # Refresh internal routing on first invocation. Never retry side effects.
         if not self.tool_routes:
             self.tools_list()
-        if name not in self.tool_routes and name not in {t['name'] for t in self.tool_cache or []}:
-            raise ValueError("Unknown MCP tool")
+        if name not in {t["name"] for t in (self.tool_cache or [])}:
+            raise ValueError("Unknown UDB operation; use the public catalog")
         name, arguments = resolve_call(name, arguments)
         params = {**params, "name": name, "arguments": arguments}
         backend = self.tool_routes.get(name)
@@ -396,7 +470,7 @@ class UnifiedProxy:
             return {"_upstream_rpc_error": reply["error"]}
         result=normalized_output(public_name, reply.get("result", {}))
         if name=='bridge_status' and isinstance(result,dict) and isinstance(result.get('content'),list):
-            result['content'].append({'type':'text','text':f'UDB Unified {VERSION} | {len(self.tool_cache or [])} public tools | {len(self.tool_routes)} backend tools (legacy aliases retained)'})
+            result['content'].append({'type':'text','text':f'UDB Unified {VERSION} | 1 public MCP tool (udb) | {len(self.tool_cache or [])} operations | {len(self.tool_routes)} internal backend routes'})
             if hasattr(self.primary,'status'):
                 result['content'].append({'type':'text','text':json.dumps({'backend_health':{'original':self.primary.status(),'companion':self.companion.status()}},ensure_ascii=False)})
         return result
@@ -469,7 +543,7 @@ class UnifiedProxy:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Combine UDB and its 29-tool Companion into one MCP server")
+    parser = argparse.ArgumentParser(description="Run UDB and its Companion behind one public MCP tool")
     parser.add_argument("--udb-home", required=True)
     parser.add_argument("--companion", required=True)
     parser.add_argument("--root", required=True)
