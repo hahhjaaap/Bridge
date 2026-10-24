@@ -19,6 +19,12 @@ def main():
     os.chdir(root)
     output=args.output.resolve()
     output.mkdir(parents=True,exist_ok=False)
+    # Fail before freezing if the GUI source or release policy fails static checks.
+    run(sys.executable,'-m','ruff','format','--check','udb/manager.py')
+    run(sys.executable,'-m','ruff','check','udb/manager.py','udb/release_policy.py',
+        'tests/test_manager_lifecycle.py')
+    run(sys.executable,'-m','mypy','--config-file','pyproject.toml',
+        'udb/manager.py','udb/release_policy.py')
     run(sys.executable,'-m','pytest','tests','-q')
     write_build_info(root,args.revision)
     run(sys.executable,'-m','PyInstaller','--noconfirm','--clean',
