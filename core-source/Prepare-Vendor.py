@@ -1,7 +1,23 @@
 """Prepare offline dependencies from explicit trusted local installations; no downloads."""
-import argparse,json,shutil,subprocess,sys,zipfile
+import argparse,json,shutil,subprocess,sys
 from pathlib import Path
 from udb.release import regular_file,sha256
+def stage_stdlib(python_home, runtime):
+    """Stage an unpacked stdlib; a release must not contain nested ZIPs."""
+    source = Path(python_home) / 'Lib'
+    destination = Path(runtime) / 'Lib'
+    destination.mkdir(parents=True)
+    excluded = {'site-packages', '__pycache__', 'test', 'tests',
+                'idlelib', 'tkinter', 'ensurepip'}
+    for item in sorted(source.rglob('*.py')):
+        relative = item.relative_to(source)
+        if any(part in excluded for part in relative.parts):
+            continue
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(regular_file(item), target)
+
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--python-home',type=Path,required=True)
     p.add_argument('--tunnel',type=Path,required=True);p.add_argument('--tunnel-licenses',type=Path,required=True)
@@ -13,12 +29,8 @@ def main():
     (runtime/'DLLs').mkdir()
     for item in sorted((a.python_home/'DLLs').iterdir()):
         if item.suffix in ('.pyd','.dll'):shutil.copy2(regular_file(item),runtime/'DLLs'/item.name)
-    with zipfile.ZipFile(runtime/'python311.zip','x',compression=zipfile.ZIP_DEFLATED) as archive:
-        for item in sorted((a.python_home/'Lib').rglob('*.py')):
-            rel=item.relative_to(a.python_home/'Lib')
-            if any(part in ('site-packages','__pycache__','test','tests','idlelib','tkinter','ensurepip') for part in rel.parts):continue
-            archive.write(regular_file(item),rel.as_posix())
-    (runtime/'python311._pth').write_text('python311.zip\n.\nDLLs\n',encoding='ascii')
+    stage_stdlib(a.python_home, runtime)
+    (runtime/'python311._pth').write_text('Lib\n.\nDLLs\n',encoding='ascii')
     shutil.copy2(regular_file(a.tunnel),vendor/'tunnel-client.exe')
     shutil.copy2(regular_file(a.tunnel_licenses),vendor/'tunnel-LICENSES.txt')
     subprocess.run([str(runtime/'python.exe'),'-I','-c',
