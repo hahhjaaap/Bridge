@@ -1,4 +1,4 @@
-"""Offline verification. Never installs or executes archive contents."""
+"""Offline allowlist/credential/ZIP verification; never execute archive contents."""
 import argparse
 import json
 from pathlib import Path
