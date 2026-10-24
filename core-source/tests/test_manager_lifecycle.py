@@ -134,3 +134,22 @@ def test_gui_entrypoints_are_annotated():
                 assert function.args.vararg.annotation is not None
             names.remove(function.name)
     assert not names
+
+
+def test_refactor_preserves_original_qt_stylesheet():
+    """Only whitespace between declarations may change during formatting."""
+    import re
+
+    source = SOURCE.read_text(encoding="utf-8")
+    current = re.search(r"STYLE\s*=\s*f'''([\s\S]*?)'''", source)
+    assert current is not None
+    original = Path(__file__).with_name("fixtures").joinpath("manager_style_baseline.qss.txt")
+    baseline = original.read_text(encoding="utf-8")
+    normalize = lambda s: re.sub(r";\s+", "; ", s).strip()
+    assert normalize(current.group(1)) == normalize(baseline)
+
+
+def test_manager_source_lines_are_at_most_120_characters():
+    lines = SOURCE.read_text(encoding="utf-8").splitlines()
+    too_long = [line_number for line_number, line in enumerate(lines, 1) if len(line) > 120]
+    assert not too_long, f"Overlength lines: {too_long}"
