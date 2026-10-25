@@ -132,6 +132,17 @@ def test_python_pid_requires_live_headless_identity(tmp_path,monkeypatch):
     monkeypatch.setattr(owner_command,'headless_state',lambda home:{'pid':os.getpid()})
     assert owner_command.manager_running(tmp_path,Path(sys.executable),image=lambda pid:sys.executable)
 
+def test_venv_base_interpreter_requires_live_headless_identity(tmp_path,monkeypatch):
+    from udb import owner_command
+    base=tmp_path/'base-python.exe'
+    monkeypatch.setattr(sys,'_base_executable',str(base),raising=False)
+    (tmp_path/'state').mkdir();(tmp_path/'state/manager.lock').write_text(str(os.getpid())+'\n')
+    assert not owner_command.manager_running(tmp_path,base,image=lambda pid:str(base))
+    assert not owner_command.manager_running(tmp_path,Path(sys.executable),image=lambda pid:str(base))
+    monkeypatch.setattr(owner_command,'headless_state',lambda home:{'pid':os.getpid()})
+    assert owner_command.manager_running(tmp_path,base,image=lambda pid:str(base))
+    assert owner_command.manager_running(tmp_path,Path(sys.executable),image=lambda pid:str(base))
+
 def test_build_finds_checkout_when_cli_was_installed_noneditable(monkeypatch):
     from udb import build
     monkeypatch.chdir(ROOT)

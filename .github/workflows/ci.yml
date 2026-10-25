@@ -5,6 +5,7 @@ permissions:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         python: ['3.11', '3.12']
@@ -20,9 +21,14 @@ jobs:
       - shell: bash
         run: python tools/check_wheel.py dist/*.whl
       - uses: actions/upload-artifact@v4
+        id: artifact_upload
+        continue-on-error: true
         with:
           name: wheel-${{ matrix.os }}-${{ matrix.python }}
           path: dist/*
+          retention-days: 3
+      - if: steps.artifact_upload.outcome == 'failure'
+        run: echo "::warning::Build/test results are independent of artifact storage; upload failed, check Actions quota."
   windows-exe:
     runs-on: windows-latest
     steps:
@@ -35,6 +41,11 @@ jobs:
       - run: .\dist\udb.exe --version
       - run: .\dist\udb.exe tools
       - uses: actions/upload-artifact@v4
+        id: artifact_upload
+        continue-on-error: true
         with:
           name: windows-executable
           path: dist/*
+          retention-days: 3
+      - if: steps.artifact_upload.outcome == 'failure'
+        run: echo "::warning::Build/test results are independent of artifact storage; upload failed, check Actions quota."

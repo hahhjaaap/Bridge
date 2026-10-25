@@ -118,9 +118,12 @@ def manager_running(home: Path, exe: Path, image=process_image) -> bool:
         actual = image(pid)
         if not actual:return False
         normalized=lambda p:os.path.normcase(os.path.abspath(p))
-        if normalized(actual)==normalized(sys.executable) and headless_state(home) is not None:return True
+        # Windows virtual environments can redirect to the base interpreter.
+        # An interpreter image alone never identifies an owned manager.
+        interpreters={normalized(sys.executable),
+                      normalized(getattr(sys,"_base_executable",sys.executable))}
+        if normalized(actual) in interpreters:return headless_state(home) is not None
         if normalized(actual)==normalized(exe):
-            if normalized(exe)==normalized(sys.executable):return headless_state(home) is not None
             return True
         # Live upgrades retain mapped images until the attended manager exits.
         # Only a sibling image explicitly recorded by the updater AND still

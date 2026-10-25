@@ -32,3 +32,5 @@ Windows EXE: install `.[office,freeze]`, then `udb build --exe`. The release dir
 Legacy manual GUI/Sandbox acceptance helpers are in `tests/core`. New package/CLI tests cover clean installation, arbitrary working directories, one MCP catalog, compatibility imports, configuration and secret-free packaging. See `VALIDATION.md` for checks actually run for this change.
 
 Attended MCP GUI acceptance can use the same TOML via `UDB_TEST_CONFIG`; no second test connection configuration is required. An existing legacy `mcp.json` is still accepted by the compatibility test helpers.
+
+Artifact upload is best-effort and reports a warning if the account storage quota is exhausted; build/test failures still fail CI. Platform jobs run independently. A passing test run does not imply a downloadable artifact was stored.
