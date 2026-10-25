@@ -92,22 +92,38 @@ class Background:
             del self.tasks[old]
         task=Task(kind);self.tasks[task.id]=task
         task.recovery=recovery
-        lease=self.journal.lease('job-'+task.id);task.release=lease.close
-        def persist():
-            with task.lock:
-                row=task.read(0,100);row['results']=task.rows[:2000];row['recovery']=task.recovery
-                self.journal.save('job-'+task.id,row)
-        task.persist=persist;task.persist()
-        if before_start:before_start(task)
-        try:task.start(fn)
-        except Exception:lease.close();self.tasks.pop(task.id,None);raise
+        lease=None;key='job-'+task.id
+        try:
+            lease=self.journal.lease(key);task.release=lease.close
+            def persist():
+                with task.lock:
+                    row=task.read(0,100);row['results']=task.rows[:2000];row['recovery']=task.recovery
+                    self.journal.save(key,row)
+            task.persist=persist;task.persist()
+            if before_start:before_start(task)
+            task.start(fn)
+        except BaseException:
+            self.tasks.pop(task.id,None)
+            if lease is not None:
+                try:
+                    self.journal.file(key).unlink(missing_ok=True);self.journal.hashes.pop(key,None)
+                except (OSError,ValueError):pass
+                finally:lease.close()
+            raise
         return task.read()
     def task(self,jid,action='read',offset=0,limit=50):
         if action=='list':return {'jobs':[dict(job_id=t.id,kind=t.kind,state=t.state) for t in self.tasks.values()]}
         if jid not in self.tasks:
+            start=int(offset);count=int(limit)
+            if not 0<=start<=2000 or not 1<=count<=100:raise ValueError('Job offset/limit out of range')
             row=self.journal.load('job-'+jid)
             if action=='cancel':raise ValueError('Past work cannot be cancelled; inspect work_recovery')
-            if row['state']=='running':row['state']='interrupted';row['outcome_unknown']=True
+            if row['state']=='running':
+                try:lease=self.journal.lease('job-'+jid)
+                except RuntimeError:row['state']='owned_by_live_backend'
+                else:lease.close();row['state']='interrupted';row['outcome_unknown']=not row.get('committed',False)
+            rows=row.get('results',[]);end=min(len(rows),start+count)
+            row.update(results=rows[start:end],next_offset=max(start,end),has_more=end<len(rows))
             return row
         return self.tasks[jid].stop() if action=='cancel' else self.tasks[jid].read(offset,limit)
     def close(self):

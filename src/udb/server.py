@@ -11,13 +11,14 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations, CallToolResult, TextContent, ImageContent
-from .core import Agent
+from .core import Agent,reject_links
 from . import desktop_vm
 
 PORT = 17843
 
 def token_for(agent):
     p = agent.state/'http-token'
+    reject_links(p)
     if not p.exists():
         try:
             with p.open('x', encoding='ascii') as f:
@@ -25,7 +26,10 @@ def token_for(agent):
             os.chmod(p, 0o600)
         except FileExistsError:
             pass
-    return p.read_text('ascii').strip()
+    reject_links(p)
+    with p.open('r',encoding='ascii') as stream:value=stream.read(4097).strip()
+    if not value or len(value)>4096:raise ValueError('Invalid local HTTP token')
+    return value
 
 def make_server(agent: Agent):
     # Desktop observations live with this MCP backend. File/command jobs keep

@@ -1,5 +1,7 @@
 # Validation of source consolidation (0.9.0)
 
+This is the historical 0.9.0 record. See `AUDIT.md` for the current 0.9.1 audit and its own validation status.
+
 Actually run in the Linux development environment:
 
 - Full regression suite after the CLI compatibility fix: 329 passed, 5 skipped, 27 subtests passed. Native Windows cases invoked inside the component harness skip their native cases on Linux and are not Windows evidence.

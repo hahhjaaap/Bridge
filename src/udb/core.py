@@ -67,6 +67,7 @@ class Agent:
         self.home = home.absolute()
         self.state = self.home / 'state'
         reject_links(self.home)
+        reject_links(self.state)
         self.state.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.db = self.state / 'agent.sqlite3'
@@ -90,6 +91,7 @@ class Agent:
                     c.execute('INSERT OR IGNORE INTO protected VALUES (?)', (str(root.resolve()),))
 
     def connect(self):
+        reject_links(self.db)
         c = sqlite3.connect(self.db, timeout=10, factory=ScopedConnection)
         c.row_factory = sqlite3.Row
         return c

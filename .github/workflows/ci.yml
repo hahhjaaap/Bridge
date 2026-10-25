@@ -40,6 +40,7 @@ jobs:
       - run: udb build --exe
       - run: .\dist\udb.exe --version
       - run: .\dist\udb.exe tools
+      - run: python tools/check_frozen.py dist/udb.exe
       - uses: actions/upload-artifact@v4
         id: artifact_upload
         continue-on-error: true

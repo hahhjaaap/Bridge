@@ -12,9 +12,9 @@ import uuid
 
 
 class ProcessCatalog:
-    def __init__(self, project_root):
+    def __init__(self, project_root, bridge_home=None):
         root=Path(project_root)
-        self.install=root.parent.parent if root.parent.name.lower()=='projects' else None
+        self.install=Path(bridge_home).resolve() if bridge_home else root.parent.parent if root.parent.name.lower()=='projects' else None
         self.observations={};self.cpu={}
 
     def _windows(self):

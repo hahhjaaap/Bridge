@@ -18,11 +18,12 @@ def checked(path):
     path=Path(path).expanduser().absolute()
     for item in (path,*path.parents):
         if item.is_symlink() or (item.exists() and getattr(item.lstat(),'st_file_attributes',0)&0x400):raise ValueError('Linked configuration path refused')
-    return path
+    return path.resolve(strict=False)
 
-def load(home=None,config=None,root=None,enable_terminal=None,core_exe=None):
-    initial=checked(home) if home else default_home()
+def load(home=None,config=None,root=None,enable_terminal=None,core_exe=None,allow_missing_config=False):
+    initial=checked(home) if home else checked(default_home())
     selected=checked(config) if config else checked(initial/'udb.toml')
+    if config and not selected.exists() and not allow_missing_config:raise ValueError('Explicit configuration file does not exist')
     data={}
     if selected.exists():
         if not selected.is_file() or selected.stat().st_nlink!=1 or selected.stat().st_size>65536:raise ValueError('Invalid configuration file')

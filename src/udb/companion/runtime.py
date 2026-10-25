@@ -39,6 +39,8 @@ HIDDEN_DIRS_CASEFOLD = {name.casefold() for name in HIDDEN_DIRS}
 PROTECTED_NAMES = {".env", "id_rsa", "id_ed25519", "credentials.json", "connection.json", "runtime.json", "http-token", "computer-access.dpapi"}
 PROTECTED_SUFFIXES = {".pem", ".p12", ".pfx", ".key", ".ckpt", ".safetensors", ".pt", ".pth"}
 PROTECTED_NAMES.update({"checkpoints", "datasets", "aiviet", "aiviet_datasets", "aiviet_quarantine"})
+PROTECTED_NAMES.update({'checkpoint','dataset','training_data','training-data','weights','models','aiviet_backups','.ssh','.aws','.azure'})
+PROTECTED_PREFIXES=('.env','credentials','secrets','id_rsa','id_ed25519')
 
 
 def digest(data: bytes) -> str:
@@ -79,10 +81,10 @@ class ScopedFiles:
             rel = full.relative_to(self.root)
         except ValueError:
             raise PermissionError("Path is outside the authorized project")
-        if any(part.casefold() in PROTECTED_NAMES or part.lower().endswith(tuple(PROTECTED_SUFFIXES))
+        if any(part.casefold() in PROTECTED_NAMES or part.casefold().startswith(PROTECTED_PREFIXES) or part.lower().endswith(tuple(PROTECTED_SUFFIXES))
                for part in rel.parts):
             raise PermissionError("Protected file is not accessible")
-        if any(part.casefold().startswith((".udb-stage-", ".udb-upload-")) or part.casefold() in HIDDEN_DIRS_CASEFOLD for part in rel.parts):
+        if any(part.casefold().startswith((".udb-stage-", ".udb-upload-", ".udb-write-")) or part.casefold() in HIDDEN_DIRS_CASEFOLD for part in rel.parts):
             raise PermissionError("Protected directory is not accessible")
         walk = self.root
         for item in rel.parts:
@@ -180,7 +182,9 @@ class ScopedFiles:
                     raise ValueError("File changed before commit; write cancelled")
                 if not p.name.startswith(".udb-companion-test-"):
                     recovery = self.root / ".udb-recovery"
+                    if is_reparse(recovery):raise PermissionError('Recovery directory is redirected')
                     recovery.mkdir(exist_ok=True)
+                    if is_reparse(recovery):raise PermissionError('Recovery directory is redirected')
                     backup = recovery / (digest(str(p).encode())[:12] + "-" + str(int(time.time()*1000)) + ".bak")
                     with backup.open("xb") as b:
                         b.write(previous)
@@ -272,7 +276,6 @@ class TerminalSession:
                 self.arrival.set()
         finally:
             self.done = True
-            self.input_done.set()
             self.arrival.set()
 
     def read(self, offset: int | None, wait_ms: int = 100) -> dict[str, Any]:
@@ -338,10 +341,11 @@ class TerminalSession:
                     count=self.process.stdin.write(view)
                     if not count:raise BrokenPipeError()
                     view=view[count:]
-            except (OSError,ValueError):return
+            except (OSError,ValueError):self.input_done.set();return
 
     def send(self, text: str) -> dict[str, Any]:
         if self.process.poll() is not None:raise RuntimeError('Terminal already finished')
+        if self.input_done.is_set():raise RuntimeError('Terminal input channel is closed; inspect output before retrying')
         if not isinstance(text,str) or len(text.encode('utf-8'))>10000:raise ValueError('Input limit: 10,000 UTF-8 bytes')
         try:self.input_queue.put_nowait(text.encode('utf-8'))
         except queue.Full:raise RuntimeError('Terminal input queue full; inspect output before retrying')
@@ -361,8 +365,9 @@ class TerminalSession:
 
 
 class Runtime:
-    def __init__(self, root: str, enable_terminal: bool = False):
+    def __init__(self, root: str, enable_terminal: bool = False, bridge_home=None):
         self.files = ScopedFiles(root)
+        self.bridge_home=Path(bridge_home).resolve() if bridge_home else None
         self.enable_terminal = enable_terminal
         self.sessions: dict[str, TerminalSession] = {}
         self.lock=threading.RLock();self.done=threading.Event();self.monitor_errors=0
@@ -441,8 +446,12 @@ class Runtime:
         session.mode=mode
         session.deadline=time.monotonic()+timeout_seconds
         self.sessions[session.id] = session
-        self.checkpoint()
-        return session.read(offset=0, wait_ms=wait_ms)
+        persistence_available=True
+        try:self.checkpoint()
+        except (OSError,ValueError):self.monitor_errors+=1;persistence_available=False
+        row=session.read(offset=0, wait_ms=wait_ms)
+        row['persistence_available']=persistence_available
+        return row
 
     def shutdown(self) -> None:
         """Stop all child processes owned by this Companion when MCP closes."""
@@ -457,8 +466,11 @@ class Runtime:
         if name in NAMES:return self.features.tool(name,args)
         if name == "terminal_start":
             r = self.start(args["program"], args.get("arguments", []), args.get("cwd", "."), args.get("wait_ms", 150),args.get('timeout_seconds',3600),args.get('memory_mib',1024),args.get('mode','pipe'),args.get('columns',100),args.get('rows',30))
-            return respond_text(r["state"], "Lệnh đã bắt đầu" if r["state"] == "RUNNING" else "Lệnh đã hoàn tất",
-                                f"Phiên: {r['session_id']} | Exit: {r['exit_code']} | Next offset: {r['next_offset']}\n{r['output'][:MAX_OUTPUT_CHARS]}")
+            warning=('\nWarning: transcript persistence failed after process startup; use this session ID to inspect/stop it; do not replay the command.' if not r['persistence_available'] else '')
+            response=respond_text(r["state"], "Lệnh đã bắt đầu" if r["state"] == "RUNNING" else "Lệnh đã hoàn tất",
+                                f"Phiên: {r['session_id']} | Exit: {r['exit_code']} | Next offset: {r['next_offset']}\n{r['output'][:MAX_OUTPUT_CHARS]}"+warning)
+            response['structuredContent']=r
+            return response
         if name in {"terminal_read", "terminal_send", "terminal_stop"}:
             ident = args["session_id"]
             if ident not in self.sessions:
@@ -481,8 +493,10 @@ class Runtime:
             return respond_text("PASS", f"Đã liệt kê {len(lines)} mục trong {r['path']}", "\n".join(lines))
         if name == "file_read":
             r = self.files.read(args["path"], args.get("offset", 0), args.get("limit", 8192))
-            return respond_text("PASS", f"Đã đọc {r['path']} ({r['size']} bytes)",
-                                f"SHA256: {r['sha256']} | Next offset: {r['next_offset']} | Remaining: {r['remaining']}\n{r['content'][:MAX_OUTPUT_CHARS]}")
+            response=respond_text('PASS',f"Đã đọc {r['path']} ({r['size']} bytes)")
+            response['content'][0]['text']+=f"\nSHA256: {r['sha256']} | Next offset: {r['next_offset']} | Remaining: {r['remaining']}\n{r['content']}"
+            response['structuredContent']=r
+            return response
         if name == "file_write":
             r = self.files.write(args["path"], args["content"], args.get("expected_sha256", "NEW"))
             return respond_text("PASS", "Đã tạo file" if r["created"] else "Đã cập nhật file",
@@ -622,11 +636,12 @@ def main(argv=None) -> int:
     parser.add_argument("--root", required=True, help="Existing approved project folder")
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--parent-pid", type=int, default=0)
+    parser.add_argument('--udb-home',help=argparse.SUPPRESS)
     parser.add_argument("--enable-terminal", action="store_true", help="Owner opt-in for subprocess execution")
     args = parser.parse_args(argv)
     if args.selftest:
         return selftest(args.root)
-    runtime = Runtime(args.root, enable_terminal=args.enable_terminal)
+    runtime = Runtime(args.root, enable_terminal=args.enable_terminal,bridge_home=args.udb_home)
     def parent_gone():
         try:runtime.close()
         finally:os._exit(0)

@@ -34,3 +34,9 @@ Legacy manual GUI/Sandbox acceptance helpers are in `tests/core`. New package/CL
 Attended MCP GUI acceptance can use the same TOML via `UDB_TEST_CONFIG`; no second test connection configuration is required. An existing legacy `mcp.json` is still accepted by the compatibility test helpers.
 
 Artifact upload is best-effort and reports a warning if the account storage quota is exhausted; build/test failures still fail CI. Platform jobs run independently. A passing test run does not imply a downloadable artifact was stored.
+
+## 0.9.1 audit fixes
+
+The audit fixes CLI revocation routing and configuration initialization, rejects missing explicit configurations and canonicalizes equivalent home paths. Recovery/job setup failures release their slots and locks; reloaded job reads preserve paging and distinguish another live backend. Text reads retain the complete returned byte range, including trailing whitespace. Terminal stdout EOF no longer closes a live stdin channel; transcript failures after startup retain a controllable session ID and explicitly forbid command replay.
+
+Scoped Companion paths now also exclude common credential variants and training/model directories. Private SQLite/HTTP token and recovery paths reject redirected storage. Process protection receives the bridge home explicitly for external projects. Invalid JSON-RPC request envelopes are rejected before dispatch. The frozen EXE includes its manifest template and CI exercises actual MCP worker startup, metadata commands and owner-grant denial. No existing tool name, endpoint, owner grant or plugin identity changes. See `AUDIT.md` for validation and limits.

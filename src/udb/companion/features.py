@@ -11,7 +11,7 @@ from udb.protocol import result
 
 
 class Features:
-    def __init__(self,rt):self.rt=rt;self.background=Background(rt.files);self.catalog=ProcessCatalog(rt.files.root);self.documents=Documents(self.background)
+    def __init__(self,rt):self.rt=rt;self.background=Background(rt.files);self.catalog=ProcessCatalog(rt.files.root,getattr(rt,'bridge_home',None));self.documents=Documents(self.background)
     def close(self):
         if hasattr(self,'pointer'):self.pointer.close();del self.pointer
         try:self.background.close()

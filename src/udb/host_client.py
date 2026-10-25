@@ -19,7 +19,9 @@ def atomic_json(path, value):
 
 def enabled(agent):
     p = agent.state/'host-settings.json'; reject_links(p)
-    try: return json.loads(p.read_text('utf-8-sig')).get('enabled') is True
+    try:
+        value=json.loads(p.read_text('utf-8-sig'))
+        return isinstance(value,dict) and value.get('enabled') is True
     except (OSError, ValueError): return False
 
 
@@ -28,7 +30,9 @@ def status(agent):
     try:
         if p.stat().st_size > 128*1024: raise ValueError('oversized')
         result = json.loads(p.read_text('utf-8'))
-        if time.time()-result['resources']['at'] > 6: raise ValueError('stale')
+        if not isinstance(result,dict) or not isinstance(result.get('resources'),dict):raise ValueError('invalid health object')
+        stamp=result['resources']['at']
+        if type(stamp) not in (int,float) or not -2<=time.time()-stamp<=6:raise ValueError('stale or invalid health timestamp')
         result['enabled'] = enabled(agent)
         return result
     except (OSError, ValueError, KeyError):

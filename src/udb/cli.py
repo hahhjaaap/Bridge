@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 from ._version import VERSION
-from .config import load
+from .config import load,checked
 
 def worker(role,args):
     if role=='core':
@@ -43,10 +43,11 @@ def main(argv=None):
     parser.add_argument('--json',action='store_true')
     parser.add_argument('--wait',type=int,default=30)
     sub=parser.add_subparsers(dest='action')
-    for name in ('start','serve','status','stop','doctor','test','tools','init','build','build-info','manifest'):
+    for name in ('start','serve','status','stop','doctor','test','revoke-access','tools','init','build','build-info','manifest'):
         item=sub.add_parser(name);add_settings(item,True)
-        if name in ('start','status','stop','doctor','test'):
+        if name in ('start','status','stop','doctor','test','revoke-access'):
             item.add_argument('--json',action='store_true',default=argparse.SUPPRESS);item.add_argument('--wait',type=int,default=argparse.SUPPRESS)
+            item.add_argument('--access',choices=['computer'],default=argparse.SUPPRESS)
         if name=='build':
             item.add_argument('--exe',action='store_true');item.add_argument('--output')
         if name=='serve':item.add_argument('--stdio',action='store_true',help='stdio is the default transport')
@@ -65,10 +66,14 @@ def main(argv=None):
         if action=='tools':
             from .registry import catalog
             print(json.dumps(dict(version=VERSION,**catalog()),ensure_ascii=True));return 0
-        settings=load(home=args.home,config=args.config,root=args.root,enable_terminal=args.enable_terminal,core_exe=args.core_exe)
+        settings=load(home=args.home,config=args.config,root=args.root,enable_terminal=args.enable_terminal,core_exe=args.core_exe,allow_missing_config=action=='init')
         if action=='init':
-            settings.home.mkdir(parents=True,exist_ok=True);target=settings.home/'udb.toml'
-            with target.open('x',encoding='utf-8') as f:f.write('[bridge]\ncore_backend = "source"\nenable_terminal = false\n')
+            target=checked(args.config) if args.config else checked(settings.home/'udb.toml')
+            values=dict(home=str(settings.home),project_root=str(settings.project_root),core_backend=settings.core_backend,enable_terminal=settings.enable_terminal)
+            if settings.core_exe:values['core_exe']=str(settings.core_exe)
+            target.parent.mkdir(parents=True,exist_ok=True)
+            with target.open('x',encoding='utf-8') as f:
+                f.write('[bridge]\n'+''.join(key+' = '+json.dumps(value,ensure_ascii=False)+'\n' for key,value in values.items()))
             print('Created runtime configuration; no connection or permission was granted.');return 0
         if action=='serve':
             if args.access:raise ValueError('Owner activation is not an MCP operation')

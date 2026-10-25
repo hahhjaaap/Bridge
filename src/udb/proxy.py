@@ -460,6 +460,11 @@ class UnifiedProxy:
             if not isinstance(message, dict):
                 self.send(rpc_error(None, "Invalid JSON-RPC object", -32600))
                 continue
+            ident=message.get('id')
+            if (message.get('jsonrpc')!='2.0' or not isinstance(message.get('method'),str) or
+                    isinstance(ident,bool) or not isinstance(ident,(str,int,type(None)))):
+                self.send(rpc_error(ident if type(ident) in (str,int) else None,'Invalid JSON-RPC request',-32600))
+                continue
             if "id" not in message:
                 for backend in (self.primary, self.companion):
                     backend.notification(message)
@@ -479,7 +484,7 @@ def run(settings) -> int:
         if not settings.core_exe or not settings.core_exe.is_file():raise ValueError('Configured installed core is missing')
         original_argv=[str(settings.core_exe),'--stdio','--home',str(home)]
     else:original_argv=worker_command('core',['--stdio','--home',str(home)])
-    companion_argv=worker_command('companion',['--root',str(root),*(['--enable-terminal'] if settings.enable_terminal else []),'--parent-pid',str(os.getpid())])
+    companion_argv=worker_command('companion',['--root',str(root),'--udb-home',str(home),*(['--enable-terminal'] if settings.enable_terminal else []),'--parent-pid',str(os.getpid())])
     proxy: UnifiedProxy | None = None
     original = RecoveringChild(lambda: StdioChild("Original UDB", original_argv, str(home), lambda msg: proxy.send(msg) if proxy else None), 'Original UDB')
     companion = RecoveringChild(lambda: StdioChild("Companion", companion_argv, str(home), lambda msg: proxy.send(msg) if proxy else None), 'Companion')

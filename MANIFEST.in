@@ -10,3 +10,4 @@ recursive-include tests *.py *.ps1
 include mcp_test_config.py plugin.json
 include uia_provider_fixture.ps1
 include VALIDATION.md
+include AUDIT.md
