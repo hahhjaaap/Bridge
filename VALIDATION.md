@@ -2,17 +2,22 @@
 
 Actually run in the Linux development environment:
 
-- `python -m pytest`: 325 passed, 5 skipped, 27 subtests passed. This includes the original core regressions plus package/configuration/CLI tests and component regression programs. Native Windows programs invoked inside the regression harness skip their native cases on Linux; they are not Windows test evidence.
-- Real source-only MCP subprocesses: initialize, discover 60 public tools / 66 implementations, call bridge_status, and reject a terminal request without owner computer access. No installed core EXE, existing connection key or grant was used.
-- Source distribution and wheel built successfully. A fresh isolated virtual environment installed the wheel and resolved package/legacy aliases from that environment, outside this checkout. Its generated catalog contained 60 tools and version 0.9.0.
-- Runtime helper assets and compatibility modules were checked in the wheel. Configuration parsing, path-link rejection, explicit terminal enable/disable, effective manager settings and unchanged permission boundaries have regression coverage.
+- Full regression suite: 326 passed, 5 skipped, 27 subtests passed. Native Windows cases invoked inside the component harness skip their native cases on Linux and are not Windows evidence.
+- Source-only MCP subprocesses: initialize, discover 60 public tools / 66 implementations, call bridge_status, and reject a terminal request without owner computer access. No installed core EXE, connection key or grant was used.
+- Source distribution and wheel built successfully. A fresh isolated virtual environment installed the wheel outside this checkout, checked package/legacy aliases and runtime assets, and reported version 0.9.0 / 60 tools without an external core EXE.
 
-Not yet run for this refactor:
+Actually run on the owner's Windows computer using an isolated installed 0.9.0 wheel and existing owner grants:
 
-- Windows native/attended GUI, ConPTY, Credential Manager and Sandbox acceptance.
-- Windows frozen executable build and execution.
-- A live ChatGPT call through the new package on the user's computer.
+- Full regression suite: 326 passed, 5 skipped, 27 subtests passed. Native ConPTY and Windows process durability component programs ran through this suite.
+- Real MCP UI Automation: standard Edit/Button providers, Unicode ValuePattern readback, InvokePattern changing the test form, missing-selector refusal and owned-form cleanup.
+- Real MCP virtual pointer: overlay, button effect, right/double click, drag and horizontal wheel, invalid-coordinate refusal, fixture cleanup. The physical cursor remained unchanged during this run.
+- Real MCP ConPTY stdin / VT output / resize / exit; interrupted copy recovery; duplicate resume returns the same job; saved terminal transcript survives a new backend and the lost process is not replayed.
+- Real MCP XLSX write/read/hash edit/no-overwrite, DOCX replacement, Unicode PDF and path-scope enforcement.
+- Deliberately terminated only test-owned core/Companion workers, including Windows venv redirector layers. Later read-only probes recovered the backends; kernel cleanup stopped the lost fixture terminal; its old session ID was refused. A dispatch/EOF race may return an explicit no-replay error before the next independent read recovers.
+- Unified MCP smoke: initialization, 60-tool catalog, original/Companion forwarding, scoped file tools, guarded writes, legacy aliases and Unicode terminal round trip. Test files removed.
 
-The existing desktop connection returned HTTP 429 during this task. No attempt was made to bypass it or change owner state. The running Windows installation was not replaced with an unverified refactor. Windows CI is defined in `.github/workflows/ci.yml`; a workflow definition is not evidence of a passing run. Earlier 0.8.0 Windows results must not be presented as validation of these package changes.
+GitHub Actions also built and ran the Windows frozen EXE (`--version`, `tools`). Linux Python 3.11/3.12 test, package build and clean-wheel jobs passed. Windows CI exposed a short-path-versus-resolved-path test expectation; the expectation now matches the CLI's resolved home. Check the latest workflow run for the final matrix result. Artifact upload is best-effort because account storage quota can prevent uploads independently of successful builds/tests.
 
-The source is now one package with one CLI. Core/Companion remain separate owned worker processes for failure isolation, launched by the same `udb` entry point. The installed-core backend is an explicit migration option, not a source-build dependency. Legacy success payloads, RPC error codes and tool aliases are preserved; common status/version/no-replay metadata is additive.
+Not covered by this refactor's acceptance: a new Windows Sandbox session and a full attended connection setup from scratch. Existing grants/credentials were reused through normal application APIs, not recreated by the agent.
+
+Core/Companion remain separate owned worker processes for failure isolation, launched by the same `udb` entry point. The installed-core backend is an explicit migration option, not a source-build dependency. Legacy payloads, RPC error codes and tool aliases remain; common status/version/no-replay metadata is additive.

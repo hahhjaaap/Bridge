@@ -28,13 +28,14 @@ class Client:
         self.reader=threading.Thread(target=receive,args=(self.p.stdout,self.rows),daemon=True);self.reader.start()
         self.rpc('initialize',dict(protocolVersion='2024-11-05',capabilities={},clientInfo=dict(name='UDB UIA regression',version='1')))
         self.p.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n');self.p.stdin.flush()
-    def rpc(self,method,params):
+    def rpc(self,method,params,allow_error=False):
         ident=next(self.ids)
         self.p.stdin.write((json.dumps(dict(jsonrpc='2.0',id=ident,method=method,params=params),ensure_ascii=False)+'\n').encode());self.p.stdin.flush()
         deadline=time.monotonic()+30
         while True:
             row=self.rows.get(timeout=max(.01,deadline-time.monotonic()))
             if row.get('id')==ident:
+                if allow_error and 'error' in row:return row
                 assert 'error' not in row,row
                 return row['result']
     def tool(self,**args):return self.rpc('tools/call',dict(name='computer_desktop',arguments=args))

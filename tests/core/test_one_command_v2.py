@@ -227,7 +227,7 @@ class StartupTests(Fixture):
                 patch.object(cli.subprocess,'run',return_value=type('R',(),{'returncode':2})()) as run:
             self.assertEqual(cli.main(['test','--home',str(self.home)]),2)
         from udb.launcher import worker_command
-        run.assert_called_once_with(worker_command('core',['--probe','--home',str(self.home)]),shell=False)
+        run.assert_called_once_with(worker_command('core',['--probe','--home',str(self.home.resolve())]),shell=False)
 
     def test_reuses_running_manager_without_launching_any_process(self):
         def forbidden(*a, **kw):

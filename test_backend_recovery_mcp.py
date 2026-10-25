@@ -13,10 +13,20 @@ from test_uia_provider import Client,object_data
 
 def terminate_backend(proxy_pid,kind):
     powershell=str(Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe')
-    script="$rows=@(Get-CimInstance Win32_Process -Filter 'ParentProcessId="+str(proxy_pid)+"' -Property ProcessId,ExecutablePath,CreationDate,CommandLine);$rows|ForEach-Object {@{pid=$_.ProcessId;image=$_.ExecutablePath;creation=$_.CreationDate.ToFileTimeUtc();role=$(if($_.CommandLine -like '*--stdio*'){'original'}elseif(($_.CommandLine -like '*udb_companion.py*') -or ($_.CommandLine -like '*_worker*companion*')){'companion'}else{'unknown'})}}|ConvertTo-Json -Compress"
+    # A Windows venv launcher can insert a base-interpreter child for both
+    # proxy and worker. Inspect argv only inside this fixture's owned tree.
+    script="""$all=@(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,ExecutablePath,CreationDate)
+$ids=@([uint32]PROXY_PID)
+for($i=0;$i -lt 8;$i++){$new=@($all|Where-Object {$_.ParentProcessId -in $ids -and $_.ProcessId -notin $ids});if(!$new.Count){break};$ids+=@($new.ProcessId)}
+$all|Where-Object {$_.ProcessId -in $ids -and $_.ProcessId -ne PROXY_PID}|ForEach-Object {
+ $cmd=(Get-CimInstance Win32_Process -Filter ('ProcessId='+$_.ProcessId) -Property CommandLine).CommandLine
+ @{pid=$_.ProcessId;parent=$_.ParentProcessId;image=$_.ExecutablePath;creation=$_.CreationDate.ToFileTimeUtc();role=$(if($cmd -match '--stdio'){'original'}elseif($cmd -match 'udb_companion.py|_worker\\s+companion'){'companion'}else{'unknown'})}
+}|ConvertTo-Json -Compress
+""".replace('PROXY_PID',str(proxy_pid))
     rows=json.loads(subprocess.run([powershell,'-NoProfile','-NonInteractive','-Command',script],capture_output=True,text=True,check=True,timeout=15).stdout)
     if isinstance(rows,dict):rows=[rows]
     selected=[r for r in rows if r['role']==kind]
+    selected=[r for r in selected if not any(c['parent']==r['pid'] for c in selected)]
     assert len(selected)==1,'Not one test-owned backend'
     row=selected[0];k=ctypes.WinDLL('kernel32',use_last_error=True)
     k.OpenProcess.argtypes=[w.DWORD,w.BOOL,w.DWORD];k.OpenProcess.restype=w.HANDLE
@@ -38,11 +48,24 @@ def main():
     if os.name!='nt':raise RuntimeError('Windows required')
     client=Client()
     def tool(name,**args):return client.rpc('tools/call',dict(name=name,arguments=args))
+    def recovered_read(name):
+        assert name in {'bridge_status','terminal_list'}
+        deadline=time.monotonic()+10
+        while True:
+            row=client.rpc('tools/call',dict(name=name,arguments={}),allow_error=True)
+            if 'error' not in row:return row
+            error=row['error']
+            # The pipe may close just after dispatch. That call must fail
+            # without replay; issue a separate read-only probe afterwards.
+            assert error['code']==-32000 and 'disconnected' in error['message'],row
+            assert error['data']['udb']['replay_performed'] is False,row
+            assert time.monotonic()<deadline,row
+            time.sleep(.1)
     try:
         tools=client.rpc('tools/list',{})['tools'];assert len(tools)==60
         assert not tool('bridge_status').get('isError')
         terminate_backend(client.p.pid,'original')
-        assert not tool('bridge_status').get('isError'),'Real original backend did not recover'
+        assert not recovered_read('bridge_status').get('isError'),'Real original backend did not recover'
         start=tool('terminal_start',program=sys.executable,arguments=['-u','-c',"import os,time;print('TEST_PID',os.getpid(),flush=True);time.sleep(90)"],wait_ms=200)
         raw='\n'.join(b.get('text','') for b in start.get('content',[]));sid=re.search(r'Phiên: ([a-f0-9]{12})',raw).group(1)
         for _ in range(50):
@@ -58,7 +81,7 @@ def main():
             terminate_backend(client.p.pid,'companion')
             assert k.WaitForSingleObject(process,5000)==0,'Kernel did not stop fixture terminal tree'
         finally:k.CloseHandle(process)
-        sessions=tool('terminal_list');assert not sessions.get('isError')
+        sessions=recovered_read('terminal_list');assert not sessions.get('isError')
         assert 'No companion-owned terminal sessions' in json.dumps(sessions)
         assert tool('terminal_read',session_id=sid).get('isError'),'Lost session must not be replayed/reattached'
         status=tool('bridge_status');health=None
