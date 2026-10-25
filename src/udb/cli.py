@@ -40,11 +40,13 @@ def main(argv=None):
         return worker(argv[1],argv[2:])
     parser=argparse.ArgumentParser(prog='udb',description='Universal Desktop Bridge: one package, one command')
     parser.add_argument('--version',action='version',version=VERSION);add_settings(parser)
+    parser.add_argument('--json',action='store_true')
+    parser.add_argument('--wait',type=int,default=30)
     sub=parser.add_subparsers(dest='action')
     for name in ('start','serve','status','stop','doctor','test','tools','init','build','build-info','manifest'):
         item=sub.add_parser(name);add_settings(item,True)
         if name in ('start','status','stop','doctor','test'):
-            item.add_argument('--json',action='store_true');item.add_argument('--wait',type=int,default=30)
+            item.add_argument('--json',action='store_true',default=argparse.SUPPRESS);item.add_argument('--wait',type=int,default=argparse.SUPPRESS)
         if name=='build':
             item.add_argument('--exe',action='store_true');item.add_argument('--output')
         if name=='serve':item.add_argument('--stdio',action='store_true',help='stdio is the default transport')

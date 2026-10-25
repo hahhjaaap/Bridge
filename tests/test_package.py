@@ -148,3 +148,15 @@ def test_build_finds_checkout_when_cli_was_installed_noneditable(monkeypatch):
     monkeypatch.chdir(ROOT)
     monkeypatch.setattr(build,'__file__',str(ROOT/'unrelated-site-packages/udb/build.py'))
     assert build.source_root()==ROOT
+
+@pytest.mark.parametrize('args',[
+ ['--wait','0','--json'],
+ ['--wait','0','--json','status'],
+ ['status','--wait','0','--json'],
+])
+def test_owner_options_work_with_default_start_and_either_argument_order(tmp_path,monkeypatch,args):
+    from udb import cli,owner_command
+    calls=[]
+    monkeypatch.setattr(owner_command,'main',lambda argv:calls.append(argv) or 0)
+    assert cli.main(['--home',str(tmp_path),*args])==0
+    assert calls==[['status' if 'status' in args else 'start','--home',str(tmp_path),'--wait','0','--json']]
