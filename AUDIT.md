@@ -17,9 +17,11 @@ Scope: the canonical package, legacy adapters, source path policy, owner CLI/con
 
 ## Validation
 
-- Linux full suite after byte-exact LF/CRLF fixtures: 371 passed, 5 skipped, 27 subtests passed. The added audit module has 42 cases; before fixes, targeted runs reproduced the defects in the original 0.9.0 source.
-- Standalone acceptance checker was exercised against the source console entry point. Source/wheel build and isolated installation are checked separately.
-- The first CI run built and exercised the frozen Windows EXE successfully, including its manifest and actual MCP workers. It exposed two test-fixture assumptions: platform newline translation and OS pipe capacity. The fixtures now use exact bytes and a synchronized blocked writer, without weakening the byte-integrity/backpressure assertions. The final Windows/Linux matrix is pending.
+- Linux full suite: 371 passed, 5 skipped, 27 subtests passed. The added audit module has 42 cases; before fixes, targeted runs reproduced the defects in the original 0.9.0 source.
+- Source/wheel builds passed. A fresh isolated virtual environment installed the 0.9.1 wheel outside the checkout and verified version 0.9.1 / 60 tools without an external core EXE. All 64 package Python files parsed; the source distribution includes the audit, regression module, frozen checker and UI fixture.
+- The first CI run built and exercised the frozen Windows EXE successfully, including its manifest and actual MCP workers. It exposed two test-fixture assumptions: platform newline translation and OS pipe capacity. The fixtures now use exact bytes and a synchronized blocked writer, without weakening the byte-integrity/backpressure assertions. The final GitHub Actions run 40156645683 passed all five jobs: Linux Python 3.11/3.12, Windows Python 3.11/3.12, and Windows EXE. Each Windows version passed all 376 tests, source/wheel build and clean-wheel validation. The frozen checker verified version/manifest/build metadata, 60 tools, real MCP worker startup, and denial without owner computer access.
 - The existing user-computer connection returned `Session terminated` before native deployment. Direct PowerShell parsing, credential self-test, attended GUI workflows and live 0.9.1 deployment have not run; previous 0.9.0 results are not evidence for this revision.
 
 No new Windows Sandbox VM, UAC/elevation workflow or fresh attended grant/connection setup is asserted by this audit. Real credentials/owner state must stay out of source, test fixtures and release archives.
+
+CI evidence: https://github.com/hahhjaaap/Bridge/actions/runs/40156645683. Artifact upload remains quota-limited and best-effort; successful tests/builds do not imply that GitHub stored downloadable binaries.
