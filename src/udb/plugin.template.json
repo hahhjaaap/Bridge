@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "universal-desktop-bridge",
+  "description": "Universal Desktop Bridge: one package and CLI; {tool_count} public tools.",
+  "author": {
+    "name": "Personal developer"
+  },
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true,
+      "interface": {
+        "displayName": "Universal Desktop Bridge",
+        "shortDescription": "Files, terminals and Windows",
+        "longDescription": "Unified Python source for Windows MCP, files, terminals, desktop controls and guarded work recovery. Existing owner permissions and specialized tools are retained.",
+        "developerName": "Personal developer",
+        "category": "Developer Tools",
+        "capabilities": [],
+        "defaultPrompt": "Use Universal Desktop Bridge Unified to check connection and complete a file or terminal task, then report its status."
+      }
+    }
+  }
+}

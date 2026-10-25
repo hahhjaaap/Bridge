@@ -1,8 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "universal-desktop-bridge",
-  "version": "0.8.0-proxy.1",
-  "description": "UDB: ConPTY, durable work records and a virtual AI pointer; 60 public tools.",
+  "description": "Universal Desktop Bridge: one package and CLI; 60 public tools.",
   "author": {
     "name": "Personal developer"
   },
@@ -13,12 +12,13 @@
       "interface": {
         "displayName": "Universal Desktop Bridge",
         "shortDescription": "Files, terminals and Windows",
-        "longDescription": "60 public tools. Win32 message AI pointer with visual overlay, Windows ConPTY terminals, durable work recovery for safe operations, file and Office jobs. Existing owner permissions retained. App compatibility varies; unknown writes and dead terminal processes are never replayed.",
+        "longDescription": "Unified Python source for Windows MCP, files, terminals, desktop controls and guarded work recovery. Existing owner permissions and specialized tools are retained.",
         "developerName": "Personal developer",
         "category": "Developer Tools",
         "capabilities": [],
         "defaultPrompt": "Use Universal Desktop Bridge Unified to check connection and complete a file or terminal task, then report its status."
       }
     }
-  }
+  },
+  "version": "0.9.0"
 }

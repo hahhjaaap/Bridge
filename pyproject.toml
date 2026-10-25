@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "universal-desktop-bridge"
+dynamic = ["version"]
+description = "Windows MCP bridge with one source package and CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+  "mcp==1.30.0",
+  "websocket-client==1.9.2",
+  "pywin32==312; sys_platform == 'win32'",
+  "PySide6-Essentials==6.10.2; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+office = ["openpyxl==3.1.5", "python-docx==1.2.0", "pypdf==6.10.0", "reportlab==4.4.9"]
+dev = ["pytest>=8,<10", "build>=1.2,<2", "setuptools>=77", "wheel"]
+freeze = ["pyinstaller>=6.16,<7"]
+
+[project.scripts]
+udb = "udb.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["_udb_compat", "udb_tool_catalog", "udb_recovery", "udb_managed_process", "udb_background", "udb_system_processes", "udb_companion", "udb_extensions", "udb_virtual_pointer", "udb_features", "udb_unified", "udb_work_journal", "udb_documents"]
+
+[tool.setuptools.dynamic]
+version = {attr = "udb._version.VERSION"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+udb = ["*.ps1", "*.json", "companion/*.ps1"]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"

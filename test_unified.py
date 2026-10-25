@@ -13,8 +13,8 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parent
-manifest = json.loads((ROOT / "mcp.json").read_text(encoding="utf-8"))
-config = manifest["mcpServers"]["universal-desktop-bridge"]
+from mcp_test_config import configuration
+config = configuration()
 argv = [part.replace("${PLUGIN_ROOT}", str(ROOT)) for part in config["args"]]
 exe = config["command"].replace("${PLUGIN_ROOT}", str(ROOT))
 p = subprocess.Popen([exe] + argv, cwd=str(ROOT), stdin=subprocess.PIPE,

@@ -1,0 +1,7 @@
+[bridge]
+# Relative paths resolve from this file's directory. Use an existing owner home.
+home = "./local-udb-home"
+project_root = "./approved-project"
+enable_terminal = false
+core_backend = "source"
+# Credentials/grants never belong in this file.

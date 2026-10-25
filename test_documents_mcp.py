@@ -7,8 +7,8 @@ from test_uia_provider import Client,ROOT,object_data
 
 
 def main():
-    config=json.loads((ROOT/'mcp.json').read_text())['mcpServers']['universal-desktop-bridge']['args']
-    project=Path(config[config.index('--root')+1])
+    from mcp_test_config import project_root
+    project=project_root()
     with tempfile.TemporaryDirectory(prefix='udb-office-mcp-',dir=project) as folder:
         prefix=Path(folder).relative_to(project).as_posix()
         client=Client()

@@ -1,0 +1,40 @@
+name: package-and-regressions
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install ".[office,dev]"
+      - run: python -m pytest
+      - run: udb build
+      - shell: bash
+        run: python tools/check_wheel.py dist/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.python }}
+          path: dist/*
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install ".[office,freeze]"
+      - run: udb build --exe
+      - run: .\dist\udb.exe --version
+      - run: .\dist\udb.exe tools
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-executable
+          path: dist/*

@@ -19,7 +19,8 @@ def receive(stream,rows):
 
 class Client:
     def __init__(self):
-        config=json.loads((ROOT/'mcp.json').read_text())['mcpServers']['universal-desktop-bridge']
+        from mcp_test_config import configuration
+        config=configuration()
         expand=lambda s:s.replace('${PLUGIN_ROOT}',str(ROOT))
         self.p=subprocess.Popen([expand(config['command']),*[expand(a) for a in config['args']]],cwd=ROOT,
                                 stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)

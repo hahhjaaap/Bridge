@@ -13,7 +13,7 @@ from test_uia_provider import Client,object_data
 
 def terminate_backend(proxy_pid,kind):
     powershell=str(Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe')
-    script="$rows=@(Get-CimInstance Win32_Process -Filter 'ParentProcessId="+str(proxy_pid)+"' -Property ProcessId,ExecutablePath,CreationDate,CommandLine);$rows|ForEach-Object {@{pid=$_.ProcessId;image=$_.ExecutablePath;creation=$_.CreationDate.ToFileTimeUtc();role=$(if($_.CommandLine -like '*--stdio*'){'original'}elseif($_.CommandLine -like '*udb_companion.py*'){'companion'}else{'unknown'})}}|ConvertTo-Json -Compress"
+    script="$rows=@(Get-CimInstance Win32_Process -Filter 'ParentProcessId="+str(proxy_pid)+"' -Property ProcessId,ExecutablePath,CreationDate,CommandLine);$rows|ForEach-Object {@{pid=$_.ProcessId;image=$_.ExecutablePath;creation=$_.CreationDate.ToFileTimeUtc();role=$(if($_.CommandLine -like '*--stdio*'){'original'}elseif(($_.CommandLine -like '*udb_companion.py*') -or ($_.CommandLine -like '*_worker*companion*')){'companion'}else{'unknown'})}}|ConvertTo-Json -Compress"
     rows=json.loads(subprocess.run([powershell,'-NoProfile','-NonInteractive','-Command',script],capture_output=True,text=True,check=True,timeout=15).stdout)
     if isinstance(rows,dict):rows=[rows]
     selected=[r for r in rows if r['role']==kind]

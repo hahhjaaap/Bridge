@@ -1,18 +1,9 @@
 {
   "mcpServers": {
     "universal-desktop-bridge": {
-      "command": "python",
-      "args": [
-        "-u",
-        "PATH_TO_SOURCE/udb_unified.py",
-        "--udb-home",
-        "PATH_TO_UDB_INSTALL",
-        "--companion",
-        "PATH_TO_SOURCE/udb_companion.py",
-        "--root",
-        "PATH_TO_APPROVED_PROJECT",
-        "--enable-terminal"
-      ]
+      "type": "stdio",
+      "command": "udb",
+      "args": ["serve", "--config", "PATH_TO_LOCAL_UDb_TOML"]
     }
   }
 }

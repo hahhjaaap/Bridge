@@ -11,7 +11,8 @@ from udb_background import version
 from udb_work_journal import Journal
 
 def main():
-    args=json.loads((ROOT/'mcp.json').read_text())['mcpServers']['universal-desktop-bridge']['args'];project=Path(args[args.index('--root')+1])
+    from mcp_test_config import project_root
+    project=project_root()
     records=[];client=None
     with tempfile.TemporaryDirectory(prefix='udb-next-mcp-',dir=project) as folder:
         prefix=Path(folder).relative_to(project).as_posix();source=Path(folder)/'source.txt';source.write_text('Recovery qua MCP',encoding='utf-8')

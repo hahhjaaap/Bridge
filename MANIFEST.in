@@ -1,0 +1,11 @@
+include LICENSE README.md udb.example.toml MCP_CONFIGURATION.example.json
+recursive-include src/udb *.ps1
+recursive-include tools *.py *.spec
+prune state
+prune vendor
+prune vendor-office
+
+include test_*.py _udb_compat.py udb_*.py bridge.py test.cmd
+recursive-include tests *.py *.ps1
+include mcp_test_config.py plugin.json
+include VALIDATION.md

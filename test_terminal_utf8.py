@@ -11,7 +11,7 @@ def reader(data,done=True):
     session=TerminalSession.__new__(TerminalSession)
     session.id='utf8-fixture';session.lock=threading.RLock();session.arrival=threading.Event()
     session.chunks=collections.deque([(0,data)]);session.position=len(data);session.read_cursor=0
-    session.done=done;session.reason='';session.process=SimpleNamespace(poll=lambda:0 if done else None)
+    session.mode='pipe';session.done=done;session.reason='';session.process=SimpleNamespace(poll=lambda:0 if done else None)
     return session
 
 
