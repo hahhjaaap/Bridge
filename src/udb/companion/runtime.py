@@ -400,7 +400,8 @@ class Runtime:
         for session in list(self.sessions.values()):
             with session.lock:
                 chunks=b''.join(c for _,c in session.chunks)[-65536:]
-                row=dict(session_id=session.id,state='finished' if session.done else 'interrupted',exit_code=session.process.poll(),
+                code=session.process.poll()
+                row=dict(session_id=session.id,state='finished' if session.done and code is not None else 'interrupted',exit_code=code,
                     output_base64=__import__('base64').b64encode(chunks).decode(),earliest_offset=session.position-len(chunks),next_offset=session.position,
                     terminal_mode=session.mode,process_restorable=False,replay_safe=False)
             self.journal.save('terminal-'+session.id,row)

@@ -38,9 +38,10 @@ def test_effective_config_survives_equivalent_home_paths(tmp_path):
     config.write_text('[bridge]\nhome="home/child/.."\nproject_root="actual-project"\nenable_terminal=true\n')
     selected=load(config=config);old=activate(selected)
     try:
-        actual=effective(home.resolve())
-        assert actual.enable_terminal is True
-        assert actual.project_root==tmp_path/'actual-project'
+        for alias in (home.resolve(),home/'child/..'):
+            actual=effective(alias)
+            assert actual.enable_terminal is True
+            assert actual.project_root==(tmp_path/'actual-project').resolve()
         assert selected.home==home.resolve()
     finally:activate(old)
 
@@ -58,7 +59,7 @@ def test_init_persists_the_requested_settings_and_selected_file(tmp_path):
     assert cli.main(['init','--config',str(config),'--home',str(home),'--root',str(root),'--enable-terminal'])==0
     assert config.is_file() and not (home/'udb.toml').exists()
     actual=load(config=config)
-    assert actual.home==home and actual.project_root==root and actual.enable_terminal
+    assert actual.home==home.resolve() and actual.project_root==root.resolve() and actual.enable_terminal
     assert not (home/'state').exists()
     assert cli.main(['init','--config',str(config)])!=0
     assert load(config=config)==actual
@@ -104,9 +105,10 @@ def test_reloaded_jobs_page_results_and_distinguish_live_ownership(tmp_path):
     with pytest.raises(ValueError):bg.task(jid,offset=-1)
 
 
-def test_large_text_read_returns_every_byte_before_next_offset(tmp_path):
-    original='abcd'*25000+'\n \t\n'
-    (tmp_path/'large.txt').write_text(original,encoding='utf-8')
+@pytest.mark.parametrize('ending',['\n','\r\n'])
+def test_large_text_read_returns_every_byte_before_next_offset(tmp_path,ending):
+    original='abcd'*25000+ending+' \t'+ending
+    (tmp_path/'large.txt').write_bytes(original.encode('utf-8'))
     rt=Runtime(str(tmp_path))
     try:
         row=rt.tool('file_read',dict(path='large.txt',limit=len(original)))
@@ -139,6 +141,8 @@ def test_terminal_with_closed_output_still_accepts_live_stdin(tmp_path):
             time.sleep(.02)
         assert session.process.poll() is None
         assert not session.input_done.is_set()
+        rt.checkpoint()
+        assert rt.journal.load('terminal-'+session.id)['state']!='finished'
         result=rt.tool('terminal_send',dict(session_id=session.id,text='Còn stdin 🚀\n'))
         assert not result.get('isError'),result
         assert session.process.wait(timeout=5)==0

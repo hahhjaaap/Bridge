@@ -25,8 +25,8 @@ def test_single_version_and_generated_registry(tmp_path):
 
 def test_configuration_precedence_relative_paths_and_no_grants(tmp_path):
     cfg=tmp_path/'settings.toml';cfg.write_text('[bridge]\nhome="home"\nproject_root="project"\nenable_terminal=true\n')
-    value=load(config=cfg);assert value.home==tmp_path/'home' and value.project_root==tmp_path/'project' and value.enable_terminal
-    value=load(config=cfg,root=tmp_path/'other',enable_terminal=False);assert value.project_root==tmp_path/'other' and not value.enable_terminal
+    value=load(config=cfg);assert value.home==(tmp_path/'home').resolve() and value.project_root==(tmp_path/'project').resolve() and value.enable_terminal
+    value=load(config=cfg,root=tmp_path/'other',enable_terminal=False);assert value.project_root==(tmp_path/'other').resolve() and not value.enable_terminal
     assert not (tmp_path/'home').exists()
     cfg.write_text('[bridge]\napi_key="not-a-key-do-not-echo"\n')
     with pytest.raises(ValueError,match='credentials'):load(config=cfg)
@@ -117,7 +117,7 @@ def test_effective_settings_follow_the_manager_without_rewriting_manifest(tmp_pa
     def owner(args):observed.append(manager_options(home));return 0
     monkeypatch.setattr(owner_command,'main',owner)
     assert cli.main(['--config',str(cfg),'start'])==0
-    assert observed==[['--runtime-root',str(root),'--runtime-terminal','on']]
+    assert observed==[['--runtime-root',str(root.resolve()),'--runtime-terminal','on']]
     assert not (home/'mcp.json').exists()
 
 def test_generated_plugin_manifest_matches_the_source():
@@ -159,4 +159,4 @@ def test_owner_options_work_with_default_start_and_either_argument_order(tmp_pat
     calls=[]
     monkeypatch.setattr(owner_command,'main',lambda argv:calls.append(argv) or 0)
     assert cli.main(['--home',str(tmp_path),*args])==0
-    assert calls==[['status' if 'status' in args else 'start','--home',str(tmp_path),'--wait','0','--json']]
+    assert calls==[['status' if 'status' in args else 'start','--home',str(tmp_path.resolve()),'--wait','0','--json']]

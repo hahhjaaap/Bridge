@@ -58,7 +58,8 @@ def activate(settings):
     previous=_active;_active=settings;return previous
 
 def effective(home):
-    return _active if _active is not None and _active.home==Path(home).absolute() else load(home=home)
+    normalized=checked(home)
+    return _active if _active is not None and checked(_active.home)==normalized else load(home=normalized)
 
 def manager_options(home):
     settings=effective(home)

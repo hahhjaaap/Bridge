@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -56,12 +57,24 @@ class Features(unittest.TestCase):
     def test_input_backpressure_never_blocks_control_requests(self):
         row=self.rt.start(sys.executable,['-c','import time;time.sleep(20)'],wait_ms=0)
         session=self.rt.sessions[row['session_id']];start=time.monotonic()
-        failures=0
-        for _ in range(8):
-            try:session.send('x'*10000)
-            except RuntimeError:failures+=1
-        self.assertGreater(failures,0);self.assertLess(time.monotonic()-start,1)
-        session.stop();self.assertIsNotNone(session.process.poll())
+        entered=threading.Event();release=threading.Event();original=session.process.stdin
+        class GatedInput:
+            def write(self,data):
+                entered.set()
+                if not release.wait(5):raise BrokenPipeError('fixture gate expired')
+                return original.write(data)
+            def close(self):release.set();original.close()
+        # Synchronize a blocked writer; OS pipe capacity varies by runner.
+        try:
+            with patch.object(session.process,'stdin',GatedInput()):
+                session.send('x'*10000);self.assertTrue(entered.wait(2))
+                failures=0;start=time.monotonic()
+                for _ in range(8):
+                    try:session.send('x'*10000)
+                    except RuntimeError:failures+=1
+                self.assertGreater(failures,0);self.assertLess(time.monotonic()-start,1)
+                session.stop();self.assertIsNotNone(session.process.poll())
+        finally:release.set()
 
     def test_terminal_deadline_survives_file_cleanup_error(self):
         with patch.object(self.bg,'expire',side_effect=OSError('synthetic cleanup failure')):
