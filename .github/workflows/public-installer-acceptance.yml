@@ -1,0 +1,24 @@
+name: public-installer-acceptance
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/public-installer-acceptance.yml
+      - tools/check_public_installer.py
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  published-windows-install:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install and exercise the public release with system-only PATH
+        run: python tools/check_public_installer.py --report reports/public-installer.json
+      - name: Show verified result
+        shell: pwsh
+        run: Get-Content reports/public-installer.json
