@@ -1,6 +1,7 @@
 """Isolation regression for guest-only UI Automation and visible AI cursor."""
 
 import base64
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,6 +30,7 @@ def test_uia_arguments_are_fixed_no_shell_and_text_base64(monkeypatch):
         seen.append((cmd, kw))
         return SimpleNamespace(returncode=0, stdout=b"UIA_SET_VALUE_OK", stderr=b"")
 
+    monkeypatch.setattr(guest, "_system_executable", lambda _: sys.executable)
     monkeypatch.setattr(guest.subprocess, "run", capture)
     assert d.uia_demo("type", text=original) == "UIA_SET_VALUE_OK"
     cmd, kw = seen[0]

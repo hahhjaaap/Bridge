@@ -2,6 +2,7 @@
 
 import io
 import json
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -141,6 +142,7 @@ def test_large_uia_reply_survives_reader_without_truncation(monkeypatch):
         def wait(self, timeout=None):
             return 0
 
+    monkeypatch.setattr(guest, "_system_executable", lambda _: sys.executable)
     monkeypatch.setattr(guest.subprocess, "Popen", lambda *a, **kw: Proc())
     obj = guest.GuestDesktop.__new__(guest.GuestDesktop)
     result = obj.accessibility("snapshot")

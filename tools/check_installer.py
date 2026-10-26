@@ -40,7 +40,7 @@ def main():
             pass
 
     with tempfile.TemporaryDirectory(prefix="udb-installer-") as folder:
-        root = Path(folder)
+        root = Path(folder).resolve()
         feed = root / "feed"
         feed.mkdir()
         archive = feed / "udb-windows-x64.zip"

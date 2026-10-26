@@ -45,7 +45,7 @@ def main():
         tempfile.TemporaryDirectory(prefix="udb-frozen-") as temporary,
         ExitStack() as cleanup,
     ):
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         runtime_temp = root / "runtime-temp"
         runtime_temp.mkdir()
         env["TEMP"] = env["TMP"] = str(runtime_temp)

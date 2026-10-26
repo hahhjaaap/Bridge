@@ -3,6 +3,7 @@
 import base64
 import json
 import queue
+import sys
 import threading
 
 import pytest
@@ -62,6 +63,7 @@ def test_guest_uia_reuses_process_and_binds_window(monkeypatch):
         launch.append((argv, proc))
         return proc
 
+    monkeypatch.setattr(desktop_guest, "_system_executable", lambda _: sys.executable)
     monkeypatch.setattr(desktop_guest.subprocess, "Popen", start)
     guest = desktop_guest.GuestDesktop.__new__(desktop_guest.GuestDesktop)
     assert guest.accessibility("snapshot")["active_window"] == "Demo"
@@ -84,6 +86,7 @@ def test_guest_uia_does_not_fallback_on_denied_action(monkeypatch):
         proc.wait = lambda timeout=None: 0
         return proc
 
+    monkeypatch.setattr(desktop_guest, "_system_executable", lambda _: sys.executable)
     monkeypatch.setattr(desktop_guest.subprocess, "Popen", start)
     guest = desktop_guest.GuestDesktop.__new__(desktop_guest.GuestDesktop)
     with pytest.raises(RuntimeError, match="Element not found"):
