@@ -16,14 +16,36 @@ KEYS_URL = "https://platform.openai.com/settings/organization/api-keys"
 CHATGPT_URL = "https://chatgpt.com/#settings/Connectors"
 
 
+def _console_stream(stream):
+    if os.name != "nt" or stream is None:
+        return False
+    try:
+        if not stream.isatty():
+            return False
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetConsoleMode.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel.GetConsoleMode.restype = wintypes.BOOL
+        mode = wintypes.DWORD()
+        handle = msvcrt.get_osfhandle(stream.fileno())
+        return bool(kernel.GetConsoleMode(wintypes.HANDLE(handle), ctypes.byref(mode)))
+    except (ImportError, AttributeError, OSError, ValueError):
+        return False
+
+
+def console_input():
+    # Windows NUL is a character device: isatty() alone does not prove a console.
+    return _console_stream(sys.stdin)
+
+
 def attended_console():
-    return bool(
-        os.name == "nt"
-        and sys.stdin
-        and sys.stdout
-        and sys.stdin.isatty()
-        and sys.stdout.isatty()
-    )
+    return console_input() and _console_stream(sys.stdout)
 
 
 def saved_connection(settings, *, repair=False):
@@ -99,7 +121,7 @@ def connection_help():
 
 
 def run(settings, *, edit=False, local=False):
-    if os.name != "nt" or not sys.stdin or not sys.stdin.isatty():
+    if not console_input():
         raise ValueError(
             "Setup requires your own attended Windows terminal; redirected input is refused."
         )

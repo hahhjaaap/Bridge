@@ -2,9 +2,12 @@
 
 import argparse
 import hashlib
+import http.client
 import json
 import shutil
 import tempfile
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -16,6 +19,46 @@ from udb.components import verified_assets
 def sha(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def download(url, archive, *, opener=urllib.request.urlopen, pause=time.sleep):
+    if archive.exists() or archive.is_symlink():
+        raise FileExistsError("Download destination already exists")
+    for attempt in range(3):
+        created = False
+        try:
+            with opener(url, timeout=120) as response:
+                with archive.open("xb") as out:
+                    created = True
+                    count = 0
+                    while block := response.read(1024 * 1024):
+                        count += len(block)
+                        if count > 512 * 1024**2:
+                            raise ValueError("Helper download exceeds limit")
+                        out.write(block)
+            return
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+            http.client.IncompleteRead,
+        ) as error:
+            if created:
+                archive.unlink(missing_ok=True)
+            retryable = not isinstance(error, urllib.error.HTTPError) or error.code in (
+                429,
+                500,
+                502,
+                503,
+                504,
+            )
+            if not retryable or attempt == 2:
+                raise
+            pause(2**attempt)
+        except BaseException:
+            if created:
+                archive.unlink(missing_ok=True)
+            raise
 
 
 def main():
@@ -50,16 +93,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="udb-public-helpers-") as folder:
         for number, (url, items) in enumerate(pending.items()):
             archive = Path(folder) / (str(number) + ".zip")
-            with (
-                urllib.request.urlopen(url, timeout=120) as response,
-                archive.open("xb") as out,
-            ):
-                count = 0
-                while block := response.read(1024 * 1024):
-                    count += len(block)
-                    if count > 512 * 1024**2:
-                        raise ValueError("Helper download exceeds limit")
-                    out.write(block)
+            download(url, archive)
             with zipfile.ZipFile(archive) as package:
                 for item in items:
                     matches = [

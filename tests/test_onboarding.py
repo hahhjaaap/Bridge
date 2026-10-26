@@ -1,6 +1,7 @@
 """Only the attended local owner can supply connection details or opt in."""
 
 import io
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,7 @@ class Console(io.StringIO):
 
 
 def local(monkeypatch, answers):
+    monkeypatch.setattr(onboarding, "console_input", lambda: True)
     values = iter(answers)
     monkeypatch.setattr(onboarding, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(onboarding.sys, "stdin", Console())
@@ -298,3 +300,9 @@ def test_edit_and_local_setup_still_refuse_redirected_input(
     with pytest.raises(ValueError, match="attended"):
         onboarding.run(Settings(home, home / "work"), **options)
     assert not home.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows console API")
+def test_windows_nul_is_not_an_attended_console():
+    with open(os.devnull) as stream:
+        assert onboarding._console_stream(stream) is False

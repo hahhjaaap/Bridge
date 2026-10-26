@@ -16,6 +16,7 @@ class Console(io.StringIO):
 
 
 def route(monkeypatch, *, interactive=True):
+    monkeypatch.setattr(onboarding, "attended_console", lambda: interactive)
     monkeypatch.setattr(onboarding, "os", SimpleNamespace(name="nt"))
     stream = Console if interactive else io.StringIO
     monkeypatch.setattr(onboarding.sys, "stdin", stream())

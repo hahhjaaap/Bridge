@@ -2,7 +2,7 @@ name: one-command-windows-release
 on:
   push:
     branches: [main]
-    paths: [src/udb/_version.py]
+    paths: [src/udb/_version.py, .github/workflows/one-command-release.yml]
   workflow_dispatch:
 permissions:
   contents: write
