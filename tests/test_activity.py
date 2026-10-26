@@ -10,6 +10,7 @@ import pytest
 
 from udb import activity, cli
 from udb.activity import Activity, read_events
+from udb.core import PolicyError
 from udb.launcher import command
 from udb.proxy import UnifiedProxy
 from udb.transport import StdioChild
@@ -215,7 +216,7 @@ def test_linked_state_is_not_followed_and_broken_sqlite_cannot_fail_a_tool(tmp_p
         pytest.skip("Local symlink permission unavailable")
     Activity(home).emit("call", "fixture")
     assert not list(real.iterdir())
-    with pytest.raises(RuntimeError):
+    with pytest.raises(PolicyError):
         read_events(home)
 
 
