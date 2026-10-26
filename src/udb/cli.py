@@ -121,6 +121,18 @@ def _add_subcommands(parser: argparse.ArgumentParser) -> None:
             command.add_argument(
                 "--offline", action="store_true", default=argparse.SUPPRESS
             )
+        if name == "setup":
+            mode = command.add_mutually_exclusive_group()
+            mode.add_argument(
+                "--edit",
+                action="store_true",
+                help="Re-enter connection details in the attended terminal",
+            )
+            mode.add_argument(
+                "--local",
+                action="store_true",
+                help="Remember local mode without a ChatGPT connection",
+            )
         if name == "runtime":
             command.add_argument("--probe", action="store_true")
         if name == "logs":
@@ -257,9 +269,41 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             previous = activate(settings)
             try:
+                if args.edit or args.local:
+                    return run(settings, edit=args.edit, local=args.local)
                 return run(settings)
+            except KeyboardInterrupt:
+                print("\nSetup canceled.", file=sys.stderr)
+                return 130
             finally:
                 activate(previous)
+        if action == "start":
+            from . import onboarding
+
+            startup_state = {}
+            if not args.offline:
+                preferred = onboarding.saved_mode(settings)
+                from . import owner_command
+
+                startup_state = owner_command.headless_state(settings.home) or {}
+                if startup_state.get("connection_mode") == "offline" or (
+                    not startup_state and preferred == "offline"
+                ):
+                    args.offline = True
+            if (
+                not (args.offline or args.detach or args.json or args.access)
+                and not startup_state
+                and onboarding.attended_console()
+                and not onboarding.saved_connection(settings)
+            ):
+                previous = activate(settings)
+                try:
+                    return onboarding.run(settings)
+                except KeyboardInterrupt:
+                    print("\nSetup canceled.", file=sys.stderr)
+                    return 130
+                finally:
+                    activate(previous)
         if action == "mcp-config":
             from .launcher import command
 

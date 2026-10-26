@@ -75,7 +75,7 @@ def main():
         home.mkdir()
         project.mkdir()
 
-        def run(*arguments, input_text=None, expect_success=True):
+        def run(*arguments, input_text=None, expect_success=True, error_contains=None):
             io_args = (
                 {"stdin": subprocess.DEVNULL}
                 if input_text is None
@@ -99,9 +99,26 @@ def main():
                 assert result.returncode != 0, (
                     "A noninteractive permission request succeeded"
                 )
+            if error_contains is not None:
+                assert error_contains in result.stdout + result.stderr
             return result.stdout
 
         version = run("--version").strip()
+        remembered_mode = tuple(map(int, version.split("."))) >= (0, 9, 3)
+        if remembered_mode:
+            help_text = run("setup", "--help")
+            assert "--edit" in help_text and "--local" in help_text
+            for flag in ("--edit", "--local"):
+                refused = root / ("redirected-" + flag.removeprefix("--"))
+                run(
+                    "setup",
+                    "--home",
+                    str(refused),
+                    flag,
+                    expect_success=False,
+                    error_contains="attended Windows terminal",
+                )
+                assert not refused.exists()
         catalog = json.loads(run("tools"))
         manifest = json.loads(run("manifest"))
         info = json.loads(run("build-info"))
@@ -151,11 +168,19 @@ def main():
             {"active": "missing-legacy-release", "sha256": "0" * 64}
         )
         legacy_metadata.write_text(legacy_data, encoding="utf-8")
+        offline_flags = ["--offline"]
+        if remembered_mode:
+            preference = offline_home / "state/startup-preferences.json"
+            preference.parent.mkdir()
+            preference.write_text(
+                json.dumps({"schema": 1, "mode": "offline"}), encoding="utf-8"
+            )
+            offline_flags = []
         try:
             offline = json.loads(
                 run(
                     "start",
-                    "--offline",
+                    *offline_flags,
                     "--detach",
                     "--home",
                     str(offline_home),
@@ -401,6 +426,7 @@ def main():
                         ignores_missing_legacy_installation=True,
                         live_activity_logs=True,
                         parallel_capacity=10,
+                        remembered_local_mode=remembered_mode,
                         bundled_components=list(runtime.get("component_probes", {})),
                     )
                 )

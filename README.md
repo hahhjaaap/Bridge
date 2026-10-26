@@ -12,9 +12,20 @@ The installer downloads and verifies the standalone release, installs under your
 
 First-run setup can start the local runtime immediately in offline mode. Connecting ChatGPT requires your own supported tunnel/account configuration; the installer does not create an account, mint a tunnel, or share the developer's credentials. Runtime keys are entered hidden in the attended local terminal and stored in Windows Credential Manager. Computer access remains an explicit local owner decision.
 
-After setup, use `udb start` for the agent and live logs in the same console, `udb start --detach` for background startup, or `udb setup` to revisit connection setup. An offline agent is not a ChatGPT connection.
+Use `udb start` as the normal entry point. In an attended Windows terminal, a first start without a saved connection opens setup automatically. Later starts reuse your saved online/local choice and attach live logs in the same console. An already running agent is reused in its current mode. `udb start --json`, `udb start --detach`, and redirected invocations never enter automatic setup. An offline agent is not a ChatGPT connection.
 
 For local stdio MCP clients, the installer writes `%LOCALAPPDATA%\Programs\UDB\mcp.json`. Data is kept separately under `%LOCALAPPDATA%\UniversalDesktopBridge`. Updates preserve this data; updating a managed installation stops its previous agent. This initial release provides SHA256 integrity checks and is not code-signed.
+
+### Everyday commands
+
+| Command | Result |
+| --- | --- |
+| `udb start` | Reuse the agent and saved connection mode, or guide the first attended setup. |
+| `udb setup --edit` | Re-enter the Tunnel ID/key locally, then restart the agent to apply the connection. Enter at the ID prompt keeps the current ID; an empty key cancels without replacing it. |
+| `udb setup --local` | Switch to local mode and remember that choice for future starts. |
+| `udb setup` | Connect or return to the saved ChatGPT connection. |
+
+Setup stores only the selected online/local mode in its startup preference file. This setting grants no computer permissions. Existing owner access remains separate and is reused; keys are never accepted as CLI arguments or echoed. Connection editing and setup require an attended local terminal.
 
 ### Connect your ChatGPT workspace
 
@@ -28,7 +39,7 @@ Enter `?` at the Tunnel ID prompt to repeat the links. An empty Tunnel ID or run
 
 Tunnel provisioning and permissions depend on your OpenAI account/workspace. If the Tunnels page is unavailable, ask its administrator or use the generated local stdio MCP configuration; the installer cannot enable the service or supply an automatic account-pairing flow. Local tunnel readiness alone does not prove that ChatGPT has connected.
 
-Developer acceptance: `python tools/check_installer.py install.ps1 dist/udb-0.9.2-windows-standalone.zip` exercises actual HTTP downloads in disposable folders with a system-only PATH. It does not change the real user PATH, grant access, or configure a live account.
+Developer acceptance: `python tools/check_installer.py install.ps1 dist/udb-0.9.3-windows-standalone.zip` exercises actual HTTP downloads in disposable folders with a system-only PATH. It does not change the real user PATH, grant access, or configure a live account.
 
 One Python package (`udb`), one public CLI (`udb`), one source version. Core, Companion and isolated workers are built from this same source; a pre-existing core EXE is no longer required. Process isolation, plugin identity, endpoint configuration, owner grants and legacy tool names are preserved.
 

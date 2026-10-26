@@ -65,11 +65,12 @@ def test_invalid_tunnel_is_refused_before_reading_key_or_creating_home(
     assert not calls and not home.exists()
 
 
+@pytest.mark.parametrize("answer", ["y", ""])
 def test_local_key_is_not_echoed_or_forwarded_in_process_arguments(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, answer
 ):
     tunnel = "tunnel_" + "a" * 32
-    calls = local(monkeypatch, ["y", tunnel, "n"])
+    calls = local(monkeypatch, [answer, tunnel, "n"])
     secret = "SYNTHETIC_LOCAL_KEY_DO_NOT_LOG"
     monkeypatch.setattr(onboarding.getpass, "getpass", lambda _: secret)
     saved = []
@@ -191,3 +192,109 @@ def test_existing_namespaced_connection_is_reused_without_requesting_key(
     )
     assert onboarding.run(Settings(home, home / "work")) == 0
     assert connection.read_text() == data and "--offline" not in calls[-1]
+
+
+def test_edit_cancel_keeps_the_current_connection_and_mode(tmp_path, monkeypatch):
+    calls = local(monkeypatch, [""])
+    home = tmp_path / "owner"
+    settings = Settings(home, home / "work")
+    onboarding.save_mode(settings, "online")
+    connection = home / "state/connection.json"
+    original = '{"tunnel_id":"tunnel_' + "a" * 32 + '"}'
+    connection.write_text(original)
+    monkeypatch.setattr(onboarding.getpass, "getpass", lambda _: "")
+    monkeypatch.setattr(
+        desktop,
+        "DesktopController",
+        lambda *a, **kw: pytest.fail("Cancel must not write credentials"),
+    )
+    assert onboarding.run(settings, edit=True) == 0
+    assert not calls and connection.read_text() == original
+    assert onboarding.saved_mode(settings) == "online"
+
+
+def test_edit_online_connection_restarts_agent_to_apply_the_new_key(
+    tmp_path, monkeypatch, capsys
+):
+    calls = local(monkeypatch, ["", "n"])
+    home = tmp_path / "owner"
+    settings = Settings(home, home / "work")
+    (home / "state").mkdir(parents=True)
+    tunnel = "tunnel_" + "a" * 32
+    connection = home / "state/connection.json"
+    connection.write_text('{"tunnel_id":"' + tunnel + '"}')
+    saved = []
+    secret = "SYNTHETIC_NEW_RUNTIME_KEY"
+    monkeypatch.setattr(onboarding.getpass, "getpass", lambda _: secret)
+    monkeypatch.setattr(
+        owner_command, "headless_state", lambda _: {"connection_mode": "online"}
+    )
+
+    class Controller:
+        def __init__(self, home, monitor):
+            assert monitor is False
+
+        def configure(self, tunnel_id, key):
+            saved.append((tunnel_id, key))
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(desktop, "DesktopController", Controller)
+    assert onboarding.run(settings, edit=True) == 0
+    assert saved == [(tunnel, secret)]
+    assert [args[0] for args in calls] == ["stop", "start"]
+    assert onboarding.saved_mode(settings) == "online"
+    assert secret not in capsys.readouterr().out and secret not in repr(calls)
+
+
+def test_local_mode_can_be_selected_without_reading_or_replacing_a_key(
+    tmp_path, monkeypatch
+):
+    calls = local(monkeypatch, [])
+    home = tmp_path / "owner"
+    settings = Settings(home, home / "work")
+    (home / "state").mkdir(parents=True)
+    connection = home / "state/connection.json"
+    original = '{"tunnel_id":"tunnel_' + "a" * 32 + '"}'
+    connection.write_text(original)
+    monkeypatch.setattr(
+        onboarding.getpass, "getpass", lambda _: pytest.fail("Must not read a key")
+    )
+    monkeypatch.setattr(
+        owner_command, "headless_state", lambda _: {"connection_mode": "online"}
+    )
+    assert onboarding.run(settings, local=True) == 0
+    assert [args[0] for args in calls] == ["stop", "start"]
+    assert "--offline" in calls[-1] and "--access" not in calls[-1]
+    assert onboarding.saved_mode(settings) == "offline"
+    assert connection.read_text() == original
+
+
+def test_failed_mode_switch_does_not_replace_the_previous_startup_choice(
+    tmp_path, monkeypatch
+):
+    calls = local(monkeypatch, [])
+    home = tmp_path / "owner"
+    settings = Settings(home, home / "work")
+    onboarding.save_mode(settings, "online")
+    monkeypatch.setattr(
+        owner_command, "headless_state", lambda _: {"connection_mode": "online"}
+    )
+    monkeypatch.setattr(owner_command, "main", lambda args: calls.append(args) or 1)
+    with pytest.raises(ValueError, match="did not stop"):
+        onboarding.run(settings, local=True)
+    assert [args[0] for args in calls] == ["stop"]
+    assert onboarding.saved_mode(settings) == "online"
+
+
+@pytest.mark.parametrize("options", [{"edit": True}, {"local": True}])
+def test_edit_and_local_setup_still_refuse_redirected_input(
+    tmp_path, monkeypatch, options
+):
+    monkeypatch.setattr(onboarding, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(onboarding.sys, "stdin", io.StringIO())
+    home = tmp_path / "unused"
+    with pytest.raises(ValueError, match="attended"):
+        onboarding.run(Settings(home, home / "work"), **options)
+    assert not home.exists()

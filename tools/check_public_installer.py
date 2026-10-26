@@ -178,6 +178,23 @@ def main():
         setup_home = root / "Redirected setup must not create this"
         refused = run([exe, "--home", setup_home, "setup"], success=False)
         assert refused.returncode and not setup_home.exists()
+        assert "attended Windows terminal" in refused.stdout + refused.stderr
+        saved_local_mode = tuple(map(int, version.split("."))) >= (0, 9, 3)
+        mode_flags = ["--offline"]
+        if saved_local_mode:
+            help_text = run([exe, "setup", "--help"]).stdout
+            assert "--edit" in help_text and "--local" in help_text
+            for flag in ("--edit", "--local"):
+                unused = root / ("Redirected " + flag.removeprefix("--"))
+                blocked = run([exe, "--home", unused, "setup", flag], success=False)
+                assert blocked.returncode and not unused.exists()
+                assert "attended Windows terminal" in blocked.stdout + blocked.stderr
+            preferences = home / "state/startup-preferences.json"
+            preferences.parent.mkdir(parents=True, exist_ok=True)
+            preferences.write_text(
+                json.dumps({"schema": 1, "mode": "offline"}), encoding="utf-8"
+            )
+            mode_flags = []
         try:
             started = json.loads(
                 run(
@@ -186,7 +203,7 @@ def main():
                         "--home",
                         home,
                         "start",
-                        "--offline",
+                        *mode_flags,
                         "--detach",
                         "--wait",
                         "60",
@@ -220,6 +237,8 @@ def main():
             mcp_config=True,
             offline_start_stop=True,
             redirected_setup_refused=True,
+            saved_local_mode_reused=saved_local_mode,
+            setup_edit_local_cli=saved_local_mode,
             owner_access_not_granted=True,
             user_path_not_changed=True,
         )
