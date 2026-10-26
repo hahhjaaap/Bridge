@@ -3,7 +3,7 @@
     "universal-desktop-bridge": {
       "type": "stdio",
       "command": "udb",
-      "args": ["serve", "--config", "PATH_TO_LOCAL_UDb_TOML"]
+      "args": ["serve", "--config", "PATH_TO_LOCAL_UDB_TOML"]
     }
   }
 }

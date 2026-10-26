@@ -1,3 +1,5 @@
-from _udb_compat import load, run
 import sys
-sys.modules[__name__]=load('udb.companion.features')
+
+from _udb_compat import load
+
+sys.modules[__name__] = load("udb.companion.features")

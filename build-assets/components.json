@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "components": [
+    {
+      "binary": "bin/tunnel-client.exe",
+      "license": "licenses/tunnel-client.txt",
+      "name": "tunnel-client",
+      "sha256": "9d0a22b7eb64fe7c5e34dfc97273ffcab6a07557855cf9e7f8869068402caf6b",
+      "source_url": "https://github.com/openai/tunnel-client/releases/download/v0.0.18/tunnel-client-v0.0.18-windows-amd64.zip",
+      "version": "v0.0.18"
+    },
+    {
+      "binary": "bin/ffmpeg.exe",
+      "license": "licenses/ffmpeg.txt",
+      "name": "ffmpeg",
+      "sha256": "1326dde4c84ff1f96fe6b8916c5bed29e163e9b5dccf995f6f3db069d143ec5e",
+      "source_url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip",
+      "version": "8.1.2-essentials_build"
+    },
+    {
+      "binary": "bin/ffprobe.exe",
+      "license": "licenses/ffprobe.txt",
+      "name": "ffprobe",
+      "sha256": "b49ccc7c6547b141ad5a2f6ec69cc04323d7133d7704d70b331b904c63eecb07",
+      "source_url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip",
+      "version": "8.1.2-essentials_build"
+    }
+  ]
+}

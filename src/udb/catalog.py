@@ -1,4 +1,5 @@
 """Consolidated public schemas; retain original backend calls and permissions."""
+
 from __future__ import annotations
 
 import copy
@@ -13,11 +14,22 @@ GROUPS = (
     ("file_search", "file_search_context"),
     ("file_copy", "file_move"),
 )
-HIDDEN_ALIASES = frozenset({"read_files", "propose_text_edit", "terminal_send",
-                            "terminal_wait", "file_search_context", "file_copy", "file_move"})
+HIDDEN_ALIASES = frozenset(
+    {
+        "read_files",
+        "propose_text_edit",
+        "terminal_send",
+        "terminal_wait",
+        "file_search_context",
+        "file_copy",
+        "file_move",
+    }
+)
 
 
-def public_catalog(tools: list[dict[str, Any]], routes: dict[str, Any]) -> list[dict[str, Any]]:
+def public_catalog(
+    tools: list[dict[str, Any]], routes: dict[str, Any]
+) -> list[dict[str, Any]]:
     catalog = {t["name"]: copy.deepcopy(t) for t in tools}
     for first, second in GROUPS:
         if first not in catalog or second not in catalog:
@@ -30,35 +42,69 @@ def public_catalog(tools: list[dict[str, Any]], routes: dict[str, Any]) -> list[
         if first == "read_file":
             props["paths"] = copy.deepcopy(other["inputSchema"]["properties"]["paths"])
             schema["required"] = ["project"]
-            schema["oneOf"] = [{"required": ["path"], "not": {"required": ["paths"]}},
-                               {"required": ["paths"], "not": {"required": ["path"]}}]
-            primary["description"] = "Read registered-project UTF-8 source: provide path for one file OR paths for 1..20 files, <=512 KiB combined. Original project permissions and protected paths apply. Returns SHA256."
+            schema["oneOf"] = [
+                {"required": ["path"], "not": {"required": ["paths"]}},
+                {"required": ["paths"], "not": {"required": ["path"]}},
+            ]
+            primary["description"] = (
+                "Read registered-project UTF-8 source: provide path for one file OR paths for 1..20 files, <=512 KiB combined. Original project permissions and protected paths apply. Returns SHA256."
+            )
         elif first == "propose_file_write":
             for key in ("old_text", "new_text", "occurrences"):
                 props[key] = copy.deepcopy(other["inputSchema"]["properties"][key])
-            props["operation"] = {"type": "string", "enum": ["write", "replace"], "default": "write"}
+            props["operation"] = {
+                "type": "string",
+                "enum": ["write", "replace"],
+                "default": "write",
+            }
             schema["required"] = ["project", "path", "expected_sha256"]
             schema["oneOf"] = [
-                {"properties": {"operation": {"enum": ["write"]}}, "required": ["content"],
-                 "not": {"anyOf": [{"required": [k]} for k in ("old_text", "new_text", "occurrences")]}},
-                {"properties": {"operation": {"enum": ["replace"]}},
-                 "required": ["operation", "old_text", "new_text"], "not": {"required": ["content"]}},
+                {
+                    "properties": {"operation": {"enum": ["write"]}},
+                    "required": ["content"],
+                    "not": {
+                        "anyOf": [
+                            {"required": [k]}
+                            for k in ("old_text", "new_text", "occurrences")
+                        ]
+                    },
+                },
+                {
+                    "properties": {"operation": {"enum": ["replace"]}},
+                    "required": ["operation", "old_text", "new_text"],
+                    "not": {"required": ["content"]},
+                },
             ]
-            primary["description"] = "Registered-project source write/review. operation=write (default): content; operation=replace: old_text, new_text, optional occurrences. Always expected_sha256 (NEW only for new writes). Preserves owner source-write grants/local review, diff and recovery."
+            primary["description"] = (
+                "Registered-project source write/review. operation=write (default): content; operation=replace: old_text, new_text, optional occurrences. Always expected_sha256 (NEW only for new writes). Preserves owner source-write grants/local review, diff and recovery."
+            )
         elif first == "terminal_interact":
             props["send_only"] = {"type": "boolean", "default": False}
-            primary["description"] = "Queue input to an owned terminal and inspect output/prompt (heuristic or expected_prompt, wait <=1500ms). send_only=true queues text without reading output or waiting; requires text. Prompt detection does not prove completion."
+            primary["description"] = (
+                "Queue input to an owned terminal and inspect output/prompt (heuristic or expected_prompt, wait <=1500ms). send_only=true queues text without reading output or waiting; requires text. Prompt detection does not prove completion."
+            )
         elif first == "terminal_read":
             props["wait_for_exit"] = {"type": "boolean", "default": False}
-            primary["description"] = "Read owned-terminal output and exit state by session_id/offset. wait_for_exit=true waits for process completion up to wait_ms (default 500, max 1500), then reads output; false uses the normal output wait. Never replays commands."
+            primary["description"] = (
+                "Read owned-terminal output and exit state by session_id/offset. wait_for_exit=true waits for process completion up to wait_ms (default 500, max 1500), then reads output; false uses the normal output wait. Never replays commands."
+            )
         elif first == "file_search":
-            props["context"] = copy.deepcopy(other["inputSchema"]["properties"]["context"])
-            primary["description"] = "Search configured-project files by glob and optional literal text. Add context=0..3 AND nonempty text to return matching lines with surrounding context; omit context for filename results. For background regex/paging use search_start/read/stop."
+            props["context"] = copy.deepcopy(
+                other["inputSchema"]["properties"]["context"]
+            )
+            primary["description"] = (
+                "Search configured-project files by glob and optional literal text. Add context=0..3 AND nonempty text to return matching lines with surrounding context; omit context for filename results. For background regex/paging use search_start/read/stop."
+            )
         else:
-            schema["properties"]["action"] = {"type": "string", "enum": ["copy", "move"]}
+            schema["properties"]["action"] = {
+                "type": "string",
+                "enum": ["copy", "move"],
+            }
             schema["required"] = ["action", "source", "destination"]
             primary["name"] = "file_transfer"
-            primary["description"] = "Synchronous copy/move of one configured-project file <=256 MiB. action=copy|move; optional expected_sha256 guards source; verifies SHA256 and never overwrites. Move uses Windows atomic rename. For large files/directories/background jobs use file_operation."
+            primary["description"] = (
+                "Synchronous copy/move of one configured-project file <=256 MiB. action=copy|move; optional expected_sha256 guards source; verifies SHA256 and never overwrites. Move uses Windows atomic rename. For large files/directories/background jobs use file_operation."
+            )
             # A copy's annotation would understate a move's effects.
             primary.pop("annotations", None)
         primary.pop("outputSchema", None)  # branches retain their native result shapes
@@ -81,17 +127,27 @@ def resolve_call(name: str, arguments: dict[str, Any]) -> tuple[str, dict[str, A
         operation = a.pop("operation", "write")
         if operation == "replace":
             if "content" in a or not {"old_text", "new_text"} <= a.keys():
-                raise ValueError("replace requires old_text/new_text and forbids content")
+                raise ValueError(
+                    "replace requires old_text/new_text and forbids content"
+                )
             name = "propose_text_edit"
-        elif operation != "write" or "content" not in a or {"old_text", "new_text", "occurrences"} & a.keys():
-            raise ValueError("write requires content; use operation=replace for text edits")
+        elif (
+            operation != "write"
+            or "content" not in a
+            or {"old_text", "new_text", "occurrences"} & a.keys()
+        ):
+            raise ValueError(
+                "write requires content; use operation=replace for text edits"
+            )
     elif name == "terminal_interact":
         flag = a.pop("send_only", False)
         if not isinstance(flag, bool):
             raise ValueError("send_only must be boolean")
         if flag:
             if "text" not in a or {"offset", "expected_prompt", "wait_ms"} & a.keys():
-                raise ValueError("send_only needs text and forbids output/prompt options")
+                raise ValueError(
+                    "send_only needs text and forbids output/prompt options"
+                )
             name = "terminal_send"
     elif name == "terminal_read":
         flag = a.pop("wait_for_exit", False)
@@ -101,7 +157,11 @@ def resolve_call(name: str, arguments: dict[str, Any]) -> tuple[str, dict[str, A
             name = "terminal_wait"
             a["timeout_ms"] = a.pop("wait_ms", 500)
     elif name == "file_search" and "context" in a:
-        if not isinstance(a["context"], int) or isinstance(a["context"], bool) or not 0 <= a["context"] <= 3:
+        if (
+            not isinstance(a["context"], int)
+            or isinstance(a["context"], bool)
+            or not 0 <= a["context"] <= 3
+        ):
             raise ValueError("context must be an integer 0..3")
         if not isinstance(a.get("text"), str) or not a["text"]:
             raise ValueError("context search requires nonempty text")

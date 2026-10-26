@@ -1,5 +1,23 @@
 # Universal Desktop Bridge
 
+## Install on Windows x64 with one command
+
+Run this in your own PowerShell terminal:
+
+~~~powershell
+irm https://github.com/hahhjaaap/Universal-Desktop-Bridge/releases/latest/download/install.ps1 | iex
+~~~
+
+The installer downloads and verifies the standalone release, installs under your own LocalAppData, adds `udb` to your user PATH, and starts console setup. No Python, pip, Node.js, Git or Desktop Commander installation is required. It does not require administrator access or a reboot. The current terminal receives the command immediately; reopen older terminals if their PATH is stale.
+
+First-run setup can start the local runtime immediately in offline mode. Connecting ChatGPT requires your own supported tunnel/account configuration; the installer does not create an account, mint a tunnel, or share the developer's credentials. Runtime keys are entered hidden in the attended local terminal and stored in Windows Credential Manager. Computer access remains an explicit local owner decision.
+
+After setup, use `udb start` for the agent and live logs in the same console, `udb start --detach` for background startup, or `udb setup` to revisit connection setup. An offline agent is not a ChatGPT connection.
+
+For local stdio MCP clients, the installer writes `%LOCALAPPDATA%\Programs\UDB\mcp.json`. Data is kept separately under `%LOCALAPPDATA%\UniversalDesktopBridge`. Updates preserve this data; updating a managed installation stops its previous agent. This initial release provides SHA256 integrity checks and is not code-signed.
+
+Developer acceptance: `python tools/check_installer.py install.ps1 dist/udb-0.9.1-windows-standalone.zip` exercises actual HTTP downloads in disposable folders with a system-only PATH. It does not change the real user PATH, grant access, or configure a live account.
+
 One Python package (`udb`), one public CLI (`udb`), one source version. Core, Companion and isolated workers are built from this same source; a pre-existing core EXE is no longer required. Process isolation, plugin identity, endpoint configuration, owner grants and legacy tool names are preserved.
 
 ```powershell
@@ -13,11 +31,54 @@ udb serve --home PATH_TO_EXISTING_UDB_HOME --root PATH_TO_APPROVED_PROJECT --ena
 
 Public runtime settings live in one optional TOML file (`udb.toml` in the selected home, or `--config FILE`). CLI values override it. See `udb.example.toml`. Credentials, project grants, journals and endpoint identity remain in existing private owner storage and must never be committed. Runtime configuration cannot grant permissions. `udb init` creates only a non-secret configuration, not grants or a connection.
 
-Source core is the default. `core_backend = "installed"` with an explicit existing core executable is available for migration/rollback. The MCP template calls `udb serve`; callers no longer configure separate Python script/Companion paths. Existing `udb_unified.py`, `udb_companion.py` and module imports delegate through tiny compatibility shims, not copied implementations.
+Source core is the default. `core_backend = "installed"` with an explicit existing core executable is available for migration/rollback. The MCP template calls `udb serve`; callers no longer configure separate Python script/Companion paths. Existing worker entry scripts (`udb_unified.py`, `udb_companion.py`, `udb_documents.py`, `udb_background.py`) delegate through tiny compatibility shims. Import-only aliases live once under `src` and remain available in installed packages.
+
+### Regenerate an MCP host configuration
+
+After moving or reinstalling UDB, run udb mcp-config --home PATH_TO_UDB_HOME --root PATH_TO_APPROVED_PROJECT. It prints a ready-to-copy stdio server entry using the current interpreter and effective runtime settings. Absolute paths are intentional: MCP hosts do not consistently expand environment variables or resolve relative executable paths. This command only prints configuration; it does not modify a host manifest, create grants, or change permissions. Re-run it after relocating the installation.
+
+Companion responsibilities are separated under `src/udb/companion`: `files.py` owns scoped file access, `terminal.py` owns terminal I/O, `schemas.py` owns the tool catalog, and `runtime.py` owns orchestration and stdio dispatch. Extensions use explicit dispatch; importing the catalog does not patch runtime classes. Legacy `Runtime`, `ScopedFiles`, `TerminalSession`, `TOOLS` and helper imports remain available through `udb_companion`.
 
 Tool counts come from `udb tools` by inspecting the actual registry. Current specialized tool names and same-backend aliases remain available. Native payloads are preserved; `_meta.udb` supplies a common version/status/no-replay contract. An `ERROR` or timeout must not trigger automatic replay of an uncertain mutation.
 
 ConPTY streams VT UTF-8; it does not render a TUI screenshot. The virtual AI pointer uses bounded Win32 messages and a nonactivating overlay, not a second independent Windows user. Shared focus/capture and app compatibility limits remain. Recovery explicitly restarts supported unchanged reads/searches/create-only copies and restores saved terminal transcripts; it cannot resurrect a dead process's memory or replay uncertain writes.
+
+## One-console startup and parallel work
+
+Run `udb start` in CMD: UDB starts/reuses its headless agent and follows live tool activity in the same console. Status lines use 📞 CALL, ✅ PASS, ⏳ RUNNING and ❌ ERROR when the terminal supports Unicode; other terminals receive plain-text labels. Ctrl+C closes only the viewer. Use `udb start --detach` to return to the prompt; `--json` stays nonblocking and machine-readable. `--follow` explicitly attaches a redirected stream.
+
+The proxy accepts at most 10 concurrent RPC calls. Computer commands, Companion terminals and file/document/search background tasks share 10 crash-safe work slots per bridge home. When full, a new launch is rejected before it starts; read/stop calls remain available. CPU/RAM admission checks, per-process memory/output limits and platform-specific browser/desktop serialization remain in force. Ten is an upper bound, not a guarantee that ten heavy workloads fit in memory. ChatGPT decides which independent tool calls to submit concurrently.
+
+## Live activity log
+
+Run `udb logs` in a terminal to follow tool calls with timestamps, status and duration. `udb logs --details` includes safe argument/result metadata; `udb logs --once --tail 100 --json` prints a snapshot. Ctrl+C closes only the viewer, leaving UDB running. The latest 2,000 events are retained. Log viewing does not activate permissions or require a GUI.
+
+Source text, shell arguments, terminal output, file contents and credentials are omitted. `RUNNING` means a tool returned while its background task remains pending; the job's eventual result appears when a subsequent read/status call reports it. Activity logging is best-effort and never replays a failed call.
+
+## Standalone Windows application
+
+A frozen release is one `udb.exe` with its Python runtime, UDB workers and Python libraries embedded. Runtime use does not require Python, pip, Node.js, a source checkout or Desktop Commander. Public helper binaries can be embedded in the same executable through a checksum-verified `build-assets/components.json` inventory. Inventory entries have fixed helper names/paths, release provenance and accompanying license notices; arbitrary files and owner state are not packaged.
+
+Build-machine command:
+
+```powershell
+python -m pip install ".[office,freeze]"
+python -m udb build --exe --assets ./build-assets --output ./dist/standalone
+```
+
+The output contains the EXE and a binary-only ZIP with licenses/notices and hashes. Build logs, source files, credentials, state and grants are excluded from that ZIP. `udb.exe runtime --probe` reports the embedded runtime, Office parser availability and helper startup checks.
+
+```powershell
+.\udb.exe gui
+# Or run the local agent without a network connection:
+.\udb.exe start --offline
+.\udb.exe status --json
+.\udb.exe stop
+```
+
+Use an existing `--home` to retain that installation's settings. Stop an existing source manager with its current launcher before starting the EXE with the same home. The frozen app launches its own embedded MCP workers even when an old manifest points at a development venv. Windows/UAC and local owner consent remain enforced. No permission is created by building or installing the app.
+
+ChatGPT connectivity still requires network/account configuration and a supported transport service. Windows Sandbox plus its configured guest runtime and an installed supported browser remain optional platform features. Media helpers need no PATH installation when they are bundled. User-selected programs still have to exist. These are feature/platform requirements, not a dependency on another desktop bridge.
 
 ## Build and test
 
@@ -29,7 +90,7 @@ python -m build
 
 Windows EXE: install `.[office,freeze]`, then `udb build --exe`. The release directory contains the built executable, public templates and hashes. An existing connection may still need its existing tunnel client. No keys, grants, local state or vendor installation are bundled. CI builds source/wheel on Linux and Windows; native attended UI acceptance is separate from headless CI and must not be reported as passed merely because a workflow exists.
 
-Legacy manual GUI/Sandbox acceptance helpers are in `tests/core`. New package/CLI tests cover clean installation, arbitrary working directories, one MCP catalog, compatibility imports, configuration and secret-free packaging. See `VALIDATION.md` for checks actually run for this change.
+Component and manual MCP acceptance programs are in `tests/components`; the default suite runs its selected component programs in subprocesses. Their UIA fixture is in `tests/fixtures`. Legacy manual GUI/Sandbox acceptance helpers are in `tests/core`. New package/CLI tests cover clean installation, arbitrary working directories, one MCP catalog, compatibility imports, configuration and secret-free packaging. See `VALIDATION.md` for checks actually run for this change.
 
 Attended MCP GUI acceptance can use the same TOML via `UDB_TEST_CONFIG`; no second test connection configuration is required. An existing legacy `mcp.json` is still accepted by the compatibility test helpers.
 
@@ -40,3 +101,32 @@ Artifact upload is best-effort and reports a warning if the account storage quot
 The audit fixes CLI revocation routing and configuration initialization, rejects missing explicit configurations and canonicalizes equivalent home paths. Recovery/job setup failures release their slots and locks; reloaded job reads preserve paging and distinguish another live backend. Text reads retain the complete returned byte range, including trailing whitespace. Terminal stdout EOF no longer closes a live stdin channel; transcript failures after startup retain a controllable session ID and explicitly forbid command replay.
 
 Scoped Companion paths now also exclude common credential variants and training/model directories. Private SQLite/HTTP token and recovery paths reject redirected storage. Process protection receives the bridge home explicitly for external projects. Invalid JSON-RPC request envelopes are rejected before dispatch. The frozen EXE includes its manifest template and CI exercises actual MCP worker startup, metadata commands and owner-grant denial. No existing tool name, endpoint, owner grant or plugin identity changes. See `AUDIT.md` for validation and limits.
+
+## General computer access
+
+UDB is independent of project names and Windows account names. With owner-enabled computer access, `computer_files` accepts absolute local paths across the current account's accessible folders; it is not limited to `project_root`. The project/Companion tools retain an optional scoped workspace for source and isolated jobs. Windows/UAC limits, private agent state and explicitly protected roots remain enforced.
+
+Use `udb --access computer` once in your own attended terminal to enable general computer access. No special application or personal folder is automatically registered, granted access or placed on the protected-root list. Existing owner configuration and protection records are preserved.
+
+Installation discovery uses `UDB_HOME` first, then an existing portable installation identified by its configuration and manifests. A standalone installation defaults to `%LOCALAPPDATA%\\UniversalDesktopBridge` on Windows or the current account's XDG data directory elsewhere. Scoped workspaces default to `projects/workspace`; an explicit `project_root` remains unchanged.
+
+## Optional source access in a protected project
+
+Computer access and protected-folder access are separate. To allow only source/configuration files in a protected project, run this yourself in an attended Windows terminal:
+
+```powershell
+udb allow-source --path "PATH_TO_PROTECTED_SOURCE_PROJECT"
+# Type ALLOW SOURCE at the local prompt, then reload the updated backend:
+udb stop
+udb
+```
+
+The root stays protected. Only recognized source files and traversable source directories receive an exception; model/checkpoint/data/results directories, credentials, agent state and the private installation stay denied. Classification uses file names and extensions, not content inspection. The encrypted receipt belongs to this Windows user, installation and existing computer-access grant. Revoking computer access invalidates these exceptions; enabling it again does not restore old source receipts. `udb revoke-source --path PATH` revokes one exception locally. No MCP tool, redirected input or noninteractive switch can issue a receipt. A source exception does not register a project or change its separate source-write/Sandbox grants. Desktop Commander is not involved.
+
+## Runtime efficiency
+
+Terminal checkpoints copy only the final 64 KiB of retained output. Terminal admission and shutdown share a lock, while waiting for terminal output leaves that lock free. Closing a runtime waits for its monitor and refuses later process launches.
+
+The headless status heartbeat is written once per second; local stop requests are still checked every 300 ms. The live viewer uses one read-only SQLite connection per poll and recovers if the log is recreated. The ten-call and shared ten-background-job limits remain unchanged.
+
+Run `python tools/benchmark_runtime.py` from a development checkout to measure these local hot paths with synthetic data. Its JSON output covers checkpoint allocation/time, idle log connections, and simulated heartbeat writes. It does not measure network, model, browser, or end-to-end task latency.

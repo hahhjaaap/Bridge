@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 office = ["openpyxl==3.1.5", "python-docx==1.2.0", "pypdf==6.10.0", "reportlab==4.4.9"]
-dev = ["pytest>=8,<10", "build>=1.2,<2", "setuptools>=77", "wheel"]
+dev = ["pytest>=8,<10", "build>=1.2,<2", "setuptools>=77", "wheel", "ruff>=0.17,<0.18"]
 freeze = ["pyinstaller>=6.16,<7"]
 
 [project.scripts]
@@ -41,3 +41,15 @@ udb = ["*.ps1", "*.json", "companion/*.ps1"]
 pythonpath = [".", "src"]
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "ASYNC", "S607"]
+
+[tool.ruff.lint.per-file-ignores]
+"test_*.py" = ["F401", "F811", "F841"]
+"tests/**/*.py" = ["F401", "F811", "F841"]

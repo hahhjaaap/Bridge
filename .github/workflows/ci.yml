@@ -37,6 +37,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install ".[office,freeze]"
+      - run: python tools/fetch_build_assets.py
       - run: udb build --exe
       - run: .\dist\udb.exe --version
       - run: .\dist\udb.exe tools

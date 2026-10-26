@@ -1,17 +1,38 @@
-"""Discover public schemas and counts from implementations, never constants."""
+"""Discover public tool schemas from their implementations, not hard-coded counts."""
+
+from __future__ import annotations
+
 import asyncio
-from pathlib import Path
 import tempfile
+from pathlib import Path
+from typing import Any
+
 from .catalog import public_catalog
 
-def catalog():
+
+def catalog() -> dict[str, Any]:
+    """Build the public schema and report the actual backend tool counts."""
+    from .companion.runtime import TOOLS
     from .core import Agent
     from .server import make_server
-    from .companion.runtime import TOOLS
-    with tempfile.TemporaryDirectory(prefix='udb-catalog-') as temp:
-        server=make_server(Agent(Path(temp)))
-        native=[tool.model_dump(mode='json',exclude_none=True) for tool in asyncio.run(server.list_tools())]
-    core_route=object();companion_route=object()
-    routes={t['name']:core_route for t in native};routes.update({t['name']:companion_route for t in TOOLS})
-    public=public_catalog([*native,*TOOLS],routes)
-    return dict(tools=public,tool_count=len(public),backend_count=len(native)+len(TOOLS),core_count=len(native),companion_count=len(TOOLS))
+
+    with tempfile.TemporaryDirectory(prefix="udb-catalog-") as temporary_root:
+        server = make_server(Agent(Path(temporary_root)))
+        native_tools = [
+            tool.model_dump(mode="json", exclude_none=True)
+            for tool in asyncio.run(server.list_tools())
+        ]
+
+    core_route = object()
+    companion_route = object()
+    routes = {tool["name"]: core_route for tool in native_tools}
+    routes.update({tool["name"]: companion_route for tool in TOOLS})
+
+    public_tools = public_catalog([*native_tools, *TOOLS], routes)
+    return {
+        "tools": public_tools,
+        "tool_count": len(public_tools),
+        "backend_count": len(native_tools) + len(TOOLS),
+        "core_count": len(native_tools),
+        "companion_count": len(TOOLS),
+    }
