@@ -1,7 +1,8 @@
 name: one-command-windows-release
 on:
   push:
-    branches: [release/one-command]
+    branches: [main]
+    paths: [src/udb/_version.py]
   workflow_dispatch:
 permissions:
   contents: write
@@ -11,23 +12,32 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: python -m pip install ".[office,dev,freeze]"
+      - name: Read the canonical release version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (python -c "from udb._version import VERSION; print(VERSION)").Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid canonical version' }
+          "value=$version" >> $env:GITHUB_OUTPUT
       - run: python -m ruff check .
       - run: python -m pytest
       - run: python tools/fetch_build_assets.py
       - run: udb build --exe
       - run: python tools/check_frozen.py dist/udb.exe
-      - run: python tools/check_installer.py install.ps1 dist/udb-0.9.1-windows-standalone.zip
+      - run: python tools/check_installer.py install.ps1 dist/udb-${{ steps.version.outputs.value }}-windows-standalone.zip
       - name: Prepare download assets
         shell: pwsh
+        env:
+          UDB_RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
-          Copy-Item dist/udb-0.9.1-windows-standalone.zip dist/udb-windows-x64.zip
+          Copy-Item ("dist/udb-" + $env:UDB_RELEASE_VERSION + "-windows-standalone.zip") dist/udb-windows-x64.zip
           $hash = (Get-FileHash dist/udb-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           [IO.File]::WriteAllText((Join-Path $PWD 'dist/SHA256SUMS'),$hash + '  udb-windows-x64.zip' + "`n",[Text.Encoding]::ASCII)
           Copy-Item install.ps1 dist/install.ps1 -Force
@@ -36,18 +46,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          UDB_RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
-          gh release view v0.9.1 --json tagName *> $null
-          if ($LASTEXITCODE -eq 0) { throw 'v0.9.1 already exists; inspect before publishing another build.' }
+          $tag = 'v' + $env:UDB_RELEASE_VERSION
+          gh release view $tag --json tagName *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'Release already exists; inspect before publishing another build.' }
           @'
-          Windows x64 standalone UDB installer. Python, Node.js and Desktop Commander are not required.
+          Windows x64 standalone UDB. No Python, Node.js or Desktop Commander installation is required.
 
           Run in your own PowerShell terminal:
           irm https://github.com/hahhjaaap/Universal-Desktop-Bridge/releases/latest/download/install.ps1 | iex
 
-          The installer verifies the archive, installs for the current user, adds udb to PATH, and opens attended console setup. ChatGPT connectivity requires the user's own supported tunnel/account configuration. Computer access requires explicit local owner consent.
+          Console setup now guides you through the official account pages, accepts a Tunnel ID or official MCP URL, supports namespaced tunnel IDs, and lets you cancel to local mode without saving a partial connection. ChatGPT connectivity still requires your own supported account/workspace tunnel and runtime key; the installer does not create them. Owner computer access remains an explicit local decision.
 
-          Release checks: full pytest suite, copied-EXE acceptance, real local-HTTP installer download/reinstall/failure tests. SHA256 detects corruption; this initial build is not code-signed.
+          Verified by pytest, copied-EXE worker/lifecycle checks, actual HTTP installer/reinstall/failure tests, and a public HTTPS install on a disposable Windows runner. SHA256 detects corruption; this build is not code-signed.
           '@ | Set-Content release-notes.md -Encoding utf8
-          gh release create v0.9.1 dist/udb-windows-x64.zip dist/SHA256SUMS dist/install.ps1 --target "$env:GITHUB_SHA" --title 'UDB 0.9.1 - One-command Windows installer' --notes-file release-notes.md
+          gh release create $tag dist/udb-windows-x64.zip dist/SHA256SUMS dist/install.ps1 --target "$env:GITHUB_SHA" --title "UDB $env:UDB_RELEASE_VERSION - Guided console setup" --notes-file release-notes.md
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
+      - name: Verify the newly published HTTPS installer
+        run: python tools/check_public_installer.py --release-tag v${{ steps.version.outputs.value }} --report reports/public-installer.json

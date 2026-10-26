@@ -4,10 +4,30 @@ from __future__ import annotations
 
 import getpass
 import os
-import re
 import sys
 
 from .config import prepare_workspace
+from .connection import is_tunnel_id, normalize_tunnel_id
+
+TUNNELS_URL = "https://platform.openai.com/settings/organization/tunnels"
+KEYS_URL = "https://platform.openai.com/settings/organization/api-keys"
+CHATGPT_URL = "https://chatgpt.com/#settings/Connectors"
+
+
+def connection_help():
+    print(
+        "1/3 Create or reuse your tunnel in the intended OpenAI organization and "
+        "ChatGPT workspace:\n"
+        + TUNNELS_URL
+        + "\n2/3 Create a restricted runtime key with Tunnels Read + Use:\n"
+        + KEYS_URL
+        + "\n3/3 Once UDB is running, add or finish your ChatGPT MCP connection, "
+        "choose Connection: Tunnel, and select that same tunnel:\n"
+        + CHATGPT_URL
+        + "\nTunnel access depends on your account/workspace. If it is unavailable, "
+        "ask its administrator or use the generated local stdio MCP configuration. "
+        "A ChatGPT account alone does not provision a tunnel."
+    )
 
 
 def run(settings):
@@ -25,10 +45,7 @@ def run(settings):
     configured = False
     if connection.exists():
         data = owner_command.read_object(connection, 4096)
-        tunnel = data.get("tunnel_id", "")
-        configured = isinstance(tunnel, str) and bool(
-            re.fullmatch(r"tunnel_[a-z0-9]{32}", tunnel)
-        )
+        configured = is_tunnel_id(data.get("tunnel_id"))
     connect = (
         configured
         or input("Connect this PC to your own ChatGPT tunnel now? [y/N]: ")
@@ -37,29 +54,46 @@ def run(settings):
         == "y"
     )
     if connect and not configured:
-        print(
-            "Use your own supported tunnel configuration. This installer does not create a ChatGPT account or a tunnel."
-        )
-        tunnel = input("Tunnel ID: ").strip()
-        if not re.fullmatch(r"tunnel_[a-z0-9]{32}", tunnel):
-            raise ValueError("Invalid tunnel ID; configuration was not saved.")
-        key = getpass.getpass(
-            "Runtime key (hidden, saved only in Windows Credential Manager): "
-        )
-        from .credentials import normalize_key
+        connection_help()
+        while True:
+            pasted = input(
+                "Tunnel ID or MCP URL (? repeats help, Enter uses local mode): "
+            ).strip()
+            if pasted != "?":
+                break
+            connection_help()
+        if pasted:
+            tunnel = normalize_tunnel_id(pasted)
+            print("Runtime key comes from: " + KEYS_URL)
+            key = getpass.getpass(
+                "Runtime key (hidden; Enter cancels without saving): "
+            )
+            try:
+                if key:
+                    from .credentials import normalize_key
 
-        normalize_key(key)
-        prepare_workspace(settings)
-        controller = DesktopController(settings.home, monitor=False)
-        try:
-            controller.configure(tunnel, key)
-        finally:
-            controller.close()
-            key = ""
-    else:
-        prepare_workspace(settings)
+                    normalize_key(key)
+                    prepare_workspace(settings)
+                    controller = DesktopController(settings.home, monitor=False)
+                    try:
+                        controller.configure(tunnel, key)
+                    finally:
+                        controller.close()
+                else:
+                    connect = False
+            finally:
+                key = ""
+        else:
+            connect = False
+    prepare_workspace(settings)
     args = ["start", "--home", str(settings.home), "--wait", "60", "--follow"]
     if connect:
+        print(
+            "Finish or verify the ChatGPT connection at "
+            + CHATGPT_URL
+            + "\nChoose Connection: Tunnel and the same Tunnel ID. "
+            "Local readiness alone does not verify a ChatGPT tool call."
+        )
         if (
             input("Open the local computer-access consent prompt? [y/N]: ")
             .strip()
@@ -70,7 +104,8 @@ def run(settings):
     else:
         args.append("--offline")
         print(
-            "Local runtime is ready. ChatGPT is not connected yet. Run udb setup when you have your own tunnel configuration."
+            "Local runtime is ready. ChatGPT is not connected yet. "
+            "Run udb mcp-config for a local stdio client, or udb setup to connect later."
         )
     state = owner_command.headless_state(settings.home) or {}
     desired = "online" if connect else "offline"

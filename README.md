@@ -16,7 +16,19 @@ After setup, use `udb start` for the agent and live logs in the same console, `u
 
 For local stdio MCP clients, the installer writes `%LOCALAPPDATA%\Programs\UDB\mcp.json`. Data is kept separately under `%LOCALAPPDATA%\UniversalDesktopBridge`. Updates preserve this data; updating a managed installation stops its previous agent. This initial release provides SHA256 integrity checks and is not code-signed.
 
-Developer acceptance: `python tools/check_installer.py install.ps1 dist/udb-0.9.1-windows-standalone.zip` exercises actual HTTP downloads in disposable folders with a system-only PATH. It does not change the real user PATH, grant access, or configure a live account.
+### Connect your ChatGPT workspace
+
+Run `udb setup` in your own Windows terminal. The console shows the official setup pages and lets you:
+
+1. Create or reuse a tunnel in the intended organization and ChatGPT workspace at https://platform.openai.com/settings/organization/tunnels.
+2. Paste either its full Tunnel ID or its `https://api.openai.com/v1/mcp/...` URL. Legacy IDs and four-character namespace aliases are supported. Create a restricted runtime key with Tunnels Read + Use at https://platform.openai.com/settings/organization/api-keys, then enter it in the hidden local prompt.
+3. Keep UDB running, open https://chatgpt.com/#settings/Connectors, add or finish the private MCP connection using **Connection: Tunnel**, select that same tunnel, and verify a `bridge_status` tool call.
+
+Enter `?` at the Tunnel ID prompt to repeat the links. An empty Tunnel ID or runtime-key response cancels to local mode without saving a partial connection. Existing valid connections are reused without asking for their key again.
+
+Tunnel provisioning and permissions depend on your OpenAI account/workspace. If the Tunnels page is unavailable, ask its administrator or use the generated local stdio MCP configuration; the installer cannot enable the service or supply an automatic account-pairing flow. Local tunnel readiness alone does not prove that ChatGPT has connected.
+
+Developer acceptance: `python tools/check_installer.py install.ps1 dist/udb-0.9.2-windows-standalone.zip` exercises actual HTTP downloads in disposable folders with a system-only PATH. It does not change the real user PATH, grant access, or configure a live account.
 
 One Python package (`udb`), one public CLI (`udb`), one source version. Core, Companion and isolated workers are built from this same source; a pre-existing core EXE is no longer required. Process isolation, plugin identity, endpoint configuration, owner grants and legacy tool names are preserved.
 

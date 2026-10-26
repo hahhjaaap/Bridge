@@ -22,6 +22,7 @@ from pathlib import Path
 
 from ._version import VERSION
 from .config import manager_options
+from .connection import is_tunnel_id
 from .launcher import worker_command
 from .owner_cli import parse_args, render_report, report_healthy
 
@@ -272,9 +273,7 @@ def doctor(home: Path, report: dict) -> list[dict]:
     checks = []
     try:
         cfg = read_object(home / "state" / "connection.json")
-        valid = isinstance(cfg.get("tunnel_id"), str) and bool(
-            re.fullmatch(r"tunnel_[a-z0-9]{32}", cfg["tunnel_id"])
-        )
+        valid = is_tunnel_id(cfg.get("tunnel_id"))
     except (OSError, ValueError, CommandError):
         valid = False
     checks.append(

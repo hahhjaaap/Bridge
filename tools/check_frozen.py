@@ -10,8 +10,24 @@ import subprocess
 import tempfile
 import threading
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+
+
+@contextmanager
+def temporary_directory():
+    directory = tempfile.TemporaryDirectory(prefix="udb-frozen-")
+    try:
+        yield directory.name
+    finally:
+        for attempt in range(50):
+            try:
+                directory.cleanup()
+                break
+            except PermissionError:
+                if attempt == 49:
+                    raise
+                time.sleep(0.2)
 
 
 def main():
@@ -42,7 +58,7 @@ def main():
         windows = Path(os.environ.get("SystemRoot", "C:/Windows"))
         env["PATH"] = os.pathsep.join([str(windows / "System32"), str(windows)])
     with (
-        tempfile.TemporaryDirectory(prefix="udb-frozen-") as temporary,
+        temporary_directory() as temporary,
         ExitStack() as cleanup,
     ):
         root = Path(temporary).resolve()

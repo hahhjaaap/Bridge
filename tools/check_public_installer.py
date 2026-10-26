@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -19,7 +20,9 @@ FEED = "https://github.com/hahhjaaap/Universal-Desktop-Bridge/releases/latest/do
 
 
 def fetch(url, limit):
-    request = urllib.request.Request(url, headers={"User-Agent": "UDB-release-acceptance"})
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "UDB-release-acceptance"}
+    )
     with urllib.request.urlopen(request, timeout=60) as response:
         data = response.read(limit + 1)
     if len(data) > limit:
@@ -47,10 +50,23 @@ def temporary_installation():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--release-tag")
     args = parser.parse_args()
     if os.name != "nt":
         raise ValueError("Published Windows acceptance requires Windows")
-    release = json.loads(fetch(API, 1024 * 1024))
+    if args.release_tag and not re.fullmatch(r"v\d+\.\d+\.\d+", args.release_tag):
+        raise ValueError("Expected a stable release tag such as v0.9.2")
+    api = (
+        API
+        if not args.release_tag
+        else API.removesuffix("/latest") + "/tags/" + args.release_tag
+    )
+    feed = (
+        FEED
+        if not args.release_tag
+        else FEED.removesuffix("/latest/download") + "/download/" + args.release_tag
+    )
+    release = json.loads(fetch(api, 1024 * 1024))
     if release["draft"] or release["prerelease"]:
         raise ValueError("Expected a published stable release")
     assets = {item["name"]: item for item in release["assets"]}
@@ -59,7 +75,7 @@ def main():
         raise ValueError("The public release is incomplete")
 
     def verified_asset(name, limit):
-        data = fetch(FEED + "/" + name, limit)
+        data = fetch(feed + "/" + name, limit)
         digest = "sha256:" + hashlib.sha256(data).hexdigest()
         if assets[name].get("digest") != digest:
             raise ValueError("Public release asset digest mismatch: " + name)
@@ -148,7 +164,13 @@ def main():
         assert all(row["ok"] for row in runtime["component_probes"].values())
         assert all(runtime["office_modules"].values())
         launcher = run(
-            [windows / "System32/cmd.exe", "/d", "/c", install / "bin/udb.cmd", "--version"]
+            [
+                windows / "System32/cmd.exe",
+                "/d",
+                "/c",
+                install / "bin/udb.cmd",
+                "--version",
+            ]
         )
         assert launcher.stdout.strip() == version
         mcp = json.loads((install / "mcp.json").read_text("utf-8"))
@@ -160,12 +182,21 @@ def main():
             started = json.loads(
                 run(
                     [
-                        exe, "--home", home, "start", "--offline", "--detach",
-                        "--wait", "60", "--json",
+                        exe,
+                        "--home",
+                        home,
+                        "start",
+                        "--offline",
+                        "--detach",
+                        "--wait",
+                        "60",
+                        "--json",
                     ]
                 ).stdout
             )
-            assert started["manager_running"] and started["connection_mode"] == "offline"
+            assert (
+                started["manager_running"] and started["connection_mode"] == "offline"
+            )
         finally:
             stopped = json.loads(
                 run([exe, "--home", home, "stop", "--wait", "60", "--json"]).stdout

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import tkinter as tk
 import webbrowser
@@ -12,6 +11,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from . import __version__
+from .connection import normalize_tunnel_id
 from .core import Agent, PolicyError
 from .credentials import load_key, save_key
 from .windows_paths import system_executable
@@ -121,9 +121,10 @@ def run(home: Path):
         )
         if not tunnel:
             return
-        tunnel = tunnel.strip()
-        if not re.fullmatch(r"tunnel_[a-z0-9]{32}", tunnel):
-            raise PolicyError("Invalid tunnel ID")
+        try:
+            tunnel = normalize_tunnel_id(tunnel)
+        except ValueError as exc:
+            raise PolicyError(str(exc)) from None
         key = simpledialog.askstring(
             "Step 2 of 2 - API key",
             "Paste the runtime API key here (Ctrl+V).\nTunnels Read + Use. Saved only in Windows Credential Manager:",

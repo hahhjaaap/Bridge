@@ -114,3 +114,80 @@ def test_existing_configuration_needs_no_key_or_connection_overwrite(
     assert [call[0] for call in calls] == ["stop", "start"]
     assert connection.read_text() == data
     assert "--access" not in calls[-1]
+
+
+def test_mcp_url_setup_saves_namespaced_id_and_shows_account_steps(
+    tmp_path, monkeypatch, capsys
+):
+    tunnel = "tunnel_eu01_" + "c" * 32
+    calls = local(monkeypatch, ["y", "https://api.openai.com/v1/mcp/" + tunnel, "n"])
+    secret = "SYNTHETIC_SETUP_KEY_DO_NOT_LOG"
+    monkeypatch.setattr(onboarding.getpass, "getpass", lambda _: secret)
+    saved = []
+
+    class Controller:
+        def __init__(self, home, monitor):
+            assert monitor is False
+
+        def configure(self, tunnel_id, key):
+            saved.append((tunnel_id, key))
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(desktop, "DesktopController", Controller)
+    home = tmp_path / "owner"
+    assert onboarding.run(Settings(home, home / "work")) == 0
+    assert saved == [(tunnel, secret)] and "--offline" not in calls[-1]
+    output = capsys.readouterr().out
+    assert all(
+        url in output
+        for url in (onboarding.TUNNELS_URL, onboarding.KEYS_URL, onboarding.CHATGPT_URL)
+    )
+    assert secret not in output and secret not in repr(calls)
+
+
+@pytest.mark.parametrize("answers", [["y", ""], ["y", "?", ""]])
+def test_empty_tunnel_or_help_then_cancel_starts_only_offline(
+    tmp_path, monkeypatch, answers
+):
+    calls = local(monkeypatch, answers)
+    monkeypatch.setattr(
+        onboarding.getpass, "getpass", lambda _: pytest.fail("Must not request a key")
+    )
+    home = tmp_path / "owner"
+    assert onboarding.run(Settings(home, home / "work")) == 0
+    assert "--offline" in calls[-1] and "--access" not in calls[-1]
+    assert not (home / "state/connection.json").exists()
+
+
+def test_empty_key_does_not_save_partial_connection(tmp_path, monkeypatch):
+    calls = local(monkeypatch, ["y", "tunnel_" + "a" * 32])
+    monkeypatch.setattr(onboarding.getpass, "getpass", lambda _: "")
+    monkeypatch.setattr(
+        desktop,
+        "DesktopController",
+        lambda *a, **k: pytest.fail("Must not create credential controller"),
+    )
+    home = tmp_path / "owner"
+    assert onboarding.run(Settings(home, home / "work")) == 0
+    assert "--offline" in calls[-1] and "--access" not in calls[-1]
+    assert not (home / "state/connection.json").exists()
+
+
+def test_existing_namespaced_connection_is_reused_without_requesting_key(
+    tmp_path, monkeypatch
+):
+    calls = local(monkeypatch, ["n"])
+    home = tmp_path / "owner"
+    (home / "state").mkdir(parents=True)
+    connection = home / "state/connection.json"
+    data = '{"tunnel_id":"tunnel_us01_' + "b" * 32 + '"}'
+    connection.write_text(data)
+    monkeypatch.setattr(
+        onboarding.getpass,
+        "getpass",
+        lambda _: pytest.fail("Must not request or read the existing key"),
+    )
+    assert onboarding.run(Settings(home, home / "work")) == 0
+    assert connection.read_text() == data and "--offline" not in calls[-1]

@@ -12,6 +12,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+from .connection import is_tunnel_id, normalize_tunnel_id
 from .core import Agent, PolicyError, reject_links
 from .credentials import load_key, save_key
 from .windows_paths import system_executable
@@ -116,11 +117,10 @@ class DesktopController:
         (self.agent.state / "gui.json").write_text(json.dumps(safe), encoding="utf-8")
 
     def configure(self, tunnel_id, key=""):
-        tunnel_id = tunnel_id.strip()
-        if not re.fullmatch(r"tunnel_[a-z0-9]{32}", tunnel_id):
-            raise PolicyError(
-                "Tunnel ID không hợp lệ. Dán ID bắt đầu bằng tunnel_, không phải API key."
-            )
+        try:
+            tunnel_id = normalize_tunnel_id(tunnel_id)
+        except ValueError as exc:
+            raise PolicyError(str(exc)) from None
         if key:
             save_key(key)
         elif not self.config().get("tunnel_id"):
@@ -198,7 +198,7 @@ class DesktopController:
 
     def _launch_tunnel(self, generation):
         cfg = self.config()
-        if not re.fullmatch(r"tunnel_[a-z0-9]{32}", cfg.get("tunnel_id", "")):
+        if not is_tunnel_id(cfg.get("tunnel_id")):
             raise PolicyError("Mở Cài đặt kết nối và nhập Tunnel ID trước.")
         from .components import component_path
 
