@@ -33,7 +33,12 @@ function Assert-LocalPath([string]$Path) {
     return $full
 }
 function Write-Utf8([string]$Path,[string]$Text) { [IO.File]::WriteAllText($Path,$Text,[Text.UTF8Encoding]::new($false)) }
-function Get-Sha([string]$Path) { return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
+function Get-Sha([string]$Path) {
+    $hash = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try { return ([BitConverter]::ToString($hash.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
+    finally { $stream.Dispose(); $hash.Dispose() }
+}
 $InstallRoot = Assert-LocalPath $InstallRoot
 $DataHome = Assert-LocalPath $DataHome
 $recordPath = Join-Path $InstallRoot 'install.json'

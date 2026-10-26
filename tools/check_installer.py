@@ -41,6 +41,8 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="udb-installer-") as folder:
         root = Path(folder).resolve()
+        # The Windows PowerShell launcher may inherit a PowerShell 7 module path.
+        env["PSModulePath"] = str(root / "no extra PowerShell modules")
         feed = root / "feed"
         feed.mkdir()
         archive = feed / "udb-windows-x64.zip"
