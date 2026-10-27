@@ -22,15 +22,18 @@ ALIASES = {
     "seller_tax_id": (
         "mst nguoi ban", "ma so thue nguoi ban", "mst ben ban",
         "ma so thue ben ban", "mst nban", "seller tax id",
+        "ma so thue cua nguoi ban",
     ),
     "date": ("ngay lap", "ngay lap hoa don", "ngay hoa don", "invoice date"),
     "net": (
         "tien truoc thue", "tien chua thue", "thanh tien chua thue",
         "cong tien hang hoa dich vu", "cong tien hang", "doanh so chua thue",
+        "tong tien chua thue", "tong tien truoc thue", "tong tien hang hoa dich vu",
         "tien hang", "net amount",
     ),
     "vat": (
         "tien thue gtgt", "tien thue vat", "thue gtgt",
+        "tong tien thue gtgt", "tong tien thue",
         "tien thue", "vat amount",
     ),
     "total": (
