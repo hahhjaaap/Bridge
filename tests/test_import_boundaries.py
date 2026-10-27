@@ -24,8 +24,8 @@ def test_eager_import_cycle_detected_but_deferred_import_ignored(tmp_path):
         "def work():\n    from . import alpha\n"
     )
     graph = import_graph(package)
-    assert graph["udb.alpha"] == {"udb.beta"}
-    assert graph["udb.beta"] == {"udb.alpha"}
+    assert graph["udb.alpha"] == {"udb", "udb.beta"}
+    assert graph["udb.beta"] == {"udb", "udb.alpha"}
     assert graph["udb.deferred"] == set()
     assert import_cycles(graph) == [["udb.alpha", "udb.beta"]]
 
