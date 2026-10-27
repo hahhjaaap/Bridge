@@ -108,7 +108,7 @@ class Documents:
                     "Current source expected_sha256 is required for edits/extract"
                 )
         elif (
-            action in ("read", "inspect")
+            action in ("read", "inspect", "audit_invoices")
             and expected != "NEW"
             and fingerprints[str(path)] != expected.lower()
         ):
@@ -277,13 +277,13 @@ class Documents:
                     temp.unlink()
 
         replay_args = dict(args)
-        if action in ("read", "inspect"):
+        if action in ("read", "inspect", "audit_invoices"):
             replay_args["expected_sha256"] = fingerprints[str(path)]
         return self.bg.new(
             format + "_" + action,
             run,
             recovery=dict(tool=format, arguments=replay_args)
-            if action in ("read", "inspect")
+            if action in ("read", "inspect", "audit_invoices")
             else None,
         )
 
@@ -342,7 +342,7 @@ def spreadsheet(files, a, output):
         else:
             book = openpyxl.load_workbook(
                 p,
-                read_only=action in ("read", "inspect"),
+                read_only=action in ("read", "inspect", "audit_invoices"),
                 data_only=bool(a.get("data_only", False))
                 if action == "read"
                 else False,
