@@ -165,7 +165,7 @@ def test_worker_jobs_send_complete_requests_when_a_pipe_writes_partially(
             pass
 
     monkeypatch.setattr(processes, "ManagedProcess", Worker)
-    monkeypatch.setattr(background, "ManagedProcess", Worker)
+    monkeypatch.setattr(search, "ManagedProcess", Worker)
     bg = background.Background(ScopedFiles(str(tmp_path)))
     try:
         if operation == "document":
