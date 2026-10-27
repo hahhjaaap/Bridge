@@ -248,6 +248,7 @@ class ScopedFiles:
         matches = []
         scanned = 0
         cap = max(1, min(200, int(limit)))
+        folded_text = text.casefold() if text else ""
         for base, dirs, files in os.walk(root, followlinks=False):
             # Do not descend into protected trees just to reject every file.
             # This also avoids scanning large datasets, model weights and secrets.
@@ -279,12 +280,22 @@ class ScopedFiles:
                     if text:
                         if p.stat().st_size > 1024 * 1024:
                             continue
-                        if (
-                            text.casefold()
-                            not in p.read_text(
+                        if "\n" in text or "\r" in text:
+                            # Multiline queries still need the original whole-text
+                            # semantics (including matches across line breaks).
+                            found = folded_text in p.read_text(
                                 encoding="utf-8", errors="replace"
                             ).casefold()
-                        ):
+                        else:
+                            # For ordinary literal searches, stop at the first
+                            # matching line instead of copying every file.
+                            with p.open(
+                                "r", encoding="utf-8", errors="replace"
+                            ) as stream:
+                                found = any(
+                                    folded_text in line.casefold() for line in stream
+                                )
+                        if not found:
                             continue
                 except (OSError, ValueError, PermissionError):
                     continue
