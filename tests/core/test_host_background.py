@@ -670,3 +670,61 @@ def test_browser_same_url_navigation_rejects_stale_loader():
     )
     with pytest.raises(PolicyError, match="Navigation timed out"):
         browser.navigate("owned-tab", "https://example.com/", timeout_ms=100)
+
+
+def test_browser_invalid_css_selector_maps_runtime_exception():
+    browser = Browser.__new__(Browser)
+    calls = []
+
+    def evaluate(tab, expression, timeout=10):
+        calls.append(expression)
+        if len(calls) == 1:
+            raise PolicyError("Page operation failed; inspect page state")
+        assert "document.querySelectorAll(" in expression
+        return False
+
+    browser.evaluate = evaluate
+    result = browser._wait_for_element_action(
+        "owned-tab", "(() => { throw new Error('test'); })()", selector="["
+    )
+    assert result == {"ok": False, "error": "invalid_selector"}
+    assert len(calls) == 2
+
+
+def test_browser_valid_css_selector_does_not_mask_page_errors():
+    browser = Browser.__new__(Browser)
+    calls = []
+
+    def evaluate(tab, expression, timeout=10):
+        calls.append(expression)
+        if len(calls) == 1:
+            raise PolicyError("Page operation failed; inspect page state")
+        assert "document.querySelectorAll(" in expression
+        return True
+
+    browser.evaluate = evaluate
+    with pytest.raises(PolicyError, match="Page operation failed"):
+        browser._wait_for_element_action(
+            "owned-tab", "(() => { throw new Error('test'); })()", selector="button"
+        )
+    assert len(calls) == 2
+
+
+def test_browser_wait_for_invalid_css_selector_returns_structured_error():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+    calls = []
+
+    def evaluate(tab, expression, timeout=10):
+        calls.append(expression)
+        if len(calls) == 1:
+            raise PolicyError("Page operation failed; inspect page state")
+        assert "document.querySelectorAll(" in expression
+        return False
+
+    browser.evaluate = evaluate
+    result = browser.wait_for(
+        "owned-tab", selector="[", state="visible", timeout_ms=1000
+    )
+    assert result == {"ok": False, "error": "invalid_selector", "state": "visible"}
+    assert len(calls) == 2
