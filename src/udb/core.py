@@ -149,12 +149,12 @@ def diff_preview(before: bytes | None, text: str, relative: str) -> str:
     if (
         len(before or b"") > _DIFF_MAX_BYTES
         or len(text.encode("utf-8")) > _DIFF_MAX_BYTES
-        or old.count("\\n") > _DIFF_MAX_LINES
-        or text.count("\\n") > _DIFF_MAX_LINES
+        or old.count("\n") > _DIFF_MAX_LINES
+        or text.count("\n") > _DIFF_MAX_LINES
     ):
         return (
             "[UDB] Diff preview omitted: file exceeds safe preview limits. "
-            "Review the complete old and new file before approving.\\n"
+            "Review the complete old and new file before approving.\n"
         )
     chunks = difflib.unified_diff(
         old.splitlines(True),
@@ -164,7 +164,7 @@ def diff_preview(before: bytes | None, text: str, relative: str) -> str:
     )
     parts = []
     size = 0
-    notice = "\\n[UDB] Diff preview truncated; review the complete change before approving.\\n"
+    notice = "\n[UDB] Diff preview truncated; review the complete change before approving.\n"
     for chunk in chunks:
         if size + len(chunk) > _DIFF_PREVIEW_LIMIT - len(notice):
             parts.append(notice)
