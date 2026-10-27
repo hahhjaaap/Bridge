@@ -459,8 +459,13 @@ def test_browser_listing_adopts_owned_popups_and_closes_excess_tabs():
     browser = Browser.__new__(Browser)
     browser.tabs = {"one": "session-one", "two": "session-two", "three": "session-three"}
     targets = [
-        {"type": "page", "targetId": tab, "title": tab, "url": "https://example.com/"}
-        for tab in ("one", "two", "three", "popup", "excess")
+        {
+            "type": "page",
+            "targetId": tab,
+            "title": tab,
+            "url": "chrome://settings" if tab == "internal" else "https://example.com/?token=secret",
+        }
+        for tab in ("one", "two", "three", "internal", "popup", "excess")
     ]
     closed = []
     browser.call = lambda method, params=None, session=None, timeout=10: (
@@ -477,7 +482,9 @@ def test_browser_listing_adopts_owned_popups_and_closes_excess_tabs():
     listing = browser.listing()
     assert [row["tab_id"] for row in listing] == ["one", "two", "three", "popup"]
     assert browser.tabs["popup"] == "session-popup"
-    assert closed == ["excess"]
+    assert all(row["url"] == "https://example.com/" for row in listing)
+    assert "internal" not in browser.tabs
+    assert closed == ["internal", "excess"]
 
 
 def test_browser_navigation_waits_for_complete_document_and_redacts_query():
