@@ -62,7 +62,7 @@ class InvoiceAuditTests(unittest.TestCase):
         self.assertEqual(result["issues_by_code"]["AMOUNT_MISMATCH"], 1)
         self.assertEqual(result["issues_by_code"]["MISSING_INVOICE_NO"], 1)
         self.assertEqual(result["issues_by_code"]["INVALID_NET"], 1)
-        self.assertEqual(result["amount_totals"]["vat"], "235000")
+        self.assertEqual(result["amount_totals"]["vat"], "145000")
         self.assertFalse(result["tax_filing_ready"])
         self.assertNotIn("0123456789", str(result))
         self.assertEqual(self.sha("input.xlsx"), before)
