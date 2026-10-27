@@ -93,6 +93,42 @@ def main():
             )
             return result
 
+        def app(*arguments, image=None, success=True):
+            result = subprocess.run(
+                [str(image or exe), "--home", str(home), *arguments],
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            assert not success or result.returncode == 0, result.stdout + result.stderr
+            return json.loads(result.stdout)
+
+        def publish_variant(note, replacement=None):
+            # Change only test-package public bytes; never write to owner state.
+            with zipfile.ZipFile(args.archive) as original:
+                files = {name: original.read(name) for name in original.namelist()}
+            files["UDB/STANDALONE.md"] += ("\n" + note).encode()
+            if replacement is not None:
+                files["UDB/udb.exe"] = replacement
+            files["UDB/STANDALONE-SHA256SUMS"] = "".join(
+                hashlib.sha256(content).hexdigest()
+                + "  "
+                + name.removeprefix("UDB/")
+                + "\n"
+                for name, content in sorted(files.items())
+                if name != "UDB/STANDALONE-SHA256SUMS"
+            ).encode("ascii")
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as package:
+                for name, content in files.items():
+                    package.writestr(name, content)
+            sums.write_text(
+                hashlib.sha256(archive.read_bytes()).hexdigest()
+                + "  udb-windows-x64.zip\n",
+                encoding="ascii",
+            )
+
         try:
             run_install()
             record_path = install / "install.json"
@@ -150,9 +186,103 @@ def main():
             run_install()
             assert json.loads(record_path.read_text(encoding="utf-8")) == first
             assert len(list((install / "releases").iterdir())) == 1
+            # Actual running offline agent survives a release switch and rollback.
+            preference = home / "state/startup-preferences.json"
+            preference.parent.mkdir(exist_ok=True)
+            preference.write_text('{"schema":1,"mode":"offline"}')
+            app("start", "--detach", "--json", "--wait", "60")
+            before_mode = preference.read_bytes()
+            publish_variant("Synthetic update test")
+            run_install()
+            second = json.loads(record_path.read_text(encoding="utf-8"))
+            assert second["exe"] != first["exe"] and second["previous"] == first
+            switched = app("status", "--json", image=second["exe"])
+            assert (
+                switched["manager_running"] and switched["connection_mode"] == "offline"
+            )
+            assert (
+                preference.read_bytes() == before_mode
+                and sentinel.read_text() == "existing owner data"
+            )
+            rollback = app("rollback", "--json", image=second["exe"])
+            assert rollback["home_preserved"]
+            restored = json.loads(record_path.read_text(encoding="utf-8"))
+            assert restored["exe"] == first["exe"]
+            assert app("status", "--json")["manager_running"]
+            assert preference.read_bytes() == before_mode
+
+            # Build a synthetic console shim that fails only startup. Other commands
+            # delegate to the real copied EXE; this tests failure AFTER the switch.
+            shim = root / "failed-start.exe"
+            image_literal = (
+                '"' + str(exe).replace("\\", "\\\\").replace('"', '\\"') + '"'
+            )
+            code = r"""
+using System;
+using System.Diagnostics;
+using System.Linq;
+public class FailedStart {
+    public static int Main(string[] args) {
+        if (args.Contains("start") && !args.Contains("--help")) {
+            Console.WriteLine("{\"manager_running\":false,\"connection_mode\":\"offline\"}");
+            return 2;
+        }
+        // Only test arguments: paths never end with a slash or contain quotes.
+        string quoted = String.Join(" ", args.Select(x => "\"" + x + "\""));
+        var process = Process.Start(new ProcessStartInfo(IMAGE, quoted) { UseShellExecute = false });
+        process.WaitForExit();
+        return process.ExitCode;
+    }
+}
+""".replace("IMAGE", image_literal)
+            compile_script = root / "compile.ps1"
+            compile_script.write_text(
+                "$ErrorActionPreference='Stop'\nAdd-Type -ReferencedAssemblies 'System.dll','System.Core.dll' -TypeDefinition @'\n"
+                + code
+                + "\n'@ -OutputType ConsoleApplication -OutputAssembly '"
+                + str(shim).replace("'", "''")
+                + "'\n",
+                encoding="utf-8",
+            )
+            compiled = subprocess.run(
+                [
+                    str(powershell),
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(compile_script),
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+            old_record_bytes = record_path.read_bytes()
+            old_mcp_bytes = (install / "mcp.json").read_bytes()
+            publish_variant("Synthetic startup failure", shim.read_bytes())
+            run_install(expect_success=False)
+            assert json.loads(record_path.read_text(encoding="utf-8")) == json.loads(
+                old_record_bytes
+            )
+            assert (install / "mcp.json").read_bytes() == old_mcp_bytes
+            recovered = app("status", "--json")
+            assert (
+                recovered["manager_running"]
+                and recovered["connection_mode"] == "offline"
+            )
+            assert preference.read_bytes() == before_mode
+            app("stop", "--wait", "60", "--json")
+            assert not (home / "state/computer-access.dpapi").exists()
             sums.write_text("0" * 64 + "  udb-windows-x64.zip\n", encoding="ascii")
             run_install(expect_success=False)
-            assert json.loads(record_path.read_text(encoding="utf-8")) == first
+            assert (
+                json.loads(record_path.read_text(encoding="utf-8"))["exe"]
+                == first["exe"]
+            )
             # A valid checksum cannot make a traversing archive safe.
             with zipfile.ZipFile(archive, "w") as package:
                 package.writestr("UDB/../escape.txt", "must not escape")
@@ -189,12 +319,31 @@ def main():
                         traversal_rejection=True,
                         unrelated_folder_preserved=True,
                         redirected_setup_refused=True,
+                        running_offline_update=True,
+                        manual_rollback=True,
+                        automatic_failure_rollback=True,
                         owner_access_not_granted=True,
                         user_path_not_changed_by_test=True,
                     )
                 )
             )
         finally:
+            if (install / "install.json").exists():
+                active = json.loads((install / "install.json").read_text("utf-8"))
+                subprocess.run(
+                    [
+                        active["exe"],
+                        "--home",
+                        str(home),
+                        "stop",
+                        "--wait",
+                        "60",
+                        "--json",
+                    ],
+                    env=env,
+                    capture_output=True,
+                    timeout=90,
+                )
             server.shutdown()
             server.server_close()
             thread.join(timeout=3)

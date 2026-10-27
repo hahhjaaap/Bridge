@@ -90,6 +90,9 @@ def publish(controller, instance: str, phase="running"):
             tunnel_ready=connection["ready"],
             tunnel_running=connection["tunnel_running"],
             connecting=connection["connecting"],
+            recovery_count=connection.get("recovery_count", 0),
+            last_recovery=connection.get("last_recovery", ""),
+            retry_in_seconds=connection.get("retry_in_seconds", 0),
             connection_mode="offline"
             if getattr(controller, "offline_mode", False)
             else "online",

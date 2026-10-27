@@ -14,7 +14,7 @@ First-run setup can start the local runtime immediately in offline mode. Connect
 
 Use `udb start` as the normal entry point. In an attended Windows terminal, a first start without a saved connection opens setup automatically. Later starts reuse your saved online/local choice and attach live logs in the same console. An already running agent is reused in its current mode. `udb start --json`, `udb start --detach`, and redirected invocations never enter automatic setup. An offline agent is not a ChatGPT connection.
 
-For local stdio MCP clients, the installer writes `%LOCALAPPDATA%\Programs\UDB\mcp.json`. Data is kept separately under `%LOCALAPPDATA%\UniversalDesktopBridge`. Updates preserve this data; updating a managed installation stops its previous agent. This initial release provides SHA256 integrity checks and is not code-signed.
+For local stdio MCP clients, the installer writes `%LOCALAPPDATA%\Programs\UDB\mcp.json`. Data is kept separately under `%LOCALAPPDATA%\UniversalDesktopBridge`. Updates retain this data and restart a previously running agent in its actual online/local mode. SHA256 provides integrity checks; the release is not code-signed.
 
 ### Everyday commands
 
@@ -24,6 +24,18 @@ For local stdio MCP clients, the installer writes `%LOCALAPPDATA%\Programs\UDB\m
 | `udb setup --edit` | Re-enter the Tunnel ID/key locally, then restart the agent to apply the connection. Enter at the ID prompt keeps the current ID; an empty key cancels without replacing it. |
 | `udb setup --local` | Switch to local mode and remember that choice for future starts. |
 | `udb setup` | Connect or return to the saved ChatGPT connection. |
+| `udb doctor` / `udb doctor --json` | Check runtime integrity, helpers, saved mode, agent heartbeat, local tunnel, installation and logon startup; print specific repair commands. Keys are never read. |
+| `udb autostart enable` | Opt into hidden startup when this Windows user signs in, after setup. No admin or new computer permission is required. |
+| `udb autostart disable` / `udb autostart status` | Remove or inspect only this home's logon entry. Disabling leaves an already running agent alone. |
+| `udb update --check` | Check the latest stable public GitHub release without installing. |
+| `udb update` | Update the managed installation using a pinned release URL and verified package inventory. Keep the previous release. |
+| `udb rollback` | Restore the retained previous managed release and its running mode; keep current owner data and connection settings. |
+
+Logon startup is off until explicitly enabled. It runs without a GUI or visible log window; `udb start` attaches logs later. It starts at sign-in, not before sign-in, and does not wake a sleeping PC. A managed startup entry uses the stable launcher across updates and rollback. Re-enable it after relocating a portable/source installation. Use `udb start --online` or `--offline` to override the saved choice for that start; stop an agent in another mode first.
+
+The connection watchdog already retries exited tunnel processes with a 1–30 second backoff. It also replaces its own tunnel child after 90 seconds of continuous failed readiness checks; a long monitor gap (including suspend/resume) starts a fresh grace period. Stop/close cancels recovery. Reconnecting can end existing MCP sessions: unknown writes and terminal commands are never automatically replayed. A successful local readiness check cannot diagnose or repair a ChatGPT webpage failing to load a conversation.
+
+Update and rollback require the one-command managed layout. A portable installation remains supported; install the managed layout to use these commands, stopping its old agent before reusing the same data home. Updates retain the previous release and atomically switch the launcher record. If activation fails, the installer restores the old record/MCP configuration and attempts to restart the old agent. A network outage with a live agent triggers reconnect retries instead of rolling back code. Owner data is shared across releases and is not reverted; keep independent backups. An interrupted/timed-out update has an unknown outcome: inspect `udb --version` and `udb status` before retrying.
 
 Setup stores only the selected online/local mode in its startup preference file. This setting grants no computer permissions. Existing owner access remains separate and is reused; keys are never accepted as CLI arguments or echoed. Connection editing and setup require an attended local terminal.
 
@@ -39,7 +51,7 @@ Enter `?` at the Tunnel ID prompt to repeat the links. An empty Tunnel ID or run
 
 Tunnel provisioning and permissions depend on your OpenAI account/workspace. If the Tunnels page is unavailable, ask its administrator or use the generated local stdio MCP configuration; the installer cannot enable the service or supply an automatic account-pairing flow. Local tunnel readiness alone does not prove that ChatGPT has connected.
 
-Developer acceptance: `python tools/check_installer.py install.ps1 dist/udb-0.9.3-windows-standalone.zip` exercises actual HTTP downloads in disposable folders with a system-only PATH. It does not change the real user PATH, grant access, or configure a live account.
+Developer acceptance: `python tools/check_installer.py install.ps1 dist/udb-0.10.0-windows-standalone.zip` exercises actual HTTP downloads, running-agent updates, explicit rollback and a synthetic startup-failure rollback in disposable folders with a system-only PATH. It does not change the real user PATH, grant access, or configure a live account.
 
 One Python package (`udb`), one public CLI (`udb`), one source version. Core, Companion and isolated workers are built from this same source; a pre-existing core EXE is no longer required. Process isolation, plugin identity, endpoint configuration, owner grants and legacy tool names are preserved.
 

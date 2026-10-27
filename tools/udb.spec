@@ -16,6 +16,7 @@ assets = collect_data_files(
     includes=["*.ps1", "companion/*.ps1", "desktop_guest.py", "build_info.json", "plugin.template.json"],
 )
 assets += collect_data_files("mcp") + copy_metadata("mcp", recursive=True)
+assets.append((str(base / "install.ps1"), "udb"))
 if components:
     assets.append((str(asset_root / "components.json"), "udb/runtime"))
     assets += [

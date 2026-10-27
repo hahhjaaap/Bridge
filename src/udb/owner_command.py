@@ -258,7 +258,7 @@ def inspect(home: Path, exe: Path, running=manager_running, ready=tunnel_ready) 
         next_action=(
             "Call bridge_status in ChatGPT to verify the session."
             if connected
-            else "The local agent is running offline. Use udb gui to configure a connection."
+            else "The local agent is running offline. Run udb setup to connect."
             if hidden and hidden.get("connection_mode") == "offline"
             else "The background agent is retrying. Run udb doctor to inspect local readiness."
             if hidden
@@ -270,7 +270,29 @@ def inspect(home: Path, exe: Path, running=manager_running, ready=tunnel_ready) 
 
 
 def doctor(home: Path, report: dict) -> list[dict]:
+    from .config import effective
+    from .onboarding import saved_mode
+
     checks = []
+    settings = effective(home)
+    try:
+        mode = saved_mode(settings)
+        mode_valid = True
+    except (OSError, ValueError, CommandError):
+        mode = None
+        mode_valid = False
+    offline = report.get("connection_mode") == "offline" or (
+        not report["manager_running"] and mode == "offline"
+    )
+    checks.append(
+        dict(
+            check="startup_mode",
+            ok=mode_valid,
+            action="Saved startup choice is valid."
+            if mode_valid
+            else "Run udb setup to select a valid startup mode.",
+        )
+    )
     try:
         cfg = read_object(home / "state" / "connection.json")
         valid = is_tunnel_id(cfg.get("tunnel_id"))
@@ -279,10 +301,12 @@ def doctor(home: Path, report: dict) -> list[dict]:
     checks.append(
         dict(
             check="connection_configuration",
-            ok=valid,
+            ok=None if offline else valid,
             action="Already configured."
             if valid
-            else "Open connection settings in UDB. Keep runtime keys out of chat.",
+            else "Not required in local mode."
+            if offline
+            else "Run udb setup --edit locally. Keep runtime keys out of chat.",
         )
     )
     checks.append(
@@ -295,8 +319,104 @@ def doctor(home: Path, report: dict) -> list[dict]:
     checks.append(
         dict(
             check="local_tunnel",
-            ok=report["local_tunnel_ready"],
-            action=report["next_action"],
+            ok=None if offline else report["local_tunnel_ready"],
+            action="Not required in local mode." if offline else report["next_action"],
+        )
+    )
+    from .components import runtime_report
+
+    try:
+        runtime = runtime_report()
+        helpers = {row["name"] for row in runtime["components"]}
+        bundled = "tunnel-client" in helpers
+        if not bundled:
+            from .components import component_path
+
+            bundled = component_path("tunnel-client", home) is not None
+        checks.append(
+            dict(
+                check="runtime_integrity", ok=True, action="Runtime inventory verified."
+            )
+        )
+        checks.append(
+            dict(
+                check="tunnel_component",
+                ok=None if offline else bundled,
+                action="Available."
+                if bundled
+                else "Install the Windows standalone release to include tunnel-client.",
+            )
+        )
+        checks.append(
+            dict(
+                check="office_modules",
+                ok=all(runtime["office_modules"].values()),
+                action="Install the complete standalone release for document tools."
+                if not all(runtime["office_modules"].values())
+                else "Document modules available.",
+            )
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        checks.append(
+            dict(
+                check="runtime_integrity",
+                ok=False,
+                action="Runtime integrity failed. Reinstall the official standalone release.",
+            )
+        )
+    try:
+        from .autostart import status
+
+        startup = status(settings)
+        checks.append(
+            dict(
+                check="autostart",
+                ok=False
+                if startup["enabled"] and not startup["matches_current"]
+                else None,
+                action="Startup entry needs repair: run udb autostart enable."
+                if startup["enabled"] and not startup["matches_current"]
+                else "Enabled for this Windows user."
+                if startup["enabled"]
+                else "Optional: udb autostart enable; undo with udb autostart disable.",
+            )
+        )
+        from .maintenance import installation
+
+        managed = installation()
+        checks.append(
+            dict(
+                check="installation",
+                ok=True if managed else None,
+                action="Managed installation: udb update --check; udb rollback restores the retained previous release."
+                if managed
+                else "Portable/source installation. The one-command installer enables update and rollback.",
+            )
+        )
+    except (OSError, ValueError, CommandError):
+        checks.append(
+            dict(
+                check="installation",
+                ok=False,
+                action="Installation metadata is invalid. Re-run the official installer.",
+            )
+        )
+    state = headless_state(home)
+    if report["manager_running"]:
+        checks.append(
+            dict(
+                check="agent_heartbeat",
+                ok=state is not None,
+                action="Headless agent responds."
+                if state
+                else "Agent heartbeat is stale. Run udb status; close a legacy window before restarting.",
+            )
+        )
+    checks.append(
+        dict(
+            check="credentials",
+            ok=None,
+            action="Keys are not read by doctor. If authentication fails, use udb setup --edit in your own terminal.",
         )
     )
     checks.append(

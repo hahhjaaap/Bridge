@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -18,6 +17,7 @@ from .credentials import load_key, save_key
 from .windows_paths import system_executable
 
 HEALTH_URL_NAME = "tunnel-health.url"
+UNREADY_RESTART_SECONDS = 90
 CREATE_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -90,6 +90,10 @@ class DesktopController:
         self._generation = 0
         self._retry_attempt = 0
         self._retry_at = 0.0
+        self._unready_since = None
+        self._last_probe_at = None
+        self._recovery_count = 0
+        self._last_recovery = ""
         if monitor:
             threading.Thread(target=self._monitor, daemon=True).start()
             threading.Thread(target=self._sandbox_monitor, daemon=True).start()
@@ -261,6 +265,7 @@ class DesktopController:
                 ):
                     return
                 self.ready = False
+                self._unready_since = time.monotonic()
                 self.error = ""
                 health_file = self.agent.state / HEALTH_URL_NAME
                 health_file.unlink(missing_ok=True)
@@ -321,32 +326,92 @@ class DesktopController:
                 self.error = "Automation queue: " + str(e)
 
     def _monitor(self):
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        from .owner_command import NoRedirect
+
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), NoRedirect()
+        )
         while not self.closed.wait(1.5):
-            if not self.alive("tunnel"):
-                self.ready = False
-                self._retry_if_due()
-                continue
             try:
-                health_file = self.agent.state / HEALTH_URL_NAME
-                if health_file.stat().st_size > 128:
-                    raise ValueError("Invalid local health reference")
-                base = health_file.read_text("utf-8-sig").strip()
-                if not re.fullmatch(r"http://127\.0\.0\.1:[0-9]{1,5}", base):
-                    raise ValueError("Loopback health URL required")
-                with opener.open(base + "/readyz", timeout=0.6) as response:
-                    with self.lock:
-                        self.ready = (
-                            response.status == 200
-                            and self.tunnel_wanted
-                            and self.alive("tunnel")
-                        )
-                        if self.ready:
-                            self._retry_attempt = 0
-                            self._retry_at = 0.0
-                            self.error = ""
+                self._monitor_once(opener)
             except Exception:
+                # A failed local probe/child stop must not kill the watchdog thread.
                 self.ready = False
+                self.error = "Connection monitor failed; retrying local checks."
+
+    def _monitor_once(self, opener, now=None):
+        from .owner_command import tunnel_ready
+
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            generation = self._generation
+            child = self.children.get("tunnel")
+        if not self.alive("tunnel"):
+            self.ready = False
+            self._retry_if_due(now)
+            return
+        ready = tunnel_ready(self.home, opener)
+        with self.lock:
+            # Discard a late HTTP response from a previous process/connection.
+            if generation != self._generation or child is not self.children.get(
+                "tunnel"
+            ):
+                return
+            self.ready = ready and self.tunnel_wanted and self.alive("tunnel")
+            if self.ready:
+                self._unready_since = None
+                self._retry_attempt = 0
+                self._retry_at = 0.0
+                self.error = ""
+            else:
+                # Allow a full recovery grace period after suspend or a delayed monitor.
+                if self._unready_since is None or (
+                    self._last_probe_at is not None and now - self._last_probe_at > 30
+                ):
+                    self._unready_since = now
+                if (
+                    self.tunnel_wanted
+                    and not self.closed.is_set()
+                    and not self._connecting
+                    and now - self._unready_since >= UNREADY_RESTART_SECONDS
+                ):
+                    self._recover_unready(generation)
+            self._last_probe_at = now
+
+    def _recover_unready(self, generation):
+        # Called with the controller lock; Stop cannot race a reconnect intent.
+        if generation != self._generation or not self.tunnel_wanted:
+            return
+        try:
+            self.stop_process("tunnel")  # Only this controller's owned child tree.
+        except (OSError, subprocess.SubprocessError):
+            if not self.closed.is_set():
+                self.tunnel_wanted = True
+                self._unready_since = time.monotonic()
+                self.error = "Could not stop the unready tunnel; retrying local checks."
+            return
+        if self.alive("tunnel") or self.closed.is_set():
+            if not self.closed.is_set():
+                self.tunnel_wanted = True
+                self._unready_since = time.monotonic()
+            return
+        self.tunnel_wanted = True
+        self._recovery_count += 1
+        self._last_recovery = "tunnel_unready"
+        self._unready_since = None
+        self._retry_at = time.monotonic() + min(30, 2 ** min(self._retry_attempt, 5))
+        self._retry_attempt += 1
+        self.error = (
+            "Tunnel remained unready; reconnect scheduled. No tool call is replayed."
+        )
+        from .activity import Activity
+
+        Activity(self.home).emit(
+            "connection",
+            "tunnel",
+            status="RETRY",
+            details={"action": "recover_unready"},
+        )
 
     def _retry_if_due(self, now=None):
         now = time.monotonic() if now is None else now
@@ -377,6 +442,8 @@ class DesktopController:
             if self.tunnel_wanted
             else 0,
             "connection_error": self.error,
+            "recovery_count": self._recovery_count,
+            "last_recovery": self._last_recovery,
             "local_running": self.alive("mcp"),
             "sandbox": available(),
         }

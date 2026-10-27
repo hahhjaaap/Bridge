@@ -88,6 +88,9 @@ def _add_subcommands(parser: argparse.ArgumentParser) -> None:
         "logs",
         "stop",
         "doctor",
+        "autostart",
+        "update",
+        "rollback",
         "test",
         "revoke-access",
         "allow-source",
@@ -102,6 +105,23 @@ def _add_subcommands(parser: argparse.ArgumentParser) -> None:
     for name in command_names:
         command = subcommands.add_parser(name)
         add_settings(command, suppress=True)
+        if name in ("autostart", "update", "rollback"):
+            command.add_argument(
+                "--json", action="store_true", default=argparse.SUPPRESS
+            )
+        if name == "autostart":
+            command.add_argument(
+                "operation",
+                choices=("enable", "disable", "status"),
+                default="status",
+                nargs="?",
+            )
+        if name == "update":
+            command.add_argument(
+                "--check",
+                action="store_true",
+                help="Check latest version without installing",
+            )
         if name in ("start", "status", "stop", "doctor", "test", "revoke-access"):
             command.add_argument(
                 "--json", action="store_true", default=argparse.SUPPRESS
@@ -118,8 +138,12 @@ def _add_subcommands(parser: argparse.ArgumentParser) -> None:
             view.add_argument(
                 "--follow", action="store_true", default=argparse.SUPPRESS
             )
-            command.add_argument(
+            connection_mode = command.add_mutually_exclusive_group()
+            connection_mode.add_argument(
                 "--offline", action="store_true", default=argparse.SUPPRESS
+            )
+            connection_mode.add_argument(
+                "--online", action="store_true", default=argparse.SUPPRESS
             )
         if name == "setup":
             mode = command.add_mutually_exclusive_group()
@@ -212,8 +236,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--follow", action="store_true", help="Force live logs after startup"
     )
     parser.add_argument("--wait", type=int, default=30)
-    parser.add_argument(
+    connection_mode = parser.add_mutually_exclusive_group()
+    connection_mode.add_argument(
         "--offline", action="store_true", help="Start local agent without a tunnel"
+    )
+    connection_mode.add_argument(
+        "--online",
+        action="store_true",
+        help="Start online regardless of the saved local preference",
     )
     _add_subcommands(parser)
     parser.add_argument(
@@ -223,6 +253,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     action = args.action or "start"
     try:
+        if args.offline and args.online:
+            raise ValueError("Choose either --offline or --online")
         if (args.detach or args.follow) and action != "start":
             raise ValueError("--detach/--follow apply only to start")
         if args.follow and args.json:
@@ -261,7 +293,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_missing_config=action == "init",
         )
         if action == "setup":
-            if args.json or args.access or args.offline:
+            if args.json or args.access or args.offline or args.online:
                 raise ValueError(
                     "Use udb setup directly in your own terminal without --json/--access/--offline"
                 )
@@ -277,11 +309,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 130
             finally:
                 activate(previous)
+        if action in ("autostart", "update", "rollback"):
+            if args.access or args.offline or args.online:
+                raise ValueError(
+                    "Maintenance does not activate owner access or select connection mode"
+                )
+            from .owner_command import CommandError
+
+            try:
+                if action == "autostart":
+                    from .autostart import run
+
+                    return run(settings, args.operation, as_json=args.json)
+                from .maintenance import run
+
+                return run(
+                    action,
+                    settings,
+                    check=getattr(args, "check", False),
+                    as_json=args.json,
+                )
+            except CommandError as exc:
+                if args.json:
+                    print(json.dumps({"error": str(exc)}))
+                else:
+                    print("UDB: " + str(exc), file=sys.stderr)
+                return 2
         if action == "start":
             from . import onboarding
 
             startup_state = {}
-            if not args.offline:
+            if not (args.offline or args.online):
                 preferred = onboarding.saved_mode(settings)
                 from . import owner_command
 
@@ -327,8 +385,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
-        if args.offline and action != "start":
-            raise ValueError("--offline applies only to start")
+        if (args.offline or args.online) and action != "start":
+            raise ValueError("--offline/--online apply only to start")
         if action == "init":
             return _initialize_config(args, settings)
         if action == "logs":

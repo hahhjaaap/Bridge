@@ -133,6 +133,20 @@ def run(settings, *, edit=False, local=False):
     # Validate the destination before changing an existing agent or connection.
     checked(settings.home / "state/startup-preferences.json")
     print("UDB console setup. Python, Node.js and Desktop Commander are not required.")
+    if getattr(sys, "frozen", False):
+        from .components import runtime_report
+
+        try:
+            runtime = runtime_report()
+            if "tunnel-client" not in {
+                row["name"] for row in runtime["components"]
+            } or not all(runtime["office_modules"].values()):
+                raise ValueError()
+        except (OSError, ValueError, KeyError, TypeError):
+            raise ValueError(
+                "Runtime check failed. Reinstall the complete Windows standalone release before entering connection details."
+            ) from None
+    print("Runtime check complete. Step 1: choose online or local mode.")
     current = None if local else saved_connection(settings, repair=edit)
     connect = not local and bool(current or edit)
     if not local and not connect:
@@ -229,4 +243,10 @@ def run(settings, *, edit=False, local=False):
                 "The previous agent did not stop. Run udb stop and try setup again."
             )
     save_mode(settings, desired)
+    print(
+        "Configuration saved. Starting the agent; its readiness and live log follow below."
+    )
+    print(
+        "Optional: udb autostart enable | Troubleshooting: udb doctor | View logs later: udb start"
+    )
     return owner_command.main(args)

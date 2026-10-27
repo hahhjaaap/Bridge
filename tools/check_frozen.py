@@ -203,6 +203,25 @@ def main():
             )
             status = json.loads(run("status", "--home", str(offline_home), "--json"))
             assert status["connection_mode"] == "offline"
+            if tuple(map(int, version.split("."))) >= (0, 10, 0):
+                doctor = json.loads(
+                    run("doctor", "--home", str(offline_home), "--json")
+                )
+                checks = {row["check"]: row for row in doctor["checks"]}
+                assert checks["runtime_integrity"]["ok"] is True
+                assert checks["agent_heartbeat"]["ok"] is True
+                assert checks["local_tunnel"]["ok"] is None
+                assert checks["credentials"]["ok"] is None
+                assert all(row["ok"] is not False for row in checks.values())
+                assert run("autostart", "--help") and run("update", "--help")
+                run(
+                    "rollback",
+                    "--home",
+                    str(offline_home),
+                    "--json",
+                    expect_success=False,
+                    error_contains="one-command installation",
+                )
             assert not (offline_home / "state/computer-access.dpapi").exists()
         finally:
             run("stop", "--home", str(offline_home), "--json", "--wait", "30")

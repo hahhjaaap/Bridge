@@ -6,6 +6,7 @@ param(
     [string]$DataHome = (Join-Path $env:LOCALAPPDATA 'UniversalDesktopBridge'),
     [switch]$NoStart,
     [switch]$NoPath,
+    [switch]$Rollback,
     [switch]$AllowLocalFeed
 )
 $ErrorActionPreference = 'Stop'
@@ -39,6 +40,107 @@ function Get-Sha([string]$Path) {
     try { return ([BitConverter]::ToString($hash.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
     finally { $stream.Dispose(); $hash.Dispose() }
 }
+function Write-AtomicText([string]$Path,[string]$Text) {
+    [void](Assert-LocalPath $Path)
+    $temporary = $Path + '.' + [Guid]::NewGuid().ToString('N') + '.new'
+    try {
+        $stream = [IO.File]::Open($temporary,[IO.FileMode]::CreateNew)
+        try { $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text); $stream.Write($bytes,0,$bytes.Length) } finally { $stream.Dispose() }
+        if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($temporary,$Path,$null) } else { [IO.File]::Move($temporary,$Path) }
+    } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
+}
+function Get-InstallRecord([string]$Path) {
+    [void](Assert-LocalPath $Path)
+    if ((Get-Item -LiteralPath $Path).Length -gt 8192) { throw 'Installation record exceeds limits.' }
+    $value = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
+    return $value
+}
+function Assert-Release($Record) {
+    if ($Record.product -ne 'UniversalDesktopBridge' -or $Record.schema -ne 1 -or $Record.archive_sha256 -cnotmatch '^[a-f0-9]{64}$' -or $Record.version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid release record.' }
+    $image = Assert-LocalPath ([string]$Record.exe)
+    $expectedImage = Join-Path (Join-Path (Join-Path $InstallRoot 'releases') $Record.archive_sha256.Substring(0,24)) 'udb.exe'
+    if ($image -ine $expectedImage -or !(Test-Path -LiteralPath $image -PathType Leaf) -or (Assert-LocalPath ([string]$Record.home)) -ine $DataHome) { throw 'Release is outside this installation or uses another data home.' }
+    $directory = [IO.Path]::GetDirectoryName($image)
+    $manifestPath = Assert-LocalPath (Join-Path $directory 'STANDALONE-SHA256SUMS')
+    if ((Get-Item -LiteralPath $manifestPath).Length -gt 1048576) { throw 'Release inventory exceeds limits.' }
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in [IO.File]::ReadAllLines($manifestPath)) {
+        if ($line -notmatch '^([a-fA-F0-9]{64})  (.+)$') { throw 'Invalid retained release inventory.' }
+        $digest = $Matches[1]; $name = $Matches[2]
+        if ($name.Contains('\') -or $name.Contains(':') -or $name -match '(^|/)(\.|\.\.|)(/|$)' -or !$seen.Add($name)) { throw 'Unsafe retained release path.' }
+        $file = Assert-LocalPath (Join-Path $directory $name)
+        if (!$file.StartsWith($directory + '\',[StringComparison]::OrdinalIgnoreCase) -or (Get-Sha $file) -ne $digest) { throw 'Retained release integrity failed.' }
+    }
+    if (!$seen.Contains('udb.exe')) { throw 'Retained release has no application.' }
+}
+function Get-AgentState([string]$Image) {
+    $text = @(& $Image --home $DataHome status --json)
+    $state = ($text -join "`n") | ConvertFrom-Json
+    if ($state.PSObject.Properties.Name -notcontains 'manager_running') { throw 'Cannot inspect the existing agent.' }
+    return $state
+}
+function Start-Agent([string]$Image,[string]$Mode) {
+    $options = @('--home',$DataHome,'start','--detach','--json','--wait','60')
+    if ($Mode -eq 'offline') { $options += '--offline' }
+    elseif ((@(& $Image start --help) -join ' ') -match '--online') { $options += '--online' }
+    $state = (@(& $Image @options) -join "`n") | ConvertFrom-Json
+    if (!$state.manager_running -or $state.connection_mode -ne $Mode) { throw 'New agent failed to start in the previous connection mode.' }
+    # A temporary network outage is not a broken application. The agent retries.
+}
+function Set-ActiveRelease($Record,$Old) {
+    Assert-Release $Record
+    $mcpPath = Assert-LocalPath (Join-Path $InstallRoot 'mcp.json')
+    $oldMcp = if (Test-Path -LiteralPath $mcpPath) { [IO.File]::ReadAllText($mcpPath) } else { $null }
+    $oldState = $null
+    $switched = $false
+    $stopped = $false
+    try {
+        # Generate config before interrupting an existing agent.
+        $mcp = @(& $Record.exe --home $DataHome mcp-config)
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot generate MCP configuration.' }
+        [void](($mcp -join "`n") | ConvertFrom-Json)
+        if ($Old -and $Old.exe -ne $Record.exe) {
+            Assert-Release $Old
+            $oldState = Get-AgentState $Old.exe
+            if ($oldState.manager_running) {
+                $stopState = (@(& $Old.exe --home $DataHome stop --wait 60 --json) -join "`n") | ConvertFrom-Json
+                if ($stopState.manager_running -or $LASTEXITCODE -ne 0) { throw 'The previous agent did not stop.' }
+                $stopped = $true
+            }
+        }
+        Write-AtomicText $mcpPath ($mcp -join "`n")
+        Write-AtomicText $recordPath ($Record | ConvertTo-Json -Depth 5 -Compress)
+        $switched = $true
+        if ($oldState -and $oldState.manager_running) { Start-Agent $Record.exe $oldState.connection_mode }
+    } catch {
+        if ($switched) {
+            try { & $Record.exe --home $DataHome stop --wait 60 --json | Out-Null } catch { }
+        }
+        if ($Old) {
+            Write-AtomicText $recordPath ($Old | ConvertTo-Json -Depth 5 -Compress)
+            if ($null -ne $oldMcp) { Write-AtomicText $mcpPath $oldMcp }
+            if ($stopped) {
+                try { Start-Agent $Old.exe $oldState.connection_mode } catch { Write-Warning 'Previous release restored; run udb start to reconnect.' }
+            }
+        } else {
+            if ($switched -and (Test-Path -LiteralPath $recordPath)) { Remove-Item -LiteralPath $recordPath -Force }
+            if ($null -eq $oldMcp -and (Test-Path -LiteralPath $mcpPath)) { Remove-Item -LiteralPath $mcpPath -Force }
+        }
+        throw 'Activation failed; previous installation retained. Run udb doctor.'
+    }
+}
+function Get-Download([string]$Url,[string]$Destination,[int]$Timeout) {
+    for ($attempt=0; $attempt -lt 3; $attempt++) {
+        try { Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Destination -TimeoutSec $Timeout; return }
+        catch {
+            if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Force }
+            $response = $_.Exception.Response
+            $code = if ($response) { [int]$response.StatusCode } else { 0 }
+            if ($attempt -eq 2 -or ($code -ne 0 -and $code -ne 408 -and $code -ne 429 -and $code -lt 500)) { throw 'Release download failed. Check the network and retry; active installation is unchanged.' }
+            Start-Sleep -Seconds ($attempt + 1)
+        }
+    }
+}
 $InstallRoot = Assert-LocalPath $InstallRoot
 $DataHome = Assert-LocalPath $DataHome
 $recordPath = Join-Path $InstallRoot 'install.json'
@@ -47,7 +149,7 @@ if (Test-Path -LiteralPath $InstallRoot) {
     $items = @(Get-ChildItem -Force -LiteralPath $InstallRoot)
     if ($items.Count -and !(Test-Path -LiteralPath $recordPath -PathType Leaf)) { throw 'The destination contains unrelated files; select an empty folder.' }
     if (Test-Path -LiteralPath $recordPath) {
-        $previous = Get-Content -Raw -LiteralPath $recordPath | ConvertFrom-Json
+        $previous = Get-InstallRecord $recordPath
         if ($previous.product -ne 'UniversalDesktopBridge' -or $previous.schema -ne 1) { throw 'Unrecognized installation; nothing was replaced.' }
         if (!$PSBoundParameters.ContainsKey('DataHome')) { $DataHome = Assert-LocalPath ([string]$previous.home) }
     }
@@ -60,17 +162,32 @@ $stage = $null
 try {
     $locked = $mutex.WaitOne(0)
     if (!$locked) { throw 'Another UDB installer is running.' }
+    # Refresh after taking the lease: another completed installer may have switched it.
+    if (Test-Path -LiteralPath $recordPath) { $previous = Get-InstallRecord $recordPath }
+    if ($Rollback) {
+        if (!$previous -or !$previous.previous) { throw 'No previous release is available.' }
+        $target = $previous.previous
+        $record = @{product='UniversalDesktopBridge';schema=1;version=$target.version;exe=$target.exe;home=$target.home;archive_sha256=$target.archive_sha256;previous=@{product=$previous.product;schema=$previous.schema;version=$previous.version;exe=$previous.exe;home=$previous.home;archive_sha256=$previous.archive_sha256}}
+        Set-ActiveRelease $record $previous
+        Write-Host ('UDB rolled back to ' + $target.version + '. Settings preserved.')
+        return
+    }
     $temp = Join-Path ([IO.Path]::GetTempPath()) ('udb-install-' + [Guid]::NewGuid().ToString('N'))
     [IO.Directory]::CreateDirectory($temp) | Out-Null
     $archive = Join-Path $temp 'udb-windows-x64.zip'
     Write-Host 'Downloading the standalone UDB application...'
     $base = $feed.AbsoluteUri.TrimEnd('/')
-    Invoke-WebRequest -UseBasicParsing -Uri ($base + '/SHA256SUMS') -OutFile (Join-Path $temp 'SHA256SUMS') -TimeoutSec 60
+    if ($base -eq 'https://github.com/hahhjaaap/Universal-Desktop-Bridge/releases/latest/download') {
+        $latest = Invoke-RestMethod -Uri 'https://api.github.com/repos/hahhjaaap/Universal-Desktop-Bridge/releases/latest' -Headers @{'User-Agent'='UDB-installer'} -TimeoutSec 30
+        if ($latest.tag_name -notmatch '^v\d+\.\d+\.\d+$' -or $latest.draft -or $latest.prerelease) { throw 'Invalid release metadata.' }
+        $base = 'https://github.com/hahhjaaap/Universal-Desktop-Bridge/releases/download/' + $latest.tag_name
+    }
+    Get-Download ($base + '/SHA256SUMS') (Join-Path $temp 'SHA256SUMS') 60
     $checksumText = [IO.File]::ReadAllText((Join-Path $temp 'SHA256SUMS'))
     $matchesHash = [regex]::Matches($checksumText,'(?m)^([a-fA-F0-9]{64})\s+udb-windows-x64\.zip\s*$')
     if ($matchesHash.Count -ne 1) { throw 'Release checksum is missing or ambiguous.' }
     $expected = $matchesHash[0].Groups[1].Value.ToLowerInvariant()
-    Invoke-WebRequest -UseBasicParsing -Uri ($base + '/udb-windows-x64.zip') -OutFile $archive -TimeoutSec 600
+    Get-Download ($base + '/udb-windows-x64.zip') $archive 600
     if ((Get-Item -LiteralPath $archive).Length -gt 536870912 -or (Get-Sha $archive) -ne $expected) { throw 'Download verification failed; nothing was installed.' }
     [IO.Directory]::CreateDirectory($InstallRoot) | Out-Null
     $stage = Join-Path $InstallRoot ('.stage-' + [Guid]::NewGuid().ToString('N'))
@@ -131,13 +248,6 @@ try {
     # a onefile bootloader exits; never execute an image before renaming it.
     $version = (@(& $exe --version) -join '').Trim()
     if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Application verification failed.' }
-    if ($previous -and $previous.exe -ne $exe) {
-        $old = Assert-LocalPath ([string]$previous.exe)
-        if (!$old.StartsWith($releases + '\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid previous release path.' }
-        Write-Host 'Stopping the previous UDB version for the update...'
-        $stopped = (@(& $old --home $DataHome stop --wait 60 --json) -join "`n") | ConvertFrom-Json
-        if ($stopped.manager_running) { throw 'The old agent did not stop; active installation preserved.' }
-    }
     $bin = Join-Path $InstallRoot 'bin'
     [IO.Directory]::CreateDirectory($bin) | Out-Null
     $launcher = @'
@@ -158,16 +268,11 @@ try {
     Write-Utf8 (Join-Path $bin 'udb.ps1') $launcher
     Write-Utf8 (Join-Path $bin 'udb.cmd') "@echo off`r`n`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"%~dp0udb.ps1`" %*`r`nexit /b %errorlevel%`r`n"
     $record = @{product='UniversalDesktopBridge';schema=1;version=$version;exe=$exe;home=$DataHome;archive_sha256=$expected}
-    $newRecord = $recordPath + '.new'
-    Write-Utf8 $newRecord ($record | ConvertTo-Json -Compress)
-    if (Test-Path -LiteralPath $recordPath) {
-        $backupRecord = $recordPath + '.previous-' + [Guid]::NewGuid().ToString('N')
-        [IO.File]::Replace($newRecord,$recordPath,$backupRecord)
-        Remove-Item -LiteralPath $backupRecord -Force
-    } else { [IO.File]::Move($newRecord,$recordPath) }
-    $mcp = @(& $exe --home $DataHome mcp-config)
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot generate MCP configuration.' }
-    Write-Utf8 (Join-Path $InstallRoot 'mcp.json') ($mcp -join "`n")
+    if ($previous) {
+        if ($previous.exe -eq $exe) { $record = $previous }
+        else { $record.previous = @{product=$previous.product;schema=$previous.schema;version=$previous.version;exe=$previous.exe;home=$previous.home;archive_sha256=$previous.archive_sha256} }
+    }
+    Set-ActiveRelease $record $previous
     if (!$NoPath) {
         $oldPath = [Environment]::GetEnvironmentVariable('Path','User')
         $parts = @($oldPath -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ine $bin.TrimEnd('\') })
@@ -176,7 +281,8 @@ try {
     }
     Write-Host ('UDB ' + $version + ' installed. Command: udb') -ForegroundColor Green
     Write-Host ('Local MCP configuration: ' + (Join-Path $InstallRoot 'mcp.json'))
-    if (!$NoStart) {
+    Write-Host 'Next: udb start | Diagnostics: udb doctor | Optional logon startup: udb autostart enable'
+    if (!$NoStart -and !$previous) {
         $env:PYTHONIOENCODING = 'utf-8'
         [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
         $OutputEncoding = [Console]::OutputEncoding
