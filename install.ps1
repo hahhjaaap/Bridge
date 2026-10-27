@@ -90,6 +90,7 @@ function Start-Agent([string]$Image,[string]$Mode) {
 function Set-ActiveRelease($Record,$Old) {
     Assert-Release $Record
     $mcpPath = Assert-LocalPath (Join-Path $InstallRoot 'mcp.json')
+    if ((Test-Path -LiteralPath $mcpPath) -and (Get-Item -LiteralPath $mcpPath).Length -gt 65536) { throw 'Existing MCP configuration exceeds limits.' }
     $oldMcp = if (Test-Path -LiteralPath $mcpPath) { [IO.File]::ReadAllText($mcpPath) } else { $null }
     $oldState = $null
     $switched = $false
@@ -143,6 +144,7 @@ function Get-Download([string]$Url,[string]$Destination,[int]$Timeout) {
 }
 $InstallRoot = Assert-LocalPath $InstallRoot
 $DataHome = Assert-LocalPath $DataHome
+if ($InstallRoot -ieq $DataHome -or $DataHome.StartsWith($InstallRoot + '\',[StringComparison]::OrdinalIgnoreCase) -or $InstallRoot.StartsWith($DataHome + '\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Choose separate application and data folders.' }
 $recordPath = Join-Path $InstallRoot 'install.json'
 $previous = $null
 if (Test-Path -LiteralPath $InstallRoot) {
@@ -241,14 +243,15 @@ try {
     [IO.Directory]::CreateDirectory($releases) | Out-Null
     $release = Join-Path $releases $expected.Substring(0,24)
     if (Test-Path -LiteralPath $release) {
-        if ((Get-Sha (Join-Path $release 'udb.exe')) -ne (Get-Sha $candidate)) { throw 'Existing release differs; preserved it.' }
+        [void](Assert-LocalPath $release)
+        if ((Get-Sha (Join-Path $release 'udb.exe')) -ne (Get-Sha $candidate) -or (Get-Sha (Join-Path $release 'STANDALONE-SHA256SUMS')) -ne (Get-Sha $manifest)) { throw 'Existing release differs; preserved it.' }
     } else { [IO.Directory]::Move($stage,$release); $stage = $null }
     $exe = Join-Path $release 'udb.exe'
     # Probe only at the final path. Windows can retain an image mapping after
     # a onefile bootloader exits; never execute an image before renaming it.
     $version = (@(& $exe --version) -join '').Trim()
     if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Application verification failed.' }
-    $bin = Join-Path $InstallRoot 'bin'
+    $bin = Assert-LocalPath (Join-Path $InstallRoot 'bin')
     [IO.Directory]::CreateDirectory($bin) | Out-Null
     $launcher = @'
 $ErrorActionPreference = 'Stop'
@@ -265,8 +268,8 @@ try {
     exit $LASTEXITCODE
 } catch { [Console]::Error.WriteLine('UDB launcher failed. Re-run the installer to repair it.'); exit 1 }
 '@
-    Write-Utf8 (Join-Path $bin 'udb.ps1') $launcher
-    Write-Utf8 (Join-Path $bin 'udb.cmd') "@echo off`r`n`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"%~dp0udb.ps1`" %*`r`nexit /b %errorlevel%`r`n"
+    Write-AtomicText (Join-Path $bin 'udb.ps1') $launcher
+    Write-AtomicText (Join-Path $bin 'udb.cmd') "@echo off`r`n`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"%~dp0udb.ps1`" %*`r`nexit /b %errorlevel%`r`n"
     $record = @{product='UniversalDesktopBridge';schema=1;version=$version;exe=$exe;home=$DataHome;archive_sha256=$expected}
     if ($previous) {
         if ($previous.exe -eq $exe) { $record = $previous }

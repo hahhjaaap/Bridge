@@ -243,6 +243,10 @@ def inspect(home: Path, exe: Path, running=manager_running, ready=tunnel_ready) 
     active = running(home, exe)
     connected = active and ready(home)
     hidden = headless_state(home) if active else None
+    count = (hidden or {}).get("recovery_count", 0)
+    count = count if type(count) is int and 0 <= count <= 10**9 else 0
+    reason = (hidden or {}).get("last_recovery", "")
+    reason = reason if reason in ("", "tunnel_unready") else ""
     return dict(
         companion_version=VERSION,
         manager_running=active,
@@ -255,6 +259,11 @@ def inspect(home: Path, exe: Path, running=manager_running, ready=tunnel_ready) 
         if hidden
         else "unknown",
         chatgpt_connection_verified=False,
+        tunnel_recovery={
+            "count": count,
+            "last_reason": reason,
+            "replays_tool_calls": False,
+        },
         next_action=(
             "Call bridge_status in ChatGPT to verify the session."
             if connected

@@ -35,9 +35,18 @@ def main():
     env["PATH"] = os.pathsep.join([str(windows / "System32"), str(windows)])
     env["PYTHONIOENCODING"] = "utf-8"
 
+    transient_downloads = []
+
     class Handler(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *args):
             pass
+
+        def do_GET(self):
+            if self.path == "/SHA256SUMS" and not transient_downloads:
+                transient_downloads.append(self.path)
+                self.send_error(503, "Synthetic transient download failure")
+                return
+            super().do_GET()
 
     with tempfile.TemporaryDirectory(prefix="udb-installer-") as folder:
         root = Path(folder).resolve()
@@ -131,6 +140,7 @@ def main():
 
         try:
             run_install()
+            assert transient_downloads == ["/SHA256SUMS"]
             record_path = install / "install.json"
             first = json.loads(record_path.read_text(encoding="utf-8"))
             exe = Path(first["exe"])
@@ -322,6 +332,7 @@ public class FailedStart {
                         running_offline_update=True,
                         manual_rollback=True,
                         automatic_failure_rollback=True,
+                        transient_download_retry=True,
                         owner_access_not_granted=True,
                         user_path_not_changed_by_test=True,
                     )

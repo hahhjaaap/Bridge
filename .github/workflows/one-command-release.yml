@@ -57,11 +57,11 @@ jobs:
           Run in your own PowerShell terminal:
           irm https://github.com/hahhjaaap/Universal-Desktop-Bridge/releases/latest/download/install.ps1 | iex
 
-          The normal udb start command now guides the first attended setup and reuses the saved online/local choice. Existing running agents are reused in their current mode. Use udb setup --edit to repair connection details in the terminal, or udb setup --local to remember local mode. Automated starts never enter the wizard. Tunnel ID/MCP URL input and namespaced IDs remain supported. ChatGPT connectivity still requires your own supported account/workspace tunnel and runtime key; the installer does not create them. Owner computer access remains an explicit local decision.
+          UDB now recovers an owned tunnel that remains unready for 90 seconds, with a fresh grace period after a long monitor gap. First-run setup checks the bundled runtime before accepting connection details. Optional udb autostart enable starts it hidden at Windows sign-in; udb autostart disable removes that entry. Use udb update --check, udb update, and udb rollback for managed installations. Updates preserve owner data and restore the previous release if activation fails. udb doctor reports runtime, startup mode, heartbeat, tunnel, installation and startup-entry checks without reading keys. No tool call is automatically replayed. The existing OpenAI tunnel/account setup remains required; no relay provider or hosted service is added.
 
           Verified by pytest, copied-EXE worker/lifecycle checks, actual HTTP installer/reinstall/failure tests, and a public HTTPS install on a disposable Windows runner. SHA256 detects corruption; this build is not code-signed.
           '@ | Set-Content release-notes.md -Encoding utf8
-          gh release create $tag dist/udb-windows-x64.zip dist/SHA256SUMS dist/install.ps1 --target "$env:GITHUB_SHA" --title "UDB $env:UDB_RELEASE_VERSION - Simpler startup" --notes-file release-notes.md
+          gh release create $tag dist/udb-windows-x64.zip dist/SHA256SUMS dist/install.ps1 --target "$env:GITHUB_SHA" --title "UDB $env:UDB_RELEASE_VERSION - Reliable Windows lifecycle" --notes-file release-notes.md
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
       - name: Verify the newly published HTTPS installer
         run: python tools/check_public_installer.py --release-tag v${{ steps.version.outputs.value }} --report reports/public-installer.json

@@ -152,7 +152,8 @@ def test_registry_round_trip_in_isolated_nonstartup_key(tmp_path, monkeypatch):
         autostart.run(settings, "disable")
         assert not autostart.status(settings)["enabled"]
     finally:
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
+        with contextlib.suppress(FileNotFoundError):
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
 
 
 def managed(tmp_path):
@@ -287,3 +288,75 @@ def test_online_start_overrides_saved_local_mode(tmp_path, monkeypatch):
     onboarding.save_mode(Settings(tmp_path, tmp_path / "work"), "offline")
     assert cli.main(["start", "--home", str(tmp_path), "--online", "--json"]) == 0
     assert "--offline" not in calls[0]
+
+
+def test_unready_stop_failure_keeps_reconnect_intent(controller, monkeypatch):
+    def fail(name):
+        controller.tunnel_wanted = False
+        raise subprocess.TimeoutExpired("synthetic-stop", 15)
+
+    monkeypatch.setattr(controller, "stop_process", fail)
+    controller._recover_unready(controller._generation)
+    assert controller.tunnel_wanted and not controller._recovery_count
+    assert controller.alive("tunnel")
+    monkeypatch.setattr(controller, "stop_process", lambda name: None)
+
+
+def test_diagnostic_recovery_fields_are_bounded_not_raw_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        owner_command,
+        "headless_state",
+        lambda _: {
+            "recovery_count": "SYNTHETIC_PRIVATE",
+            "last_recovery": "SYNTHETIC_PRIVATE",
+        },
+    )
+    report = owner_command.inspect(
+        tmp_path, Path("unused"), running=lambda *a: True, ready=lambda *a: False
+    )
+    assert report["tunnel_recovery"] == {
+        "count": 0,
+        "last_reason": "",
+        "replays_tool_calls": False,
+    }
+    assert "SYNTHETIC_PRIVATE" not in json.dumps(report)
+
+
+def test_setup_checks_frozen_runtime_before_asking_for_a_key(tmp_path, monkeypatch):
+    from udb import components
+
+    monkeypatch.setattr(onboarding, "console_input", lambda: True)
+    monkeypatch.setattr(onboarding.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        components, "runtime_report", lambda: {"components": [], "office_modules": {}}
+    )
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda _: pytest.fail("Incomplete build must not request connection details"),
+    )
+    with pytest.raises(ValueError, match="Runtime check failed"):
+        onboarding.run(Settings(tmp_path / "unused", tmp_path / "work"))
+    assert not (tmp_path / "unused").exists()
+
+
+def test_timed_out_update_reports_unknown_outcome_without_retry(tmp_path, monkeypatch):
+    root, record, exe = managed(tmp_path)
+    monkeypatch.setattr(maintenance, "installation", lambda: (root, record))
+    monkeypatch.setattr(
+        maintenance, "installer_script", lambda: tmp_path / "install.ps1"
+    )
+    from udb import windows_paths
+
+    monkeypatch.setattr(
+        windows_paths, "system_executable", lambda _: "absolute-powershell.exe"
+    )
+    calls = []
+
+    def timeout(args, **kwargs):
+        calls.append(args)
+        raise subprocess.TimeoutExpired("synthetic-installer", 900)
+
+    monkeypatch.setattr(maintenance.subprocess, "run", timeout)
+    with pytest.raises(CommandError, match="outcome is unknown"):
+        maintenance.run("rollback", Settings(Path(record["home"]), tmp_path))
+    assert len(calls) == 1
