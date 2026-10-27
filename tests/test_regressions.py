@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
         "test_session_lifecycle.py",
         "test_integration.py",
         "test_documents.py",
+        "test_accounting.py",
         "test_work_recovery.py",
         "test_conpty.py",
         "test_windows_durability.py",
