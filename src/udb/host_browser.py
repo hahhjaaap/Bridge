@@ -1013,7 +1013,7 @@ class Browser:
             expression = self._locator_expression(
                 selector, role, name, exact, body
             )
-            result = self._wait_for_element_action(tab, expression)
+            result = self._wait_for_element_action(tab, expression, selector=selector)
             if not result.get("ok") or not result.get("needs_click"):
                 return result
             self._mouse_click(tab, result["x"], result["y"])
