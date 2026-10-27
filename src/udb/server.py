@@ -658,28 +658,108 @@ def make_server(agent: Agent):
 
 
 class AuthenticatedASGI:
+    """Local MCP boundary: fail closed before untrusted requests reach FastMCP.
+
+    The public tunnel terminates outside this process. The local HTTP listener
+    must never accept browser-originated unauthenticated traffic, oversized
+    requests, or a non-loopback client even if a port is exposed accidentally.
+    """
+
+    MAX_BODY = 16 * 1024 * 1024
+    SECURITY_HEADERS = (
+        (b"cache-control", b"no-store"),
+        (b"x-content-type-options", b"nosniff"),
+        (b"x-frame-options", b"DENY"),
+        (b"referrer-policy", b"no-referrer"),
+    )
+
     def __init__(self, app, token):
         self.app, self.token = app, token
 
+    async def _reject(self, send, status, reason):
+        headers = [(b"content-type", b"application/json"), *self.SECURITY_HEADERS]
+        if status == 413:
+            headers.append((b"connection", b"close"))
+        await send({"type": "http.response.start", "status": status, "headers": headers})
+        await send({
+            "type": "http.response.body",
+            "body": json.dumps({"error": reason}).encode("ascii"),
+        })
+
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
+        kind = scope.get("type")
+        if kind == "lifespan":
             return await self.app(scope, receive, send)
-        headers = dict(scope.get("headers", []))
-        authorization = headers.get(b"authorization", b"").decode("latin-1")
-        # All HTTP paths require auth. No browser cookie, CORS, or query-string token.
-        if not hmac.compare_digest(authorization, "Bearer " + self.token):
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [(b"content-type", b"application/json")],
-                }
-            )
-            await send(
-                {"type": "http.response.body", "body": b'{"error":"unauthorized"}'}
-            )
+        if kind == "websocket":
+            # Never bypass bearer authentication through a different ASGI scope.
+            await send({"type": "websocket.close", "code": 1008})
             return
-        return await self.app(scope, receive, send)
+        if kind != "http":
+            raise ValueError("Unsupported ASGI scope")
+
+        client = scope.get("client")
+        if client is not None and client[0] not in ("127.0.0.1", "::1"):
+            return await self._reject(send, 403, "forbidden")
+
+        headers = scope.get("headers", [])
+        authorizations = [
+            value for name, value in headers if name.lower() == b"authorization"
+        ]
+        expected = ("Bearer " + self.token).encode("ascii")
+        # Duplicates are ambiguous across reverse proxies and ASGI servers.
+        if (
+            len(authorizations) != 1
+            or len(authorizations[0]) > 4096
+            or not hmac.compare_digest(authorizations[0], expected)
+        ):
+            return await self._reject(send, 401, "unauthorized")
+
+        lengths = [value for name, value in headers if name.lower() == b"content-length"]
+        if len(lengths) > 1 or (lengths and not lengths[0].isdigit()):
+            return await self._reject(send, 400, "invalid request length")
+        if lengths and int(lengths[0]) > self.MAX_BODY:
+            return await self._reject(send, 413, "request too large")
+
+        # Enforce the limit even for chunked requests with no Content-Length.
+        # MCP messages are bounded JSON requests, not streaming uploads.
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            if message["type"] != "http.request":
+                return await self._reject(send, 400, "invalid request body")
+            chunk = message.get("body", b"")
+            if not isinstance(chunk, bytes):
+                return await self._reject(send, 400, "invalid request body")
+            if len(chunk) > self.MAX_BODY - len(body):
+                return await self._reject(send, 413, "request too large")
+            body.extend(chunk)
+            if not message.get("more_body", False):
+                break
+
+        payload = bytes(body)
+        delivered = False
+
+        async def replay_receive():
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": payload, "more_body": False}
+            return await receive()
+
+        async def secure_send(message):
+            if message["type"] == "http.response.start":
+                message = dict(message)
+                protected = {name for name, _ in self.SECURITY_HEADERS}
+                message["headers"] = [
+                    (name, value)
+                    for name, value in message.get("headers", [])
+                    if name.lower() not in protected
+                ] + list(self.SECURITY_HEADERS)
+            await send(message)
+
+        return await self.app(scope, replay_receive, secure_send)
 
 
 def serve(home, stdio=False):
