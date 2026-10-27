@@ -42,7 +42,21 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install ".[office,freeze]"
+      # Restore only public helpers; fetch_build_assets.py re-verifies SHA-256
+      # even on a cache hit, so a corrupt/poisoned cache fails closed.
+      - name: Restore pinned helper binaries
+        id: helper_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build-assets/bin
+          key: udb-public-helpers-${{ runner.os }}-${{ hashFiles('build-assets/components.json') }}
       - run: python tools/fetch_build_assets.py
+      - name: Save verified helper binaries
+        if: steps.helper_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build-assets/bin
+          key: udb-public-helpers-${{ runner.os }}-${{ hashFiles('build-assets/components.json') }}
       - run: udb build --exe
       - run: .\dist\udb.exe --version
       - run: .\dist\udb.exe tools
