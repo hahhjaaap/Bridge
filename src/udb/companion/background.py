@@ -391,13 +391,22 @@ class Background(SearchMixin):
             entries = []
             total = 0
 
-            def visit(p):
-                nonlocal total
+            # Iterative DFS: no Python recursion limit and no unbounded
+            # materialization of directory entries. Each path still passes
+            # the same ScopedFiles permission and identity checks.
+            stack = [iter((src,))]
+            while stack:
                 task.check()
+                try:
+                    p = next(stack[-1])
+                except StopIteration:
+                    stack.pop()
+                    continue
                 p = self.files.path(str(p))
                 meta = identity(p)
+                is_dir = p.is_dir()
                 entries.append(
-                    (p, p.relative_to(src) if p != src else Path("."), p.is_dir(), meta)
+                    (p, p.relative_to(src) if p != src else Path("."), is_dir, meta)
                 )
                 if len(entries) > 20000:
                     raise ValueError("Tree exceeds 20,000 entries")
@@ -405,13 +414,11 @@ class Background(SearchMixin):
                     total += meta[2]
                     if total > MAX_LARGE:
                         raise ValueError("Tree exceeds 16 GiB total limit")
-                elif p.is_dir():
-                    for child in p.iterdir():
-                        visit(child)
+                elif is_dir:
+                    stack.append(iter(p.iterdir()))
                 else:
                     raise ValueError("Only regular files and directories can be copied")
 
-            visit(src)
             with task.lock:
                 task.progress = dict(
                     entries=len(entries), total_bytes=total, copied_bytes=0
