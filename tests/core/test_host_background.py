@@ -527,7 +527,8 @@ def test_browser_click_waits_for_actionability_then_dispatches_pointer_events():
     ])
     expressions = []
     browser.evaluate = lambda tab, expression, timeout=10: (
-        expressions.append(expression) or next(results)
+        "https://example.com/" if expression == "location.href"
+        else expressions.append(expression) or next(results)
     )
     calls = []
     browser.call = lambda method, params=None, session=None, timeout=10: (
@@ -550,3 +551,24 @@ def test_browser_ambiguous_click_does_not_dispatch_mouse_events():
     browser.call = lambda *args, **kwargs: pytest.fail("ambiguous locator must not click")
     result = browser.element("owned-tab", "click", selector=".save")
     assert not result["ok"] and result["matches"] == 2
+
+def test_browser_click_waits_for_navigation_and_redacts_query_string():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+
+    def evaluate(tab, expression, timeout=10):
+        if expression == "location.href":
+            return "https://old.example/"
+        if "readyState" in expression:
+            return {
+                "readyState": "complete",
+                "href": "https://new.example/result?session=secret",
+            }
+        return {"ok": True, "x": 21, "y": 42}
+
+    browser.evaluate = evaluate
+    browser.call = lambda *args, **kwargs: {}
+    result = browser.element("owned-tab", "click", selector="#continue")
+    assert result["ok"] and result["clicked"]
+    assert result["navigation_completed"]
+    assert result["url"] == "https://new.example/result"
