@@ -1,5 +1,7 @@
 # Universal Desktop Bridge
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the single runtime, module ownership, tool dispatch and compatibility boundaries.
+
 ## Install on Windows x64 with one command
 
 Run this in your own PowerShell terminal:

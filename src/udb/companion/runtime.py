@@ -37,8 +37,8 @@ from .constants import (
     PROTECTED_PREFIXES,
     PROTECTED_SUFFIXES,
 )
-from .extensions import EXTENSION_HANDLERS, call_extension
-from .features import NAMES, Features
+from .dispatch import dispatch_tool
+from .features import Features
 from .files import ScopedFiles as ScopedFiles
 from .files import digest as digest
 from .files import is_reparse as is_reparse
@@ -304,126 +304,8 @@ class Runtime:
         self.checkpoint()
 
     def tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
-        if name in EXTENSION_HANDLERS:
-            return call_extension(self, name, args)
-        if name in NAMES:
-            return self.features.tool(name, args)
-        if name == "terminal_start":
-            r = self.start(
-                args["program"],
-                args.get("arguments", []),
-                args.get("cwd", "."),
-                args.get("wait_ms", 150),
-                args.get("timeout_seconds", 3600),
-                args.get("memory_mib", 1024),
-                args.get("mode", "pipe"),
-                args.get("columns", 100),
-                args.get("rows", 30),
-            )
-            warning = (
-                "\nWarning: transcript persistence failed after process startup; use this session ID to inspect/stop it; do not replay the command."
-                if not r["persistence_available"]
-                else ""
-            )
-            response = respond_text(
-                r["state"],
-                "Lệnh đã bắt đầu" if r["state"] == "RUNNING" else "Lệnh đã hoàn tất",
-                f"Phiên: {r['session_id']} | Exit: {r['exit_code']} | Next offset: {r['next_offset']}\n{r['output'][:MAX_OUTPUT_CHARS]}"
-                + warning,
-            )
-            response["structuredContent"] = r
-            return response
-        if name in {"terminal_read", "terminal_send", "terminal_stop"}:
-            ident = args["session_id"]
-            if ident not in self.sessions:
-                raise ValueError(
-                    "Unknown session; sessions are lost when server restarts"
-                )
-            session = self.sessions[ident]
-            if name == "terminal_send":
-                r = session.send(args["text"])
-                return respond_text(
-                    "PASS",
-                    "Đã gửi dữ liệu vào phiên terminal",
-                    f"Phiên: {r['session_id']}",
-                )
-            if name == "terminal_stop":
-                r = session.stop()
-                return respond_text(
-                    "PASS",
-                    "Đã dừng phiên terminal",
-                    f"Phiên: {r['session_id']} | Exit: {r['exit_code']}",
-                )
-            r = session.read(args.get("offset"), args.get("wait_ms", 100))
-            headline = (
-                "Tiến trình còn chạy"
-                if r["state"] == "RUNNING"
-                else "Tiến trình hoàn tất"
-                if r["state"] == "PASS"
-                else "Tiến trình lỗi"
-            )
-            note = "[Earlier output expired]\n" if r["output_truncated"] else ""
-            return respond_text(
-                r["state"],
-                headline,
-                f"Phiên: {r['session_id']} | Exit: {r['exit_code']} | Next offset: {r['next_offset']} | More: {r['has_more']}\n"
-                + note
-                + r["output"][:MAX_OUTPUT_CHARS],
-            )
-        if name == "file_list":
-            r = self.files.list(args.get("path", "."), args.get("limit", 100))
-            lines = [f"{entry['kind']:4} {entry['name']}" for entry in r["items"]]
-            return respond_text(
-                "PASS",
-                f"Đã liệt kê {len(lines)} mục trong {r['path']}",
-                "\n".join(lines),
-            )
-        if name == "file_read":
-            r = self.files.read(
-                args["path"], args.get("offset", 0), args.get("limit", 8192)
-            )
-            response = respond_text("PASS", f"Đã đọc {r['path']} ({r['size']} bytes)")
-            response["content"][0]["text"] += (
-                f"\nSHA256: {r['sha256']} | Next offset: {r['next_offset']} | Remaining: {r['remaining']}\n{r['content']}"
-            )
-            response["structuredContent"] = r
-            return response
-        if name == "file_write":
-            r = self.files.write(
-                args["path"], args["content"], args.get("expected_sha256", "NEW")
-            )
-            return respond_text(
-                "PASS",
-                "Đã tạo file" if r["created"] else "Đã cập nhật file",
-                f"{r['path']} | Bytes: {r['bytes']} | SHA256: {r['sha256']}",
-            )
-        if name == "file_replace":
-            r = self.files.replace(
-                args["path"],
-                args["old"],
-                args["new"],
-                args["expected_sha256"],
-                args.get("occurrences", 1),
-            )
-            return respond_text(
-                "PASS",
-                f"Đã sửa file ({r['replacements']} vị trí)",
-                f"{r['path']} | SHA256: {r['sha256']}",
-            )
-        if name == "file_search":
-            r = self.files.search(
-                args.get("path", "."),
-                args.get("pattern", "*"),
-                args.get("text", ""),
-                args.get("limit", 30),
-            )
-            return respond_text(
-                "PASS",
-                f"Tìm thấy {len(r['matches'])} file",
-                "\n".join(r["matches"])
-                + f"\nScanned: {r['scanned']} | Truncated: {r['truncated']}",
-            )
-        raise ValueError("Unknown tool")
+        """Dispatch through the canonical companion router."""
+        return dispatch_tool(self, name, args)
 
 
 def serve(rt: Runtime) -> None:

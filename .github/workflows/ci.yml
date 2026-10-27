@@ -16,11 +16,9 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install ".[office,dev]"
-      - run: python -m ruff check src/udb/fileops.py src/udb/companion/files.py src/udb/resources.py tools/audit_repository.py tests/test_repo_cleanup.py
-      - name: Whole-repository lint inventory (informational)
-        run: python -m ruff check src tools --statistics
-        continue-on-error: true
+      - run: python -m ruff check src tools tests
       - run: python tools/audit_repository.py --strict
+      - run: python tools/check_import_boundaries.py
       - run: python -m pytest
       - run: udb build
       - shell: bash
