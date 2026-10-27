@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
@@ -53,8 +54,11 @@ def reason(path: str) -> str:
 
 
 def tracked_files(root: Path) -> list[str]:
+    git = shutil.which("git")
+    if not git:
+        raise RuntimeError("Git executable is required for tracked-file auditing")
     result = subprocess.run(
-        ["git", "ls-files", "-z", "--cached"],
+        [git, "ls-files", "-z", "--cached"],
         cwd=root,
         capture_output=True,
         check=True,
