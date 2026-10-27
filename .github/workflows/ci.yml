@@ -22,6 +22,7 @@ jobs:
         continue-on-error: true
       - run: python tools/audit_repository.py --strict
       - run: python tools/check_import_boundaries.py
+      - run: python -m ruff check src/udb/companion/dispatch.py src/udb/companion/runtime.py src/udb/manager_dialogs.py src/udb/manager.py src/udb/registry.py tools/check_import_boundaries.py tests/test_architecture.py tests/test_import_boundaries.py
       - run: python -m pytest
       - run: udb build
       - shell: bash
