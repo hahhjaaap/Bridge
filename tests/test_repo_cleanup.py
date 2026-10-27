@@ -5,10 +5,10 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from tools.audit_repository import audit, reason
 from udb import resources
 from udb.companion.files import ScopedFiles
 from udb.fileops import search_files
-from tools.audit_repository import audit, reason
 
 
 def test_scoped_list_is_sorted_bounded_and_excludes_protected_paths(tmp_path):
