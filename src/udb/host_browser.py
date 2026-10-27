@@ -511,7 +511,12 @@ class Browser:
         )
 
     def _wait_for_document_ready(
-        self, tab, timeout_ms=10000, previous_url=None, require_transition=False
+        self,
+        tab,
+        timeout_ms=10000,
+        previous_url=None,
+        require_transition=False,
+        expected_loader_id=None,
     ):
         if not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool) or not 100 <= timeout_ms <= 15000:
             raise PolicyError("Navigation timeout_ms must be 100..15000")
@@ -524,6 +529,28 @@ class Browser:
                 raise PolicyError(
                     f"Navigation timed out after {timeout_ms} ms; inspect before retrying"
                 )
+            # Same-URL navigations cannot be detected by comparing href. CDP
+            # returns the new loaderId; wait until the main frame adopts it.
+            if expected_loader_id and not transition_seen:
+                try:
+                    tree = self.call(
+                        "Page.getFrameTree",
+                        session=self.sid(tab),
+                        timeout=max(0.2, min(1.0, remaining)),
+                    )
+                except PolicyError as exc:
+                    if (
+                        self._is_transient_context_error(exc)
+                        or "timed out" in str(exc).lower()
+                    ):
+                        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                        continue
+                    raise
+                frame = tree.get("frameTree", {}).get("frame", {})
+                if frame.get("loaderId") != expected_loader_id:
+                    time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                    continue
+                transition_seen = True
             try:
                 state = self.evaluate(
                     tab, expression, timeout=max(0.2, min(1.0, remaining))
@@ -574,32 +601,33 @@ class Browser:
             time.sleep(min(0.1, max(0, deadline - time.monotonic())))
 
     def _wait_for_click_navigation(
-        self, tab, previous_url, observe_ms=250, timeout_ms=10000
+        self, tab, previous_url, observe_ms=1000, timeout_ms=10000
     ):
         if not isinstance(previous_url, str) or not previous_url:
             return dict(navigation_completed=False)
         observation_ms = max(100, min(1000, int(observe_ms)))
         deadline = time.monotonic() + observation_ms / 1000
-        expression = "({readyState:document.readyState,href:location.href})"
+        # Runtime.evaluate may lose its reply while a click destroys the old
+        # execution context. Observe navigation from the browser target instead.
         transitioned = False
         while time.monotonic() < deadline:
             remaining = deadline - time.monotonic()
             try:
-                state = self.evaluate(
-                    tab, expression, timeout=max(0.2, min(0.5, remaining))
-                )
+                targets = self.call(
+                    "Target.getTargets",
+                    timeout=max(0.2, min(0.5, remaining)),
+                ).get("targetInfos", [])
             except PolicyError as exc:
-                if self._is_transient_context_error(exc):
-                    transitioned = True
-                    break
-                raise
-            if not isinstance(state, dict):
-                break
-            current_url = str(state.get("href", ""))
+                if "timed out" not in str(exc).lower():
+                    raise
+                continue
+            target = next(
+                (t for t in targets if t.get("targetId") == tab), None
+            )
+            if target is None:
+                raise PolicyError("Owned browser tab closed during click")
+            current_url = str(target.get("url", ""))
             if current_url and current_url != previous_url:
-                transitioned = True
-                break
-            if state.get("readyState") == "loading":
                 transitioned = True
                 break
             time.sleep(min(0.05, max(0, deadline - time.monotonic())))
@@ -712,6 +740,9 @@ class Browser:
             timeout_ms=timeout_ms,
             previous_url=previous_url,
             require_transition=bool(result.get("loaderId")),
+            expected_loader_id=(
+                result.get("loaderId") if previous_url == url else None
+            ),
         )
         return dict(tab_id=tab, navigation_started=True, **ready)
 
