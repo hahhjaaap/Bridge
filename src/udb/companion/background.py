@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
-import fnmatch
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -17,10 +15,11 @@ import time
 import uuid
 from pathlib import Path
 
+from udb.companion.jobs import Cancelled as Cancelled
+from udb.companion.jobs import Task as Task
 from udb.companion.journal import Journal
-from udb.companion.processes import ManagedProcess
-from udb.launcher import worker_command
-from udb.pipe_io import write_all
+from udb.companion.search import SearchMixin
+from udb.companion.search import search_worker as search_worker
 
 MAX_LARGE = 16 * 1024**3
 CHUNK = 1024 * 1024
@@ -60,108 +59,7 @@ def publish_new(source, destination):
         raise RuntimeError("Atomic no-replace publish requires Windows or Linux")
 
 
-class Cancelled(Exception):
-    pass
-
-
-class Task:
-    def __init__(self, kind):
-        self.id = uuid.uuid4().hex
-        self.kind = kind
-        self.state = "running"
-        self.error = ""
-        self.result = {}
-        self.cancel = threading.Event()
-        self.lock = threading.RLock()
-        self.rows = []
-        self.progress = {}
-        self.worker = None
-        self.thread = None
-        self.committed = False
-        self.deadline = time.monotonic() + 3600
-        self._checkpoint_version = 0
-        self._persisted_checkpoint_version = -1
-        self.persist = lambda: None
-        self.release = lambda: None
-        self.recovery = None
-
-    def check(self):
-        if self.cancel.is_set():
-            raise Cancelled()
-        if time.monotonic() > self.deadline:
-            raise TimeoutError("Background job exceeded 3600 seconds")
-
-    def commit(self, fn):
-        with self.lock:
-            self.check()
-            self.persist()
-            fn()
-            self.committed = True
-            self._checkpoint_version += 1
-            self.persist()
-
-    def start(self, fn):
-        def run():
-            try:
-                result = fn(self)
-                with self.lock:
-                    self.result = result
-                    self.state = "completed"
-                    self._checkpoint_version += 1
-            except Cancelled:
-                with self.lock:
-                    self.state = "cancelled"
-                    self._checkpoint_version += 1
-            except Exception as exc:
-                with self.lock:
-                    self.state = "error"
-                    self.error = type(exc).__name__ + ": " + str(exc)
-                    self._checkpoint_version += 1
-            finally:
-                try:
-                    self.persist()
-                finally:
-                    self.release()
-
-        self.thread = threading.Thread(target=run, daemon=True, name="UDB " + self.kind)
-        self.thread.start()
-        return self.id
-
-    def read(self, offset=0, limit=50):
-        if not 0 <= int(offset) <= 2000 or not 1 <= int(limit) <= 100:
-            raise ValueError("Job offset/limit out of range")
-        with self.lock:
-            end = min(len(self.rows), int(offset) + int(limit))
-            return dict(
-                job_id=self.id,
-                kind=self.kind,
-                state=self.state,
-                error=self.error,
-                result=self.result,
-                progress=dict(self.progress),
-                results=self.rows[int(offset) : end],
-                next_offset=end,
-                has_more=end < len(self.rows),
-                committed=self.committed,
-                cancellation_requested=self.cancel.is_set(),
-            )
-
-    def stop(self):
-        with self.lock:
-            changed = False
-            if not self.committed and not self.cancel.is_set():
-                self.cancel.set()
-                changed = True
-            if self.worker:
-                changed = True
-            if changed:
-                self._checkpoint_version += 1
-            if self.worker:
-                self.worker.terminate()
-        return self.read()
-
-
-class Background:
+class Background(SearchMixin):
     def __init__(self, files, capacity=None):
         from udb.concurrency import TaskPool
 
@@ -289,90 +187,6 @@ class Background:
         for key, row in list(self.uploads.items()):
             if row.get("state") != "committing" and time.monotonic() - row["at"] > 900:
                 self.upload("abort", upload_id=key)
-
-    def search(self, **args):
-        root = self.files.path(args.get("path", "."))
-        if not root.is_dir():
-            raise ValueError("Search path must be a directory")
-        query = args.get("text", "")
-        pattern = args.get("pattern", "*")
-        if (
-            not isinstance(query, str)
-            or len(query) > 500
-            or not isinstance(pattern, str)
-            or len(pattern) > 200
-        ):
-            raise ValueError("Bounded search text/pattern required")
-        seconds = int(args.get("timeout_seconds", 30))
-        if not 1 <= seconds <= 120:
-            raise ValueError("Search timeout 1..120 seconds")
-        config = dict(
-            root=str(self.files.root),
-            path=str(root),
-            text=query,
-            pattern=pattern,
-            regex=bool(args.get("regex", False)),
-            case_sensitive=bool(args.get("case_sensitive", False)),
-            search_type=args.get("search_type", "content"),
-        )
-        if config["search_type"] not in ("files", "content"):
-            raise ValueError("Search type files or content")
-
-        def run(task):
-            proc = ManagedProcess(worker_command("search"), str(self.files.root), 256)
-            task.worker = proc
-            deadline = time.monotonic() + seconds
-
-            def timeout():
-                while proc.poll() is None:
-                    if task.cancel.wait(0.05) or time.monotonic() > deadline:
-                        proc.terminate()
-                        return
-
-            timer = threading.Thread(target=timeout, daemon=True)
-            timer.start()
-            try:
-                write_all(proc.stdin, (json.dumps(config) + "\n").encode())
-                proc.stdin.close()
-                result = {}
-                for line in iter(lambda: proc.stdout.readline(65537), b""):
-                    task.check()
-                    if len(line) > 65536:
-                        raise ValueError("Search output frame exceeded limit")
-                    row = json.loads(line)
-                    with task.lock:
-                        if row["type"] == "match":
-                            if len(task.rows) >= 2000:
-                                raise ValueError("Search result cap exceeded")
-                            task.rows.append(row["value"])
-                            task._checkpoint_version += 1
-                        elif row["type"] == "progress":
-                            task.progress = row["value"]
-                            task._checkpoint_version += 1
-                        elif row["type"] == "done":
-                            result = row["value"]
-                        elif row["type"] == "error":
-                            raise ValueError(row["value"])
-                task.check()
-                if time.monotonic() > deadline:
-                    raise TimeoutError(
-                        "Regex/search budget exhausted; partial results retained"
-                    )
-                if proc.wait(timeout=3) != 0 or not result:
-                    raise RuntimeError("Search worker failed; partial results retained")
-                return result
-            finally:
-                proc.close()
-                task.worker = None
-                for stream in (proc.stdin, proc.stdout):
-                    try:
-                        stream.close()
-                    except (OSError, ValueError):
-                        pass
-
-        return self.new(
-            "search", run, recovery=dict(tool="search_start", arguments=args)
-        )
 
     def read_chunk(self, path, offset=0, limit=65536, expected_version=""):
         p = self.files.path(path)
@@ -577,13 +391,22 @@ class Background:
             entries = []
             total = 0
 
-            def visit(p):
-                nonlocal total
+            # Iterative DFS: no Python recursion limit and no unbounded
+            # materialization of directory entries. Each path still passes
+            # the same ScopedFiles permission and identity checks.
+            stack = [iter((src,))]
+            while stack:
                 task.check()
+                try:
+                    p = next(stack[-1])
+                except StopIteration:
+                    stack.pop()
+                    continue
                 p = self.files.path(str(p))
                 meta = identity(p)
+                is_dir = p.is_dir()
                 entries.append(
-                    (p, p.relative_to(src) if p != src else Path("."), p.is_dir(), meta)
+                    (p, p.relative_to(src) if p != src else Path("."), is_dir, meta)
                 )
                 if len(entries) > 20000:
                     raise ValueError("Tree exceeds 20,000 entries")
@@ -591,13 +414,11 @@ class Background:
                     total += meta[2]
                     if total > MAX_LARGE:
                         raise ValueError("Tree exceeds 16 GiB total limit")
-                elif p.is_dir():
-                    for child in p.iterdir():
-                        visit(child)
+                elif is_dir:
+                    stack.append(iter(p.iterdir()))
                 else:
                     raise ValueError("Only regular files and directories can be copied")
 
-            visit(src)
             with task.lock:
                 task.progress = dict(
                     entries=len(entries), total_bytes=total, copied_bytes=0
@@ -674,111 +495,6 @@ class Background:
             if action == "copy" and src.is_file()
             else None,
         )
-
-
-def search_worker():
-    from udb.companion.files import ScopedFiles
-
-    config = json.loads(sys.stdin.buffer.readline(65536))
-    files = ScopedFiles(config["root"])
-    root = files.path(config["path"])
-    query = config["text"]
-    flags = 0 if config["case_sensitive"] else re.IGNORECASE
-    rx = None
-    scanned = matches = 0
-    truncated = False
-
-    def send(kind, value):
-        print(json.dumps(dict(type=kind, value=value), ensure_ascii=True), flush=True)
-
-    try:
-        rx = re.compile(query, flags) if config["regex"] else None
-        for folder, dirs, names in os.walk(root, followlinks=False):
-
-            def allowed(p):
-                try:
-                    files.path(str(p))
-                    return True
-                except (OSError, ValueError):
-                    return False
-
-            dirs[:] = [n for n in dirs if allowed(Path(folder) / n)]
-            for name in names:
-                scanned += 1
-                if scanned > 20000:
-                    truncated = True
-                    break
-                if scanned % 100 == 0:
-                    send("progress", dict(files_scanned=scanned, matches=matches))
-                if not fnmatch.fnmatch(name, config["pattern"]):
-                    continue
-                p = Path(folder) / name
-                if not allowed(p) or not p.is_file():
-                    continue
-                if config["search_type"] == "files":
-                    found = not query or (
-                        bool(rx.search(name))
-                        if rx
-                        else (
-                            query in name
-                            if config["case_sensitive"]
-                            else query.casefold() in name.casefold()
-                        )
-                    )
-                    values = (
-                        [dict(path=str(p.relative_to(files.root)))] if found else []
-                    )
-                else:
-                    if p.stat().st_size > 64 * 1024 * 1024:
-                        continue
-                    values = []
-                    try:
-                        with p.open("r", encoding="utf-8", errors="strict") as f:
-                            lineno = 0
-                            while True:
-                                line = f.readline(8193)
-                                if not line:
-                                    break
-                                lineno += 1
-                                if len(line) > 8192 and not line.endswith("\n"):
-                                    while line and not line.endswith("\n"):
-                                        line = f.readline(8193)
-                                    continue
-                                found = (
-                                    bool(rx.search(line))
-                                    if rx
-                                    else (
-                                        query in line
-                                        if config["case_sensitive"]
-                                        else query.casefold() in line.casefold()
-                                    )
-                                )
-                                if found:
-                                    send(
-                                        "match",
-                                        dict(
-                                            path=str(p.relative_to(files.root)),
-                                            line=lineno,
-                                            text=line.rstrip()[:500],
-                                        ),
-                                    )
-                                    matches += 1
-                                    if matches >= 2000:
-                                        break
-                    except (OSError, UnicodeError):
-                        continue
-                for value in values:
-                    send("match", value)
-                    matches += 1
-                if matches >= 2000:
-                    truncated = True
-                    break
-            if truncated:
-                break
-        send("done", dict(files_scanned=scanned, matches=matches, truncated=truncated))
-    except Exception as exc:
-        send("error", type(exc).__name__ + ": " + str(exc))
-        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

@@ -25,7 +25,10 @@ udb.cli / udb.proxy (single client-facing MCP transport)
                     +--> companion.extensions (optional file/terminal helpers)
                     +--> companion.features (jobs, documents, processes)
                                 |
-                                +--> companion.background + journal
+                                +--> companion.background (job coordinator)
+                                |       +--> companion.jobs (task state/cancellation)
+                                |       +--> companion.search (bounded worker)
+                                |       +--> companion.journal (durable checkpoints)
                                 +--> companion.documents
                                 +--> companion.system_processes
 ```
@@ -43,6 +46,12 @@ Keep this separate from file permissions and owner approvals.
   owner-only approval dialogs; no remote approval API.
 - `udb.manager_refresh`: status polling and project list refresh.
 - `udb.manager_widgets`: reusable UI widgets and styles.
+- `udb.companion.jobs`: cancellation, task status and checkpoint lifecycle.
+- `udb.companion.search`: search controller plus isolated worker entrypoint;
+  `background.search_worker` remains a compatibility export.
+- `udb.companion.background`: task pool, bounded transfers, uploads, copy/move
+  and recovery. Tree inventory uses iterative DFS to avoid Python recursion
+  limits without eagerly loading entire directories.
 - `udb.desktop`: owner-side controller.
 - `udb.desktop_vm` and `udb.sandbox`: Windows Sandbox orchestration.
 - `udb.desktop_guest`: intentionally self-contained guest payload copied

@@ -2,6 +2,13 @@ name: package-and-regressions
 on: [push, pull_request]
 permissions:
   contents: read
+
+# A refactor may produce many commits in a short time. Keep only the newest
+# CI attempt per branch/event, while never cancelling main-branch validation.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   test:
     strategy:
