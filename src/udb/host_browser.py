@@ -53,6 +53,83 @@ def validate_url(value):
     return value
 
 
+
+
+_BROWSER_ROLES = frozenset(
+    {
+        "button", "link", "textbox", "searchbox", "checkbox", "radio",
+        "combobox", "listbox", "option", "heading", "tab", "menuitem",
+        "switch", "slider", "spinbutton", "treeitem",
+    }
+)
+_KEY_SPECIAL = {
+    "enter": ("Enter", "Enter", 13), "tab": ("Tab", "Tab", 9),
+    "escape": ("Escape", "Escape", 27), "esc": ("Escape", "Escape", 27),
+    "space": (" ", "Space", 32), "arrowdown": ("ArrowDown", "ArrowDown", 40),
+    "arrowup": ("ArrowUp", "ArrowUp", 38), "arrowleft": ("ArrowLeft", "ArrowLeft", 37),
+    "arrowright": ("ArrowRight", "ArrowRight", 39), "home": ("Home", "Home", 36),
+    "end": ("End", "End", 35), "pageup": ("PageUp", "PageUp", 33),
+    "pagedown": ("PageDown", "PageDown", 34), "backspace": ("Backspace", "Backspace", 8),
+    "delete": ("Delete", "Delete", 46),
+}
+_KEY_COMBOS = frozenset({
+    "CTRL+A", "CONTROL+A", "CTRL+ENTER", "CONTROL+ENTER", "SHIFT+TAB",
+    "CTRL+BACKSPACE", "CONTROL+BACKSPACE", "CTRL+ARROWLEFT", "CONTROL+ARROWLEFT",
+    "CTRL+ARROWRIGHT", "CONTROL+ARROWRIGHT", "CTRL+HOME", "CONTROL+HOME",
+    "CTRL+END", "CONTROL+END",
+})
+
+
+def validate_locator(selector="", role="", name="", exact=True):
+    if not isinstance(selector, str) or len(selector) > 500:
+        raise PolicyError("CSS selector must be a string of at most 500 characters")
+    if not isinstance(role, str) or len(role) > 40:
+        raise PolicyError("Invalid browser role")
+    if not isinstance(name, str) or len(name) > 500:
+        raise PolicyError("Accessible name must be at most 500 characters")
+    if type(exact) is not bool:
+        raise PolicyError("exact must be boolean")
+    if selector:
+        if role or name:
+            raise PolicyError("Use either a CSS selector or a role/name locator")
+        return
+    if name and not role:
+        raise PolicyError("A semantic name requires a role")
+    if role and role not in _BROWSER_ROLES:
+        raise PolicyError("Unsupported browser role")
+    if not role:
+        raise PolicyError("Provide a CSS selector or an accessible role")
+
+
+def parse_key(value):
+    if not isinstance(value, str) or not 1 <= len(value) <= 40:
+        raise PolicyError("Provide a supported browser key")
+    parts = value.split("+")
+    aliases = {"ctrl": "CTRL", "control": "CONTROL", "shift": "SHIFT", "alt": "ALT", "meta": "META"}
+    modifiers = []
+    for part in parts[:-1]:
+        token = aliases.get(part.lower())
+        if token is None or token in modifiers:
+            raise PolicyError("Unsupported browser key modifier")
+        modifiers.append(token)
+    final = parts[-1]
+    info = _KEY_SPECIAL.get(final.lower())
+    if info is None and len(final) == 1 and final.isalpha():
+        info = (final.lower(), "Key" + final.upper(), ord(final.upper()))
+    elif info is None and len(final) == 1 and final.isdigit():
+        info = (final, "Digit" + final, ord(final))
+    if info is None:
+        raise PolicyError("Unsupported browser key")
+    if modifiers and "+".join(modifiers + [final.upper()]) not in _KEY_COMBOS:
+        raise PolicyError("That browser key combination is not allowed")
+    mask = 0
+    for modifier in modifiers:
+        mask |= {"ALT": 1, "CTRL": 2, "CONTROL": 2, "META": 4, "SHIFT": 8}[modifier]
+    key, code, vk = info
+    text = key if not modifiers and (len(final) == 1 or final.lower() == "space") else ""
+    return dict(key=key, code=code, vk=vk, modifiers=mask, text=text)
+
+
 class OwnedProcess:
     """Windows Job Object: membership is captured at spawn, never trusted PIDs."""
 
@@ -215,10 +292,16 @@ def find_browser():
     candidates = [
         Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
         / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
+        / "Microsoft/Edge/Application/msedge.exe",
+        Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+        / "Google/Chrome/Application/chrome.exe",
         Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
         / "Microsoft/Edge/Application/msedge.exe",
         Path(os.environ.get("LOCALAPPDATA", ""))
         / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("LOCALAPPDATA", ""))
+        / "Microsoft/Edge/Application/msedge.exe",
     ]
     for p in candidates:
         if p.is_file():
@@ -357,11 +440,17 @@ class Browser:
             raise PolicyError("Unknown or foreign tab; use host browser list")
         return self.tabs[tab]
 
-    def evaluate(self, tab, expression):
+    def evaluate(self, tab, expression, timeout=10):
         r = self.call(
             "Runtime.evaluate",
-            dict(expression=expression, returnByValue=True, timeout=5000),
+            dict(
+                expression=expression,
+                returnByValue=True,
+                awaitPromise=False,
+                timeout=max(100, min(10000, int(timeout * 1000))),
+            ),
             self.sid(tab),
+            timeout=timeout,
         )
         if r.get("exceptionDetails"):
             raise PolicyError("Page operation failed; inspect page state")
@@ -409,36 +498,189 @@ class Browser:
     def read(self, tab):
         return self.evaluate(
             tab,
-            """(() => ({url:location.href,title:document.title,
-          text:(document.body?.innerText||'').slice(0,20000),
-          elements:Array.from(document.querySelectorAll('a,button,input,textarea,select,[role=button]')).slice(0,120).map(e=>({
-            tag:e.tagName,id:e.id,name:e.getAttribute('name'),type:e.getAttribute('type'),
-            text:(e.innerText||e.getAttribute('aria-label')||'').slice(0,200),
-            value:e.type==='password'?'[redacted]':String(e.value||'').slice(0,300)}))}))()""",
+            """(() => {
+              const textOf=e=>String(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim();
+              const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();
+                return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)>0&&r.width>0&&r.height>0;};
+              return {url:location.origin==='null'?'about:blank':location.origin+location.pathname,
+                title:String(document.title||'').slice(0,500),
+                text:(document.body?.innerText||'').slice(0,20000),
+                elements:Array.from(document.querySelectorAll('a[href],button,input:not([type="hidden"]),textarea,select,[role]'))
+                  .filter(visible).slice(0,120).map(e=>{
+                    const type=(e.getAttribute('type')||'').toLowerCase();
+                    const secret=type==='password'||type==='file'||/password|secret|token|otp|one-time-code/i.test([e.autocomplete,e.name,e.id].join(' '));
+                    return {tag:e.tagName,id:String(e.id||'').slice(0,120),name:e.getAttribute('name'),type,
+                      role:e.getAttribute('role')||'',placeholder:String(e.getAttribute('placeholder')||'').slice(0,160),
+                      text:textOf(e).slice(0,200),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true',
+                      value:secret?'[redacted]':String(e.value||'').slice(0,300)};
+                  })};
+            })()""",
+            timeout=5,
         )
 
-    def element(self, tab, operation, selector, value=""):
-        if operation not in ("click", "fill"):
-            raise PolicyError("Unsupported browser element action")
-        if not isinstance(selector, str) or not 1 <= len(selector) <= 500:
-            raise PolicyError("Provide a CSS selector")
-        if not isinstance(value, str) or len(value) > 16000:
-            raise PolicyError("Text exceeds limit")
+    @staticmethod
+    def _locator_expression(selector, role, name, exact, body, visible_only=True, unique=True):
+        validate_locator(selector, role, name, exact)
+        template = """(() => {
+          const selector = __SELECTOR__, wantedRole = __ROLE__, wantedName = __NAME__, exact = __EXACT__;
+          const isVisible = e => { const s=getComputedStyle(e),r=e.getBoundingClientRect();
+            return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)>0&&r.width>0&&r.height>0; };
+          const textOf = e => String(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim();
+          const roleOf = e => {
+            const explicit=(e.getAttribute('role')||'').trim().split(/\\s+/)[0]; if(explicit)return explicit;
+            const tag=e.tagName.toLowerCase(),type=(e.getAttribute('type')||'').toLowerCase();
+            if(tag==='a'&&e.hasAttribute('href'))return 'link';
+            if(tag==='button'||tag==='summary'||['button','submit','reset','image'].includes(type))return 'button';
+            if(tag==='textarea'||e.isContentEditable)return 'textbox';
+            if(tag==='select')return e.multiple?'listbox':'combobox';
+            if(tag==='input'){if(type==='checkbox')return 'checkbox';if(type==='radio')return 'radio';
+              if(type==='range')return 'slider';if(type==='number')return 'spinbutton';if(type==='search')return 'searchbox';
+              if(type==='hidden')return 'none';if(type==='file')return 'button';return 'textbox';}
+            if(tag==='option')return 'option';if(/^h[1-6]$/.test(tag))return 'heading';return '';
+          };
+          const nameOf = e => {
+            const ids=(e.getAttribute('aria-labelledby')||'').trim().split(/\\s+/).filter(Boolean);
+            const labelled=ids.map(id=>document.getElementById(id)).filter(Boolean).map(textOf).join(' ').trim();
+            const labels=e.labels?Array.from(e.labels).map(textOf).filter(Boolean).join(' '):'';
+            return String(labelled||e.getAttribute('aria-label')||labels||e.getAttribute('alt')||e.getAttribute('title')
+              ||e.getAttribute('placeholder')||textOf(e)||e.getAttribute('name')||e.id||'').trim().slice(0,500);
+          };
+          let matches=[];
+          if(selector){try{matches=Array.from(document.querySelectorAll(selector));}catch(_){return {ok:false,error:'invalid_selector'};}}
+          else matches=Array.from(document.querySelectorAll('a[href],button,input:not([type="hidden"]),textarea,select,summary,[role],[contenteditable="true"],[tabindex],h1,h2,h3,h4,h5,h6'))
+            .filter(e=>roleOf(e)===wantedRole&&(!wantedName||(exact?nameOf(e)===wantedName:nameOf(e).includes(wantedName))));
+          if(__VISIBLE_ONLY__)matches=matches.filter(isVisible);
+          if(__UNIQUE__&&matches.length!==1)return {ok:false,error:'locator_not_unique',matches:matches.length};
+          const e=matches[0]||null;
+          __BODY__
+        })()"""
+        return (
+            template.replace("__SELECTOR__", json.dumps(selector))
+            .replace("__ROLE__", json.dumps(role))
+            .replace("__NAME__", json.dumps(name))
+            .replace("__EXACT__", "true" if exact else "false")
+            .replace("__VISIBLE_ONLY__", "true" if visible_only else "false")
+            .replace("__UNIQUE__", "true" if unique else "false")
+            .replace("__BODY__", body)
+        )
+
+    def snapshot(self, tab):
         return self.evaluate(
             tab,
             """(() => {
-          const a=document.querySelectorAll(%s); if(a.length!==1) return {ok:false,error:'selector_not_unique',matches:a.length};
-          const e=a[0]; if(e.disabled||e.readOnly) return {ok:false,error:'disabled_or_readonly'};
-          if(%s==='fill') {
-            if(!['INPUT','TEXTAREA'].includes(e.tagName)||e.type==='file') return {ok:false,error:'unsupported_control'};
-            const p=e.tagName==='INPUT'?HTMLInputElement.prototype:HTMLTextAreaElement.prototype;
-            Object.getOwnPropertyDescriptor(p,'value').set.call(e,%s);
-            e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));
-          } else e.click();
-          return {ok:true};
-        })()"""
-            % (json.dumps(selector), json.dumps(operation), json.dumps(value)),
+              const textOf=e=>String(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim();
+              const roleOf=e=>{const x=(e.getAttribute('role')||'').trim().split(/\\s+/)[0];if(x)return x;
+                const t=e.tagName.toLowerCase(),y=(e.getAttribute('type')||'').toLowerCase();
+                if(t==='a'&&e.hasAttribute('href'))return 'link';if(t==='button'||t==='summary'||['button','submit','reset','image'].includes(y))return 'button';
+                if(t==='textarea'||e.isContentEditable)return 'textbox';if(t==='select')return e.multiple?'listbox':'combobox';
+                if(t==='input'){if(y==='checkbox')return 'checkbox';if(y==='radio')return 'radio';if(y==='range')return 'slider';if(y==='number')return 'spinbutton';if(y==='search')return 'searchbox';if(y==='hidden')return 'none';if(y==='file')return 'button';return 'textbox';}
+                if(t==='option')return 'option';if(/^h[1-6]$/.test(t))return 'heading';return '';};
+              const nameOf=e=>{const ids=(e.getAttribute('aria-labelledby')||'').trim().split(/\\s+/).filter(Boolean);
+                const labelled=ids.map(id=>document.getElementById(id)).filter(Boolean).map(textOf).join(' ').trim();
+                const labels=e.labels?Array.from(e.labels).map(textOf).filter(Boolean).join(' '):'';
+                return String(labelled||e.getAttribute('aria-label')||labels||e.getAttribute('alt')||e.getAttribute('title')||e.getAttribute('placeholder')||textOf(e)||e.getAttribute('name')||e.id||'').trim().slice(0,240);};
+              const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)>0&&r.width>0&&r.height>0;};
+              const all=Array.from(document.querySelectorAll('a[href],button,input:not([type="hidden"]),textarea,select,summary,[role],[contenteditable="true"],[tabindex],h1,h2,h3,h4,h5,h6')).filter(visible);
+              const elements=all.slice(0,160).map((e,i)=>{const type=(e.getAttribute('type')||'').toLowerCase();
+                const secret=type==='password'||type==='file'||/password|secret|token|otp|one-time-code/i.test([e.autocomplete,e.name,e.id].join(' '));
+                let href='';try{const u=new URL(e.href,location.href);if(['http:','https:'].includes(u.protocol))href=u.origin+u.pathname;}catch(_){}
+                return {index:i+1,role:roleOf(e),name:nameOf(e),tag:e.tagName.toLowerCase(),type,
+                  id:String(e.id||'').slice(0,120),name_attr:String(e.getAttribute('name')||'').slice(0,120),
+                  placeholder:String(e.getAttribute('placeholder')||'').slice(0,160),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true',
+                  checked:typeof e.checked==='boolean'?e.checked:null,selected:typeof e.selected==='boolean'?e.selected:null,
+                  value:secret?'[redacted]':String(e.value||'').slice(0,160),href};});
+              return {url:location.origin==='null'?'about:blank':location.origin+location.pathname,title:String(document.title||'').slice(0,500),
+                count:all.length,truncated:all.length>160,elements};
+            })()""",
+            timeout=5,
         )
+
+    def element(self, tab, operation, selector="", value="", role="", name="", exact=True):
+        if operation not in ("click", "fill", "select_option", "check", "uncheck"):
+            raise PolicyError("Unsupported browser element action")
+        if not isinstance(value, str) or len(value) > 16000:
+            raise PolicyError("Text exceeds limit")
+        if operation == "select_option" and (not value or len(value) > 500):
+            raise PolicyError("select_option requires an option value or label")
+        if operation == "click":
+            body = """if(e.disabled||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};e.click();return {ok:true};"""
+        elif operation == "fill":
+            body = """if(e.disabled||e.readOnly||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled_or_readonly'};
+              if(e.isContentEditable){e.textContent=__VALUE__;}else{
+                if(!['INPUT','TEXTAREA'].includes(e.tagName)||e.type==='file'||['button','submit','reset','checkbox','radio','hidden','image'].includes((e.type||'').toLowerCase()))return {ok:false,error:'unsupported_control'};
+                const p=e.tagName==='INPUT'?HTMLInputElement.prototype:HTMLTextAreaElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e,__VALUE__);}
+              e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return {ok:true};""".replace("__VALUE__",json.dumps(value))
+        elif operation == "select_option":
+            body = """if(e.tagName!=='SELECT'||e.disabled)return {ok:false,error:'unsupported_control'};
+              const wanted=__VALUE__;const option=Array.from(e.options).find(o=>o.value===wanted||o.label===wanted||String(o.textContent||'').trim()===wanted);
+              if(!option||option.disabled)return {ok:false,error:'option_not_found'};e.value=option.value;
+              e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));
+              return {ok:e.value===option.value,value:e.value,label:option.label||String(option.textContent||'').trim()};""".replace("__VALUE__",json.dumps(value))
+        else:
+            desired="true" if operation=="check" else "false"
+            body="""const native=e.tagName==='INPUT'&&['checkbox','radio'].includes((e.type||'').toLowerCase());const role=(e.getAttribute('role')||'').toLowerCase();
+              if(!native&&!['checkbox','radio'].includes(role))return {ok:false,error:'unsupported_control'};
+              if((native&&e.type==='radio'||role==='radio')&&__DESIRED__===false)return {ok:false,error:'radio_cannot_be_unchecked'};
+              const current=native?!!e.checked:e.getAttribute('aria-checked')==='true';if(current!==__DESIRED__)e.click();
+              const after=native?!!e.checked:e.getAttribute('aria-checked')==='true';return {ok:after===__DESIRED__,checked:after};""".replace("__DESIRED__",desired)
+        return self.evaluate(tab,self._locator_expression(selector,role,name,exact,body))
+
+    def wait_for(self, tab, selector="", role="", name="", exact=True, state="visible", value="", timeout_ms=5000):
+        if state not in {"attached","visible","hidden","enabled","text"}:
+            raise PolicyError("wait_for state must be attached, visible, hidden, enabled or text")
+        if type(timeout_ms) is not int or not 100 <= timeout_ms <= 10000:
+            raise PolicyError("wait_for timeout_ms must be 100..10000")
+        if state=="text":
+            if not isinstance(value,str) or not 1 <= len(value) <= 2000: raise PolicyError("wait_for state=text requires value")
+            if not selector and not role: selector="body"
+        elif value: raise PolicyError("value is only used with wait_for state=text")
+        validate_locator(selector,role,name,exact)
+        body="""const visibleMatches=matches.filter(isVisible);const enabledMatches=visibleMatches.filter(e=>!e.disabled&&e.getAttribute('aria-disabled')!=='true');
+          const textMatches=matches.filter(e=>String(e.innerText||e.textContent||'').includes(__VALUE__));const state=__STATE__;
+          const ok=state==='attached'?matches.length>0:state==='visible'?visibleMatches.length>0:state==='hidden'?(matches.length===0||visibleMatches.length===0):state==='enabled'?enabledMatches.length>0:state==='text'?textMatches.length>0:false;
+          return {ok,state,matches:matches.length,visible:visibleMatches.length,enabled:enabledMatches.length};"""
+        body=body.replace("__VALUE__",json.dumps(value)).replace("__STATE__",json.dumps(state))
+        expression=self._locator_expression(selector,role,name,exact,body,visible_only=False,unique=False)
+        deadline=time.monotonic()+timeout_ms/1000
+        while True:
+            remaining=deadline-time.monotonic()
+            if remaining<=0:return dict(ok=False,timed_out=True,state=state)
+            try: result=self.evaluate(tab,expression,timeout=max(0.2,min(1.5,remaining)))
+            except PolicyError:
+                if time.monotonic()>=deadline:return dict(ok=False,timed_out=True,state=state)
+                raise
+            if result.get("error")=="invalid_selector":return dict(ok=False,error="invalid_selector",state=state)
+            if result.get("ok"):return result
+            if time.monotonic()>=deadline:return dict(ok=False,timed_out=True,state=state,matches=result.get("matches",0))
+            time.sleep(min(0.1,max(0,deadline-time.monotonic())))
+
+    def press(self, tab, key, selector="", role="", name="", exact=True):
+        info=parse_key(key)
+        body="""if(e.disabled||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};
+          if(typeof e.focus!=='function')return {ok:false,error:'not_focusable'};e.focus();
+          return {ok:document.activeElement===e||e.contains(document.activeElement),error:'not_focusable'};"""
+        focused=self.evaluate(tab,self._locator_expression(selector,role,name,exact,body))
+        if not focused.get("ok"):return focused
+        session=self.sid(tab)
+        params=dict(key=info["key"],code=info["code"],windowsVirtualKeyCode=info["vk"],modifiers=info["modifiers"])
+        if info["text"]:params["text"]=info["text"];params["unmodifiedText"]=info["text"]
+        self.call("Input.dispatchKeyEvent",dict(type="keyDown",**params),session,timeout=2)
+        self.call("Input.dispatchKeyEvent",dict(type="keyUp",**params),session,timeout=2)
+        return dict(ok=True,key=key,focused=True)
+
+    def history(self, tab, action):
+        session=self.sid(tab)
+        if action=="reload":
+            self.call("Page.reload",dict(ignoreCache=False),session,timeout=5)
+            return dict(ok=True,action=action)
+        if action not in ("back","forward"):raise PolicyError("Unsupported history action")
+        history=self.call("Page.getNavigationHistory",session=session,timeout=5)
+        entries=history.get("entries",[]);index=history.get("currentIndex",0)+(-1 if action=="back" else 1)
+        if not 0<=index<len(entries):return dict(ok=False,reason="no_history",action=action)
+        entry=entries[index];self.call("Page.navigateToHistoryEntry",dict(entryId=entry["id"]),session,timeout=5)
+        safe=urlsplit(str(entry.get("url","")))
+        safe_url=(safe.scheme+"://"+safe.netloc+safe.path) if safe.scheme in ("http","https") else ""
+        return dict(ok=True,action=action,url=safe_url)
 
     def screenshot(self, tab):
         result = self.call(
