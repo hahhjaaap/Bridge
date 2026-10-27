@@ -15,10 +15,11 @@ import time
 import uuid
 from pathlib import Path
 
-from udb.companion.journal import Journal
 from udb.companion.jobs import Cancelled as Cancelled
 from udb.companion.jobs import Task as Task
-from udb.companion.search import SearchMixin, search_worker as search_worker
+from udb.companion.journal import Journal
+from udb.companion.search import SearchMixin
+from udb.companion.search import search_worker as search_worker
 
 MAX_LARGE = 16 * 1024**3
 CHUNK = 1024 * 1024
