@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from udb.companion.background import Background, Cancelled, Task, search_worker
 from udb.companion.files import ScopedFiles
@@ -47,5 +48,26 @@ def test_search_unicode_accounting_content_and_filenames(tmp_path):
         filenames = _wait(bg, file_job["job_id"])
         assert filenames["state"] == "completed", filenames
         assert any("HÓA ĐƠN QUÝ 3.txt" in r["path"] for r in filenames["results"])
+    finally:
+        bg.close()
+
+
+def test_iterative_file_copy_preserves_nested_tree(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    nested = source
+    for _ in range(30):
+        nested = nested / "d"
+        nested.mkdir()
+    (nested / "hoa_don.txt").write_text("Thuế GTGT", encoding="utf-8")
+    bg = Background(ScopedFiles(str(tmp_path)))
+    try:
+        job = bg.file_operation("copy", source="source", destination="backup")
+        result = _wait(bg, job["job_id"])
+        assert result["state"] == "completed", result
+        assert result["result"]["entries"] == 32
+        assert (
+            tmp_path / "backup" / Path(*(["d"] * 30)) / "hoa_don.txt"
+        ).read_text(encoding="utf-8") == "Thuế GTGT"
     finally:
         bg.close()
