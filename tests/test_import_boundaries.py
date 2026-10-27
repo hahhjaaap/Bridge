@@ -38,5 +38,8 @@ def test_type_checking_only_import_does_not_create_runtime_cycle(tmp_path):
         "from typing import TYPE_CHECKING\n"
         "if TYPE_CHECKING:\n    from . import second\n"
     )
-    (package / "second.py").write_text("from . import first\n")
+    (package / "second.py").write_text(
+        "import typing\n"
+        "if typing.TYPE_CHECKING:\n    from . import first\n"
+    )
     assert import_cycles(import_graph(package)) == []
