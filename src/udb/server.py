@@ -715,7 +715,9 @@ class AuthenticatedASGI:
             return await self._reject(send, 401, "unauthorized")
 
         lengths = [value for name, value in headers if name.lower() == b"content-length"]
-        if len(lengths) > 1 or (lengths and not lengths[0].isdigit()):
+        if len(lengths) > 1 or (
+            lengths and (not 1 <= len(lengths[0]) <= 12 or not lengths[0].isdigit())
+        ):
             return await self._reject(send, 400, "invalid request length")
         if lengths and int(lengths[0]) > self.MAX_BODY:
             return await self._reject(send, 413, "request too large")
