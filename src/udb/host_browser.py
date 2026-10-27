@@ -1080,3 +1080,45 @@ class Browser:
     def freeze(self, frozen):
         if self.frozen == frozen:
             return
+
+        errors = 0
+        for tab in list(self.tabs):
+            try:
+                if frozen:
+                    self.call("Page.stopLoading", session=self.sid(tab), timeout=2)
+                self.call(
+                    "Page.setWebLifecycleState",
+                    dict(state="frozen" if frozen else "active"),
+                    self.sid(tab),
+                    timeout=2,
+                )
+            except Exception:
+                errors += 1
+        self.freeze_errors = errors
+        if not errors:
+            self.frozen = frozen
+
+    def close_tab(self, tab):
+        self.sid(tab)
+        result = self.call("Target.closeTarget", dict(targetId=tab))
+        if result.get("success"):
+            self.tabs.pop(tab)
+        return result
+
+    def close(self):
+        if self.ws:
+            try:
+                self.ws.close(timeout=1)
+            except Exception:
+                pass  # The socket may already be closed; continue owned-process cleanup.
+            self.ws = None
+        if self.proc:
+            self.proc.close()
+            self.proc = None
+        if self.folder.exists():
+            for _ in range(6):
+                try:
+                    shutil.rmtree(self.folder)
+                    break
+                except OSError:
+                    time.sleep(0.1)
