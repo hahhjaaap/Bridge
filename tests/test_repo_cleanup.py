@@ -38,6 +38,19 @@ def test_scoped_search_does_not_descend_into_protected_data(tmp_path):
     assert result["scanned"] == 1
 
 
+def test_scoped_search_preserves_multiline_and_unicode_matching(tmp_path):
+    (tmp_path / "sample.txt").write_text(
+        "Tiếng Việt\nSECOND LINE\n", encoding="utf-8"
+    )
+    files = ScopedFiles(str(tmp_path))
+    assert files.search(pattern="*.txt", text="tiếng việt")["matches"] == [
+        "sample.txt"
+    ]
+    assert files.search(pattern="*.txt", text="Việt\nSECOND")["matches"] == [
+        "sample.txt"
+    ]
+
+
 def test_source_search_returns_only_first_ten_hits_with_original_line_numbers(tmp_path):
     source = tmp_path / "sample.py"
     source.write_text(
