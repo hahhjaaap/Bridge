@@ -1,3 +1,15 @@
+# Windows lifecycle (0.10.0)
+
+Checks actually run on 2026-10-27:
+
+- Final runtime source (`8c6a312d43eac0cbabaeaf2fdc41b954ce80997d`): Linux 658 passed, 10 skipped, 27 subtests; owner's Windows PC 656 passed, 12 skipped, 27 subtests. Ruff passed. The native run used a separate source review folder and synthetic/temporary homes.
+- Recovery tests simulate short outages, continuous failed readiness, long monitor gaps, stale responses, stop/close races and failed child termination. They verify cancellation and no tool-call replay. These are simulations, not a physical sleep/network-interruption experiment on the owner's PC.
+- Windows logon tests use an isolated registry key outside Run, execute the actual generated helper against a temporary offline home, verify its heartbeat, stop it and remove the helper/key. The real user's startup configuration is not changed by these tests. Commands stay within the Windows Run-key length limit; paths are literal and Unicode helpers include the PowerShell 5 BOM.
+- A native frozen candidate from `51d2d4d0d84df1746f0e95e7aed806bfd520dff5` passed copied-EXE MCP/runtime/Office/lifecycle checks with Python/Node removed from PATH. Its HTTP installer test passed reinstall, transient 503 retry, running offline update, manual rollback and synthetic startup-failure rollback. This candidate predates the final short logon helper and updater-ancestry guard and is not the final release binary.
+- The release pipeline builds the final source again, requires pytest/Ruff, frozen checks and the expanded installer scenarios before publication, then downloads and installs the public HTTPS release. Consult that release's Actions run for the final binary result.
+
+No production credentials were read or created, no owner grants were issued, and AI VIET/data/training were not changed. ChatGPT webpage load failures and actual power/network changes remain outside these automated checks. Update/rollback must run outside the target agent's own job tree; otherwise stopping the agent would terminate the updater. This is reported before mutation.
+
 # Validation of source consolidation (0.9.0)
 
 This is the historical 0.9.0 record. See `AUDIT.md` for the current 0.9.1 audit and its own validation status.
