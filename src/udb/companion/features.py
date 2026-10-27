@@ -228,11 +228,11 @@ TOOLS.extend(
         ),
         schema(
             "spreadsheet",
-            "Project XLSX inspect/read/write/edit_cells in an isolated background job. Poll/cancel with file_operation. <=32 MiB compressed input, <=64 MiB expanded Office XML. read range default A1:J50, <=5000 cells; write sheets={name:2D rows}, <=10000 cells; edit_cells sheet/cells={A1:value} needs source expected_sha256. Writes default NEW; existing targets need SHA256. Optional destination is create-only. Strings stay text unless allow_formulas=true; formulas never evaluated. Other spreadsheet formats unsupported.",
+            "Project XLSX read/write/edit plus Vietnamese accounting audit_invoices (read-only) and export_audit (separate NEW XLSX review report). For export_audit supply destination and source expected_sha256; original is never edited. Optional header_row 1..25, column_map field-to-header/column, tolerance_vnd. Detect possible duplicate invoice identifiers, missing fields and net+VAT vs total discrepancies; no tax-law conclusions or formula evaluation. Bounded background job, poll/cancel with file_operation. Office XML <=64 MiB; max 10000 invoice rows. Other spreadsheet formats unsupported.",
             dict(
                 COMMON,
                 action=dict(
-                    type="string", enum=["inspect", "read", "write", "edit_cells"]
+                    type="string", enum=["inspect", "read", "write", "edit_cells", "audit_invoices", "export_audit"]
                 ),
                 sheet=S,
                 range=S,
@@ -240,6 +240,9 @@ TOOLS.extend(
                 cells={"type": "object"},
                 data_only=B,
                 allow_formulas=B,
+                header_row=INTEGER,
+                column_map={"type": "object"},
+                tolerance_vnd=INTEGER,
             ),
             ("action", "path"),
         ),
