@@ -663,8 +663,11 @@ class Browser:
         if not focused.get("ok"):return focused
         session=self.sid(tab)
         params=dict(key=info["key"],code=info["code"],windowsVirtualKeyCode=info["vk"],modifiers=info["modifiers"])
-        if info["text"]:params["text"]=info["text"];params["unmodifiedText"]=info["text"]
-        self.call("Input.dispatchKeyEvent",dict(type="keyDown",**params),session,timeout=2)
+        down_params=dict(params)
+        if info["text"]:
+            down_params["text"]=info["text"]
+            down_params["unmodifiedText"]=info["text"]
+        self.call("Input.dispatchKeyEvent",dict(type="keyDown",**down_params),session,timeout=2)
         self.call("Input.dispatchKeyEvent",dict(type="keyUp",**params),session,timeout=2)
         return dict(ok=True,key=key,focused=True)
 

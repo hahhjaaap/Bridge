@@ -379,6 +379,11 @@ def test_browser_press_focuses_owned_element_then_dispatches_cdp_key():
     assert [item[0] for item in calls] == ["Input.dispatchKeyEvent", "Input.dispatchKeyEvent"]
     assert calls[0][1]["type"] == "keyDown" and calls[1][1]["type"] == "keyUp"
     assert all(item[2] == "owned-session" for item in calls)
+    calls.clear()
+    result = browser.press("owned-tab", "a", role="textbox", name="Search")
+    assert result["ok"]
+    assert calls[0][1]["text"] == "a"
+    assert "text" not in calls[1][1] and "unmodifiedText" not in calls[1][1]
 
 
 def test_browser_select_option_requires_native_select_and_verifies_selection():
