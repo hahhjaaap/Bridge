@@ -43,11 +43,16 @@ function Get-Sha([string]$Path) {
 function Write-AtomicText([string]$Path,[string]$Text) {
     [void](Assert-LocalPath $Path)
     $temporary = $Path + '.' + [Guid]::NewGuid().ToString('N') + '.new'
+    $backup = $Path + '.' + [Guid]::NewGuid().ToString('N') + '.old'
     try {
         $stream = [IO.File]::Open($temporary,[IO.FileMode]::CreateNew)
         try { $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text); $stream.Write($bytes,0,$bytes.Length) } finally { $stream.Dispose() }
-        if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($temporary,$Path,$null) } else { [IO.File]::Move($temporary,$Path) }
-    } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
+        # Windows PowerShell converts null strings to empty paths in this overload.
+        if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($temporary,$Path,$backup) } else { [IO.File]::Move($temporary,$Path) }
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+        if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force }
+    }
 }
 function Get-InstallRecord([string]$Path) {
     [void](Assert-LocalPath $Path)
