@@ -37,8 +37,8 @@ from .constants import (
     PROTECTED_PREFIXES,
     PROTECTED_SUFFIXES,
 )
-from .features import Features
 from .dispatch import dispatch_tool
+from .features import Features
 from .files import ScopedFiles as ScopedFiles
 from .files import digest as digest
 from .files import is_reparse as is_reparse
