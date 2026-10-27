@@ -38,11 +38,18 @@ def validate_url(value):
         or any(ord(c) < 32 for c in value)
     ):
         raise PolicyError("Invalid URL")
-    u = urlsplit(value)
-    if u.scheme not in ("https", "http") or not u.hostname or u.username or u.password:
+    try:
+        u = urlsplit(value)
+        host = (u.hostname or "").lower().rstrip(".")
+        # Accessing .port validates malformed/out-of-range port values.
+        _ = u.port
+    except ValueError as exc:
+        raise PolicyError("Invalid URL") from exc
+    if u.scheme not in ("https", "http") or not host or u.username or u.password:
         raise PolicyError("Only HTTP(S) pages without embedded credentials")
-    host = u.hostname.lower()
-    if host == "localhost" or host.endswith((".localhost", ".local")):
+    if host == "localhost" or host.endswith(
+        (".localhost", ".local", ".internal")
+    ):
         raise PolicyError("Local browser endpoints are private")
     try:
         address = ipaddress.ip_address(host)
@@ -61,6 +68,26 @@ _BROWSER_ROLES = frozenset(
         "combobox", "listbox", "option", "heading", "tab", "menuitem",
         "switch", "slider", "spinbutton", "treeitem",
     }
+)
+# Defense in depth for redirects and subresources. Direct navigation is also
+# validated in Python before the browser is asked to navigate.
+_BLOCKED_URL_PATTERNS = tuple(
+    [
+        "*://localhost/*",
+        "*://*.localhost/*",
+        "*://*.local/*",
+        "*://*.internal/*",
+        "*://127.*/*",
+        "*://10.*/*",
+        "*://192.168.*/*",
+        "*://169.254.*/*",
+        "*://[::1]/*",
+        "*://[fc00:*/*",
+        "*://[fd00:*/*",
+        "*://[fe80:*/*",
+        "*://metadata.google.internal/*",
+    ]
+    + [f"*://172.{octet}.*/*" for octet in range(16, 32)]
 )
 _KEY_SPECIAL = {
     "enter": ("Enter", "Enter", 13), "tab": ("Tab", "Tab", 9),
@@ -430,9 +457,23 @@ class Browser:
             "sessionId"
         ]
         self.tabs[target] = sid
-        self.call("Page.enable", session=sid)
-        self.call("Emulation.setCPUThrottlingRate", dict(rate=2), sid)
-        self.call("Page.setDownloadBehavior", dict(behavior="deny"), sid)
+        try:
+            self.call("Page.enable", session=sid)
+            self.call("Network.enable", session=sid)
+            self.call(
+                "Network.setBlockedURLs",
+                dict(urls=list(_BLOCKED_URL_PATTERNS)),
+                session=sid,
+            )
+            self.call("Emulation.setCPUThrottlingRate", dict(rate=2), sid)
+            self.call("Page.setDownloadBehavior", dict(behavior="deny"), sid)
+        except BaseException:
+            self.tabs.pop(target, None)
+            try:
+                self.call("Target.detachFromTarget", dict(sessionId=sid), timeout=2)
+            except Exception:
+                pass
+            raise
         return target
 
     def sid(self, tab):
@@ -456,24 +497,191 @@ class Browser:
             raise PolicyError("Page operation failed; inspect page state")
         return r.get("result", {}).get("value")
 
+    @staticmethod
+    def _is_transient_context_error(exc):
+        message = str(exc).lower()
+        return any(
+            token in message
+            for token in (
+                "cannot find context",
+                "execution context was destroyed",
+                "no frame with given id",
+                "inspected target navigated or closed",
+            )
+        )
+
+    def _wait_for_document_ready(
+        self, tab, timeout_ms=10000, previous_url=None, require_transition=False
+    ):
+        if not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool) or not 100 <= timeout_ms <= 15000:
+            raise PolicyError("Navigation timeout_ms must be 100..15000")
+        deadline = time.monotonic() + timeout_ms / 1000
+        transition_seen = not require_transition
+        expression = "({readyState:document.readyState,href:location.href})"
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise PolicyError(
+                    f"Navigation timed out after {timeout_ms} ms; inspect before retrying"
+                )
+            try:
+                state = self.evaluate(
+                    tab, expression, timeout=max(0.2, min(1.0, remaining))
+                )
+            except PolicyError as exc:
+                if self._is_transient_context_error(exc):
+                    transition_seen = True
+                    time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                    continue
+                raise
+            if not isinstance(state, dict):
+                raise PolicyError("Browser returned an invalid navigation state")
+            current_url = str(state.get("href", ""))
+            if previous_url is not None and current_url != previous_url:
+                transition_seen = True
+            if state.get("readyState") == "loading":
+                transition_seen = True
+            if not transition_seen:
+                time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                continue
+            if current_url:
+                try:
+                    validate_url(current_url)
+                except PolicyError as exc:
+                    try:
+                        self.call("Page.stopLoading", session=self.sid(tab), timeout=1)
+                    except Exception:
+                        pass
+                    parsed = urlsplit(current_url)
+                    if parsed.scheme in ("http", "https"):
+                        raise PolicyError(
+                            "Navigation reached a blocked private URL"
+                        ) from exc
+                    raise PolicyError(
+                        "Navigation failed outside the allowed HTTP(S) URL space"
+                    ) from exc
+            if state.get("readyState") == "complete":
+                if current_url == "about:blank":
+                    safe_url = current_url
+                else:
+                    parsed = urlsplit(current_url)
+                    safe_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                return dict(
+                    navigation_completed=True,
+                    ready_state="complete",
+                    url=safe_url,
+                )
+            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+
+    def _wait_for_click_navigation(
+        self, tab, previous_url, observe_ms=250, timeout_ms=10000
+    ):
+        if not isinstance(previous_url, str) or not previous_url:
+            return dict(navigation_completed=False)
+        observation_ms = max(100, min(1000, int(observe_ms)))
+        deadline = time.monotonic() + observation_ms / 1000
+        expression = "({readyState:document.readyState,href:location.href})"
+        transitioned = False
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            try:
+                state = self.evaluate(
+                    tab, expression, timeout=max(0.2, min(0.5, remaining))
+                )
+            except PolicyError as exc:
+                if self._is_transient_context_error(exc):
+                    transitioned = True
+                    break
+                raise
+            if not isinstance(state, dict):
+                break
+            current_url = str(state.get("href", ""))
+            if current_url and current_url != previous_url:
+                transitioned = True
+                break
+            if state.get("readyState") == "loading":
+                transitioned = True
+                break
+            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        if not transitioned:
+            return dict(navigation_completed=False)
+        try:
+            return self._wait_for_document_ready(
+                tab,
+                timeout_ms=timeout_ms,
+                previous_url=previous_url,
+                require_transition=True,
+            )
+        except PolicyError as exc:
+            # The click already happened. Report an observed navigation timeout
+            # without inviting the caller to repeat a potentially destructive click.
+            if "navigation timed out" in str(exc).lower():
+                return dict(
+                    navigation_completed=False,
+                    navigation_timed_out=True,
+                )
+            raise
+
+    @staticmethod
+    def _safe_page_url(value):
+        if not isinstance(value, str):
+            return ""
+        if value == "about:blank":
+            return value
+        try:
+            parsed = urlsplit(value)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                return ""
+            validate_url(value)
+        except (ValueError, PolicyError):
+            return ""
+        # Query strings and fragments may contain session tokens or private data.
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
     def listing(self):
         targets = self.call("Target.getTargets")["targetInfos"]
-        valid = {t["targetId"] for t in targets if t["type"] == "page"}
-        for t in list(self.tabs):
-            if t not in valid:
-                self.tabs.pop(t)
-        # Popups are capped, never silently adopted for interaction.
-        for t in targets:
-            if t["type"] == "page" and t["targetId"] not in self.tabs:
-                self.call("Target.closeTarget", dict(targetId=t["targetId"]))
+        page_targets = [t for t in targets if t.get("type") == "page"]
+        valid = {t["targetId"] for t in page_targets}
+        for tab in list(self.tabs):
+            if tab not in valid:
+                self.tabs.pop(tab)
+        # Only HTTP(S) pages in our own profile are interactive. Do not adopt
+        # browser-internal pages or targets with an unsupported destination URL.
+        for target in page_targets:
+            tab = target["targetId"]
+            safe_url = self._safe_page_url(target.get("url", ""))
+            if not safe_url:
+                self.tabs.pop(tab, None)
+                try:
+                    self.call("Target.closeTarget", dict(targetId=tab), timeout=2)
+                except Exception:
+                    pass
+                continue
+            if tab in self.tabs:
+                continue
+            # Popups created by pages in our private profile are adopted up to
+            # the same cap as explicitly opened tabs.
+            if len(self.tabs) >= LIMITS["max_tabs"]:
+                try:
+                    self.call("Target.closeTarget", dict(targetId=tab), timeout=2)
+                except Exception:
+                    pass
+                continue
+            try:
+                self.attach(tab)
+            except Exception:
+                try:
+                    self.call("Target.closeTarget", dict(targetId=tab), timeout=2)
+                except Exception:
+                    pass
         return [
             dict(
                 tab_id=t["targetId"],
                 title=t.get("title", "")[:500],
-                url=t.get("url", "")[:4096],
+                url=self._safe_page_url(t.get("url", "")),
             )
-            for t in targets
-            if t["targetId"] in self.tabs
+            for t in page_targets
+            if t["targetId"] in self.tabs and self._safe_page_url(t.get("url", ""))
         ]
 
     def new(self, url="about:blank"):
@@ -488,12 +696,24 @@ class Browser:
             self.navigate(target, url)
         return dict(tab_id=target)
 
-    def navigate(self, tab, url):
+    def navigate(self, tab, url, timeout_ms=10000):
         validate_url(url)
+        try:
+            previous_url = self.evaluate(tab, "location.href", timeout=1)
+        except PolicyError:
+            previous_url = None
         result = self.call("Page.navigate", dict(url=url), self.sid(tab))
         if result.get("errorText"):
             raise PolicyError("Navigation failed: " + result["errorText"][:200])
-        return dict(tab_id=tab, navigation_started=True)
+        if result.get("isDownload"):
+            raise PolicyError("Downloads are blocked in the background browser")
+        ready = self._wait_for_document_ready(
+            tab,
+            timeout_ms=timeout_ms,
+            previous_url=previous_url,
+            require_transition=bool(result.get("loaderId")),
+        )
+        return dict(tab_id=tab, navigation_started=True, **ready)
 
     def read(self, tab):
         return self.evaluate(
@@ -595,6 +815,82 @@ class Browser:
             timeout=5,
         )
 
+    def _wait_for_element_action(self, tab, expression, timeout_ms=5000):
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return dict(ok=False, error="timeout", timed_out=True)
+            try:
+                result = self.evaluate(
+                    tab, expression, timeout=max(0.2, min(1.0, remaining))
+                )
+            except PolicyError as exc:
+                if self._is_transient_context_error(exc):
+                    time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                    continue
+                raise
+            if not isinstance(result, dict):
+                return dict(ok=False, error="invalid_page_result")
+            if result.get("ok"):
+                return result
+            error = result.get("error", "")
+            matches = result.get("matches", 0)
+            if error == "locator_not_unique" and matches > 1:
+                return result
+            if error == "invalid_selector":
+                return result
+            if error in {
+                "locator_not_unique",
+                "not_actionable",
+                "disabled",
+                "state_mismatch",
+            }:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return dict(
+                        ok=False,
+                        error="timeout",
+                        timed_out=True,
+                        reason=result.get("reason") or error,
+                    )
+                time.sleep(min(0.1, remaining))
+                continue
+            return result
+
+    def _mouse_click(self, tab, x, y):
+        session = self.sid(tab)
+        point = dict(x=float(x), y=float(y))
+        self.call(
+            "Input.dispatchMouseEvent",
+            dict(type="mouseMoved", **point),
+            session,
+            timeout=2,
+        )
+        press_error = None
+        try:
+            self.call(
+                "Input.dispatchMouseEvent",
+                dict(type="mousePressed", button="left", clickCount=1, **point),
+                session,
+                timeout=2,
+            )
+        except Exception as exc:
+            press_error = exc
+        finally:
+            try:
+                self.call(
+                    "Input.dispatchMouseEvent",
+                    dict(type="mouseReleased", button="left", clickCount=1, **point),
+                    session,
+                    timeout=2,
+                )
+            except Exception:
+                if press_error is None:
+                    raise
+        if press_error is not None:
+            raise press_error
+
     def element(self, tab, operation, selector="", value="", role="", name="", exact=True):
         if operation not in ("click", "fill", "select_option", "check", "uncheck"):
             raise PolicyError("Unsupported browser element action")
@@ -602,28 +898,95 @@ class Browser:
             raise PolicyError("Text exceeds limit")
         if operation == "select_option" and (not value or len(value) > 500):
             raise PolicyError("select_option requires an option value or label")
+
         if operation == "click":
-            body = """if(e.disabled||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};e.click();return {ok:true};"""
-        elif operation == "fill":
-            body = """if(e.disabled||e.readOnly||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled_or_readonly'};
-              if(e.isContentEditable){e.textContent=__VALUE__;}else{
+            try:
+                previous_url = self.evaluate(tab, "location.href", timeout=1)
+            except PolicyError:
+                previous_url = None
+            if not isinstance(previous_url, str):
+                previous_url = None
+            body = """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+              e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
+              const s=getComputedStyle(e);if(s.pointerEvents==='none')return {ok:false,error:'not_actionable',reason:'pointer_events'};
+              const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return {ok:false,error:'not_actionable',reason:'not_visible'};
+              const cx=r.left+r.width/2,cy=r.top+r.height/2;
+              const points=[[cx,cy],[r.left+Math.min(4,r.width/2),cy],[r.right-Math.min(4,r.width/2),cy],[cx,r.top+Math.min(4,r.height/2)],[cx,r.bottom-Math.min(4,r.height/2)]];
+              const point=points.find(([x,y])=>x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&(()=>{const top=document.elementFromPoint(x,y);return !!top&&(top===e||e.contains(top));})());
+              if(!point)return {ok:false,error:'not_actionable',reason:'obscured'};
+              return {ok:true,x:point[0],y:point[1]};"""
+            expression = self._locator_expression(
+                selector, role, name, exact, body
+            )
+            result = self._wait_for_element_action(tab, expression)
+            if not result.get("ok"):
+                return result
+            self._mouse_click(tab, result["x"], result["y"])
+            navigation = self._wait_for_click_navigation(tab, previous_url)
+            return dict(ok=True, clicked=True, **navigation)
+
+        if operation == "fill":
+            body = """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};
+              if(e.readOnly)return {ok:false,error:'readonly'};
+              if(e.isContentEditable){e.focus();e.textContent=__VALUE__;}else{
                 if(!['INPUT','TEXTAREA'].includes(e.tagName)||e.type==='file'||['button','submit','reset','checkbox','radio','hidden','image'].includes((e.type||'').toLowerCase()))return {ok:false,error:'unsupported_control'};
-                const p=e.tagName==='INPUT'?HTMLInputElement.prototype:HTMLTextAreaElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e,__VALUE__);}
-              e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return {ok:true};""".replace("__VALUE__",json.dumps(value))
+                e.focus();const p=e.tagName==='INPUT'?HTMLInputElement.prototype:HTMLTextAreaElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e,__VALUE__);}
+              e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return {ok:true};""".replace(
+                "__VALUE__", json.dumps(value)
+            )
         elif operation == "select_option":
-            body = """if(e.tagName!=='SELECT'||e.disabled)return {ok:false,error:'unsupported_control'};
+            body = """if(e.tagName!=='SELECT'||e.matches(':disabled')||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'unsupported_control'};
               const wanted=__VALUE__;const option=Array.from(e.options).find(o=>o.value===wanted||o.label===wanted||String(o.textContent||'').trim()===wanted);
               if(!option||option.disabled)return {ok:false,error:'option_not_found'};e.value=option.value;
               e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));
-              return {ok:e.value===option.value,value:e.value,label:option.label||String(option.textContent||'').trim()};""".replace("__VALUE__",json.dumps(value))
+              return {ok:e.value===option.value,value:e.value,label:option.label||String(option.textContent||'').trim()};""".replace(
+                "__VALUE__", json.dumps(value)
+            )
         else:
-            desired="true" if operation=="check" else "false"
-            body="""const native=e.tagName==='INPUT'&&['checkbox','radio'].includes((e.type||'').toLowerCase());const role=(e.getAttribute('role')||'').toLowerCase();
+            desired = operation == "check"
+            body = """const native=e.tagName==='INPUT'&&['checkbox','radio'].includes((e.type||'').toLowerCase());const role=(e.getAttribute('role')||'').toLowerCase();
               if(!native&&!['checkbox','radio'].includes(role))return {ok:false,error:'unsupported_control'};
+              if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+              const current=native?!!e.checked:e.getAttribute('aria-checked')==='true';
+              if(current===__DESIRED__)return {ok:true,checked:current,already_set:true};
               if((native&&e.type==='radio'||role==='radio')&&__DESIRED__===false)return {ok:false,error:'radio_cannot_be_unchecked'};
-              const current=native?!!e.checked:e.getAttribute('aria-checked')==='true';if(current!==__DESIRED__)e.click();
-              const after=native?!!e.checked:e.getAttribute('aria-checked')==='true';return {ok:after===__DESIRED__,checked:after};""".replace("__DESIRED__",desired)
-        return self.evaluate(tab,self._locator_expression(selector,role,name,exact,body))
+              e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
+              const s=getComputedStyle(e);if(s.pointerEvents==='none')return {ok:false,error:'not_actionable',reason:'pointer_events'};
+              const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return {ok:false,error:'not_actionable',reason:'not_visible'};
+              const cx=r.left+r.width/2,cy=r.top+r.height/2;
+              const points=[[cx,cy],[r.left+Math.min(4,r.width/2),cy],[r.right-Math.min(4,r.width/2),cy],[cx,r.top+Math.min(4,r.height/2)],[cx,r.bottom-Math.min(4,r.height/2)]];
+              const point=points.find(([x,y])=>x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&(()=>{const top=document.elementFromPoint(x,y);return !!top&&(top===e||e.contains(top));})());
+              if(!point)return {ok:false,error:'not_actionable',reason:'obscured'};
+              return {ok:true,x:point[0],y:point[1],needs_click:true};""".replace(
+                "__DESIRED__", "true" if desired else "false"
+            )
+            expression = self._locator_expression(
+                selector, role, name, exact, body
+            )
+            result = self._wait_for_element_action(tab, expression)
+            if not result.get("ok") or not result.get("needs_click"):
+                return result
+            self._mouse_click(tab, result["x"], result["y"])
+            verify_body = """const native=e.tagName==='INPUT'&&['checkbox','radio'].includes((e.type||'').toLowerCase());
+              const checked=native?!!e.checked:e.getAttribute('aria-checked')==='true';
+              return {ok:checked===__DESIRED__,checked,error:checked===__DESIRED__?'':'state_mismatch'};""".replace(
+                "__DESIRED__", "true" if desired else "false"
+            )
+            verified = self._wait_for_element_action(
+                tab,
+                self._locator_expression(
+                    selector, role, name, exact, verify_body
+                ),
+                timeout_ms=1000,
+            )
+            if not verified.get("ok"):
+                return verified
+            return dict(ok=True, checked=verified["checked"])
+
+        expression = self._locator_expression(
+            selector, role, name, exact, body
+        )
+        return self._wait_for_element_action(tab, expression)
 
     def wait_for(self, tab, selector="", role="", name="", exact=True, state="visible", value="", timeout_ms=5000):
         if state not in {"attached","visible","hidden","enabled","text"}:
@@ -651,9 +1014,14 @@ class Browser:
                 return dict(ok=False,timed_out=True,state=state)
             try:
                 result=self.evaluate(tab,expression,timeout=max(0.2,min(1.5,remaining)))
-            except PolicyError:
-                if time.monotonic()>=deadline:
-                    return dict(ok=False,timed_out=True,state=state)
+            except PolicyError as exc:
+                if self._is_transient_context_error(exc):
+                    if time.monotonic() >= deadline:
+                        return dict(ok=False, timed_out=True, state=state)
+                    time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                    continue
+                if time.monotonic() >= deadline:
+                    return dict(ok=False, timed_out=True, state=state)
                 raise
             if result.get("error")=="invalid_selector":
                 return dict(ok=False,error="invalid_selector",state=state)
@@ -712,6 +1080,7 @@ class Browser:
     def freeze(self, frozen):
         if self.frozen == frozen:
             return
+
         errors = 0
         for tab in list(self.tabs):
             try:
