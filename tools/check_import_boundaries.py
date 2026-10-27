@@ -39,7 +39,16 @@ class EagerImports(ast.NodeVisitor):
 
     def visit_If(self, node):
         # TYPE_CHECKING imports are not executed at runtime.
-        if isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
+        type_checking = (
+            isinstance(node.test, ast.Name)
+            and node.test.id == "TYPE_CHECKING"
+        ) or (
+            isinstance(node.test, ast.Attribute)
+            and isinstance(node.test.value, ast.Name)
+            and node.test.value.id == "typing"
+            and node.test.attr == "TYPE_CHECKING"
+        )
+        if type_checking:
             for statement in node.orelse:
                 self.visit(statement)
             return
