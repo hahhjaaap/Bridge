@@ -21,6 +21,7 @@ jobs:
         run: python -m ruff check src tools --statistics
         continue-on-error: true
       - run: python tools/audit_repository.py --strict
+      - run: python tools/check_import_boundaries.py
       - run: python -m pytest
       - run: udb build
       - shell: bash
