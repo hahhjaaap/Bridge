@@ -513,7 +513,7 @@ class Browser:
     def _wait_for_document_ready(
         self, tab, timeout_ms=10000, previous_url=None, require_transition=False
     ):
-        if type(timeout_ms) is not int or not 100 <= timeout_ms <= 15000:
+        if not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool) or not 100 <= timeout_ms <= 15000:
             raise PolicyError("Navigation timeout_ms must be 100..15000")
         deadline = time.monotonic() + timeout_ms / 1000
         transition_seen = not require_transition
