@@ -396,3 +396,23 @@ def test_timed_out_update_reports_unknown_outcome_without_retry(tmp_path, monkey
     with pytest.raises(CommandError, match="outcome is unknown"):
         maintenance.run("rollback", Settings(Path(record["home"]), tmp_path))
     assert len(calls) == 1
+
+
+def test_updater_refuses_to_stop_its_own_ancestor(tmp_path, monkeypatch):
+    from udb.companion.system_processes import ProcessCatalog
+
+    monkeypatch.setattr(owner_command, "headless_state", lambda _: {"pid": 99})
+    monkeypatch.setattr(
+        maintenance, "os", SimpleNamespace(name="nt", getpid=lambda: 101)
+    )
+    monkeypatch.setattr(
+        ProcessCatalog,
+        "_windows",
+        lambda _: [{"pid": 101, "parent_pid": 100}, {"pid": 100, "parent_pid": 99}],
+    )
+    with pytest.raises(CommandError, match="outside UDB"):
+        maintenance.require_external_updater(tmp_path)
+    monkeypatch.setattr(
+        ProcessCatalog, "_windows", lambda _: [{"pid": 101, "parent_pid": 2}]
+    )
+    maintenance.require_external_updater(tmp_path)

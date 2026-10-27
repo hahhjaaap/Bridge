@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -102,6 +103,37 @@ def installer_script():
     )
 
 
+def require_external_updater(home):
+    from .owner_command import headless_state
+
+    state = headless_state(home)
+    if not state or os.name != "nt":
+        return
+    from .companion.system_processes import ProcessCatalog
+
+    # Updating the manager from its own tool job would kill its updater.
+    # Inspect ancestry without command lines, environment or credentials.
+    try:
+        parents = {
+            row["pid"]: row["parent_pid"] for row in ProcessCatalog(home)._windows()
+        }
+        pid = os.getpid()
+        visited = set()
+        for _ in range(64):
+            if pid == state["pid"]:
+                raise CommandError(
+                    "Run update/rollback in your own terminal, outside UDB's tool jobs. Stopping this agent would stop its updater. Remote update --check remains available."
+                )
+            if not pid or pid in visited:
+                return
+            visited.add(pid)
+            pid = parents.get(pid, 0)
+    except OSError:
+        raise CommandError(
+            "Cannot verify updater process lifetime. Run update/rollback in your own terminal."
+        ) from None
+
+
 def run(action, settings, *, check=False, as_json=False):
     from .windows_paths import system_executable
 
@@ -129,6 +161,7 @@ def run(action, settings, *, check=False, as_json=False):
         raise CommandError(
             "Use the managed launcher with its saved data home for update/rollback."
         )
+    require_external_updater(settings.home)
     args = [
         system_executable("powershell.exe"),
         "-NoLogo",
