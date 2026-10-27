@@ -70,7 +70,7 @@ class Documents:
         from udb.companion.processes import ManagedProcess
 
         actions = {
-            "spreadsheet": {"inspect", "read", "write", "edit_cells"},
+            "spreadsheet": {"inspect", "read", "write", "edit_cells", "audit_invoices", "export_audit"},
             "word_document": {"inspect", "read", "write", "replace_text"},
             "pdf_document": {"inspect", "read", "write", "merge", "extract"},
         }
@@ -89,7 +89,7 @@ class Documents:
             raise ValueError("Use " + extension + " paths")
         expected = args.get("expected_sha256", "NEW")
         destination = args.get("destination", "")
-        writing = action in ("write", "edit_cells", "replace_text", "merge", "extract")
+        writing = action in ("write", "edit_cells", "replace_text", "merge", "extract", "export_audit")
         inputs = []
         if action not in ("write", "merge"):
             inputs.append(checked_input(files, given, extension))
@@ -99,7 +99,7 @@ class Documents:
                 raise ValueError("merge needs 2..20 PDF inputs")
             inputs = [checked_input(files, n, ".pdf") for n in names]
         fingerprints = {str(p): sha(p) for p in inputs}
-        if action in ("edit_cells", "replace_text", "extract"):
+        if action in ("edit_cells", "replace_text", "extract", "export_audit"):
             if (
                 not re.fullmatch("[0-9a-fA-F]{64}", expected)
                 or fingerprints[str(path)] != expected.lower()
@@ -113,8 +113,8 @@ class Documents:
             and fingerprints[str(path)] != expected.lower()
         ):
             raise ValueError("Source SHA256 mismatch")
-        if action == "extract" and not destination:
-            raise ValueError("extract needs a new destination")
+        if action in ("extract", "export_audit") and not destination:
+            raise ValueError("extract/export_audit needs a new destination")
         target = files.path(destination, allow_missing=True) if destination else path
         if writing:
             if target.suffix.lower() != extension or not target.parent.is_dir():
@@ -312,6 +312,10 @@ def spreadsheet(files, a, output):
     p = files.path(a["path"], allow_missing=action == "write")
     book = None
     try:
+        if action in ("audit_invoices", "export_audit"):
+            from udb.companion.accounting import accounting_spreadsheet
+
+            return accounting_spreadsheet(files, a, output)
         if action == "write":
             book = openpyxl.Workbook()
             book.remove(book.active)
