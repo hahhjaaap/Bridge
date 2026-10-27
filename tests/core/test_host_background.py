@@ -534,6 +534,9 @@ def test_browser_click_waits_for_actionability_then_dispatches_pointer_events():
     browser.call = lambda method, params=None, session=None, timeout=10: (
         calls.append((method, params, session)) or {}
     )
+    browser._wait_for_click_navigation = lambda *args, **kwargs: {
+        "navigation_completed": False
+    }
     result = browser.element("owned-tab", "click", selector="#continue")
     assert result["ok"]
     assert len(expressions) == 3
