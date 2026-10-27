@@ -1,6 +1,5 @@
 """Recovery, diagnostics and local lifecycle tests without real credentials."""
 
-import base64
 import contextlib
 import json
 import os
@@ -14,6 +13,11 @@ from udb import autostart, cli, maintenance, onboarding, owner_command
 from udb.config import Settings
 from udb.desktop import DesktopController
 from udb.owner_command import CommandError
+
+
+@pytest.fixture(autouse=True)
+def isolated_startup_helper(tmp_path, monkeypatch):
+    monkeypatch.setattr(autostart, "script_path", lambda _: tmp_path / "startup.ps1")
 
 
 @pytest.fixture
@@ -131,10 +135,11 @@ def test_startup_arguments_are_literals_and_background_only(tmp_path, monkeypatc
         autostart, "system_executable", lambda _: r"C:\Windows\powershell.exe"
     )
     value = autostart.startup_command(settings)
-    script = base64.b64decode(value.split()[-1]).decode("utf-16-le")
+    script = autostart.script_text(settings)
     assert "owner''s $home; echo injected" in script
     assert "'--detach'" in script and "'--access'" not in script
-    assert "-WindowStyle Hidden" in value
+    assert "-W Hidden" in value and len(value) <= 260
+    assert str(settings.project_root) in script
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows registry")
@@ -149,8 +154,39 @@ def test_registry_round_trip_in_isolated_nonstartup_key(tmp_path, monkeypatch):
     try:
         autostart.run(settings, "enable")
         assert autostart.status(settings)["matches_current"]
+        from udb.launcher import command
+        from udb.windows_paths import system_executable
+
+        try:
+            result = subprocess.run(
+                [
+                    system_executable("powershell.exe"),
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(autostart.script_path(settings)),
+                ],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=90,
+            )
+            assert result.returncode == 0, result.stdout + result.stderr
+            state = owner_command.headless_state(settings.home)
+            assert state and state["connection_mode"] == "offline"
+            assert not (settings.home / "state/computer-access.dpapi").exists()
+        finally:
+            subprocess.run(
+                command(
+                    ["--home", str(settings.home), "stop", "--wait", "60", "--json"]
+                ),
+                capture_output=True,
+                timeout=90,
+            )
         autostart.run(settings, "disable")
         assert not autostart.status(settings)["enabled"]
+        assert not autostart.script_path(settings).exists()
     finally:
         with contextlib.suppress(FileNotFoundError):
             winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
