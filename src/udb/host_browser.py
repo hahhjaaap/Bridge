@@ -622,6 +622,22 @@ class Browser:
                 )
             raise
 
+    @staticmethod
+    def _safe_page_url(value):
+        if not isinstance(value, str):
+            return ""
+        if value == "about:blank":
+            return value
+        try:
+            parsed = urlsplit(value)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                return ""
+            validate_url(value)
+        except (ValueError, PolicyError):
+            return ""
+        # Query strings and fragments may contain session tokens or private data.
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
     def listing(self):
         targets = self.call("Target.getTargets")["targetInfos"]
         page_targets = [t for t in targets if t.get("type") == "page"]
@@ -629,12 +645,22 @@ class Browser:
         for tab in list(self.tabs):
             if tab not in valid:
                 self.tabs.pop(tab)
-        # Pages created by links/popups are still inside our private profile.
-        # Adopt them up to the same cap as explicitly opened tabs.
+        # Only HTTP(S) pages in our own profile are interactive. Do not adopt
+        # browser-internal pages or targets with an unsupported destination URL.
         for target in page_targets:
             tab = target["targetId"]
+            safe_url = self._safe_page_url(target.get("url", ""))
+            if not safe_url:
+                self.tabs.pop(tab, None)
+                try:
+                    self.call("Target.closeTarget", dict(targetId=tab), timeout=2)
+                except Exception:
+                    pass
+                continue
             if tab in self.tabs:
                 continue
+            # Popups created by pages in our private profile are adopted up to
+            # the same cap as explicitly opened tabs.
             if len(self.tabs) >= LIMITS["max_tabs"]:
                 try:
                     self.call("Target.closeTarget", dict(targetId=tab), timeout=2)
@@ -652,10 +678,10 @@ class Browser:
             dict(
                 tab_id=t["targetId"],
                 title=t.get("title", "")[:500],
-                url=t.get("url", "")[:4096],
+                url=self._safe_page_url(t.get("url", "")),
             )
             for t in page_targets
-            if t["targetId"] in self.tabs
+            if t["targetId"] in self.tabs and self._safe_page_url(t.get("url", ""))
         ]
 
     def new(self, url="about:blank"):
@@ -998,59 +1024,3 @@ class Browser:
                     return dict(ok=False, timed_out=True, state=state)
                 raise
             if result.get("error")=="invalid_selector":
-                return dict(ok=False,error="invalid_selector",state=state)
-            if result.get("ok"):
-                return result
-            if time.monotonic()>=deadline:
-                return dict(ok=False,timed_out=True,state=state,matches=result.get("matches",0))
-            time.sleep(min(0.1,max(0,deadline-time.monotonic())))
-
-    def press(self, tab, key, selector="", role="", name="", exact=True):
-        info=parse_key(key)
-        body="""if(e.disabled||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};
-          if(typeof e.focus!=='function')return {ok:false,error:'not_focusable'};e.focus();
-          return {ok:document.activeElement===e||e.contains(document.activeElement),error:'not_focusable'};"""
-        focused=self.evaluate(tab,self._locator_expression(selector,role,name,exact,body))
-        if not focused.get("ok"):
-            return focused
-        session=self.sid(tab)
-        params=dict(key=info["key"],code=info["code"],windowsVirtualKeyCode=info["vk"],modifiers=info["modifiers"])
-        down_params=dict(params)
-        if info["text"]:
-            down_params["text"]=info["text"]
-            down_params["unmodifiedText"]=info["text"]
-        self.call("Input.dispatchKeyEvent",dict(type="keyDown",**down_params),session,timeout=2)
-        self.call("Input.dispatchKeyEvent",dict(type="keyUp",**params),session,timeout=2)
-        return dict(ok=True,key=key,focused=True)
-
-    def history(self, tab, action):
-        session=self.sid(tab)
-        if action=="reload":
-            self.call("Page.reload",dict(ignoreCache=False),session,timeout=5)
-            return dict(ok=True,action=action)
-        if action not in ("back","forward"):
-            raise PolicyError("Unsupported history action")
-        history=self.call("Page.getNavigationHistory",session=session,timeout=5)
-        entries=history.get("entries",[])
-        index=history.get("currentIndex",0)+(-1 if action=="back" else 1)
-        if not 0<=index<len(entries):
-            return dict(ok=False,reason="no_history",action=action)
-        entry=entries[index]
-        self.call("Page.navigateToHistoryEntry",dict(entryId=entry["id"]),session,timeout=5)
-        safe=urlsplit(str(entry.get("url","")))
-        safe_url=(safe.scheme+"://"+safe.netloc+safe.path) if safe.scheme in ("http","https") else ""
-        return dict(ok=True,action=action,url=safe_url)
-
-    def screenshot(self, tab):
-        result = self.call(
-            "Page.captureScreenshot",
-            dict(format="png", captureBeyondViewport=False),
-            self.sid(tab),
-        )
-        if len(result["data"]) > 8 * 1048576:
-            raise PolicyError("Screenshot too large")
-        return result["data"]
-
-    def freeze(self, frozen):
-        if self.frozen == frozen:
-            return
