@@ -1,0 +1,76 @@
+name: one-time-repository-branch-cleanup
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/cleanup-legacy-branches-once.yml]
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    if: github.repository == 'hahhjaaap/Universal-Desktop-Bridge' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Archive divergent legacy heads and delete pinned obsolete branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS='|' read -r branch expected archive; do
+            [[ -n "$branch" ]] || continue
+            current="$(gh api "repos/$GH_REPO/git/ref/heads/$branch" --jq '.object.sha' 2>/dev/null || true)"
+            if [[ -z "$current" ]]; then
+              echo "Already absent: $branch"
+              continue
+            fi
+            if [[ "$current" != "$expected" ]]; then
+              echo "::error::Branch moved; refusing deletion: $branch"
+              exit 1
+            fi
+            if [[ -n "$archive" ]]; then
+              saved="$(gh api "repos/$GH_REPO/git/ref/tags/$archive" --jq '.object.sha' 2>/dev/null || true)"
+              if [[ -z "$saved" ]]; then
+                gh api -X POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$archive" -f "sha=$expected" >/dev/null
+                echo "Archived: $branch -> $archive"
+              elif [[ "$saved" != "$expected" ]]; then
+                echo "::error::Archive tag mismatch: $archive"
+                exit 1
+              fi
+            else
+              ahead="$(gh api "repos/$GH_REPO/compare/main...$branch" --jq '.ahead_by')"
+              if [[ "$ahead" != "0" ]]; then
+                echo "::error::Unmerged branch without archive: $branch ($ahead ahead)"
+                exit 1
+              fi
+            fi
+            gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$branch" >/dev/null
+            echo "Deleted obsolete branch: $branch"
+          done <<'BRANCHES'
+          feat/reliable-lifecycle|e367459669541bf1911323780b1dd351b936673a|
+          feature/accounting-worktools-20261027|7f273eb747afd7613b7bd46127860adf96b09707|
+          feature/browser-upgrade-0.10.1|2b22d298b6983091d99c8dbf348ce2a425fcd808|
+          feature/udb-single-entrypoint|5319c27e34403738ee2eec9d996a0aa3abbcdd5a|archive/2026-10-27/legacy-single-tool
+          fix/post-merge-browser-ruff-20261027|7cf457e38fb967f674f20afc06c2fb4f164e3404|
+          hardening/udb-source-standard-0.8.1|7ef209ce6700902207fda4d3c8c3b58c428d6616|archive/2026-10-27/legacy-source-standard
+          integration/secure-accounting-core-20261027|8738b496f8f61da8ae10295ad04eb66a30890c09|
+          refactor/architecture-consolidation-20261027|18c49db161f95fe56c55a76365d7422e7dac2de3|
+          refactor/background-jobs-search-20261027|977faf6272d7662c84ac10d877a226fbf0355c0b|
+          refactor/core-policy-queue-performance-20261027|d65a3db06d47f943ba0152e6df33d09edb4afdc9|
+          refactor/manager-safety-and-ci|19d5fb902916f4a0def6e33973cb8941c1b76423|archive/2026-10-27/legacy-manager
+          refactor/readability-0.9.2|866778f79e82942dfdd00cd8466578da7b5a8d7e|
+          refactor/repo-cleanup-performance-20261027|4fe29bdd16528ef1294a29a6f03c6f7e2d4c51e7|
+          release/one-command|70069b1d2999c0198a0cefaea98b9fe6a0b64237|
+          security/harden-local-mcp-http-20261027|e6455b17e900f1a2c80f3249ed34c354e31707e2|
+          security/release-package-allowlist|0dd923706956dede925a695b03cc77d68e888e6e|archive/2026-10-27/legacy-core-release
+          BRANCHES
+          branch="chore/repository-hygiene-readme-20261027"
+          current="$(gh api "repos/$GH_REPO/git/ref/heads/$branch" --jq '.object.sha' 2>/dev/null || true)"
+          if [[ -n "$current" ]]; then
+            ahead="$(gh api "repos/$GH_REPO/compare/main...$branch" --jq '.ahead_by')"
+            [[ "$ahead" == "0" ]] || { echo "::error::Cleanup branch has unmerged commits"; exit 1; }
+            gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$branch" >/dev/null
+            echo "Deleted merged cleanup branch"
+          fi
+          echo "Branch cleanup complete; main and archived legacy tags retained."
