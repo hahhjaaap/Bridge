@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from udb import components, media, resources
-from udb.companion import background, documents, processes
+from udb.companion import background, documents, processes, search
 from udb.companion.files import ScopedFiles
 from udb.launcher import child_environment, worker_command
 
