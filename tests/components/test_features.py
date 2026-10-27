@@ -46,7 +46,7 @@ class Features(unittest.TestCase):
         self.temp.cleanup()
 
     def test_malformed_rpc_returns_error_and_server_stays_usable(self):
-        from test_windows_durability import Client
+        from tests.components.test_windows_durability import Client
 
         client = Client(self.root)
         try:
