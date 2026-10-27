@@ -39,6 +39,23 @@ names that lack a handler, unexpected handlers and duplicate schemas.
 `udb.proxy` owns backend routing, concurrency and response normalization.
 Keep this separate from file permissions and owner approvals.
 
+## Core policy and approval queues
+
+- `udb.core.Agent`: stable public entry point for project registration, path
+  validation, read/write proposals, audit records and diagnostics.
+- `udb.core_common`: shared `PolicyError`, canonical JSON and SHA-256 helpers.
+  Existing `udb.core` imports are retained for compatibility.
+- `udb.core_autonomy.AutonomyMixin`: cohesive owner-only grant management and
+  queued source/media/Sandbox work. These methods are inherited by `Agent`;
+  they do not become new MCP or HTTP endpoints.
+- `requests(status, created)` and `jobs(status)` indexes accelerate queue
+  lookup on existing SQLite databases; schema initialization is idempotent.
+- Source write proposals store full bounded new text, but only a bounded diff
+  preview. Large/truncated diffs explicitly instruct local full-file review.
+  Do not silently truncate approval context or bypass owner authorization.
+- File listing filters unsupported binary extensions before expensive per-file
+  policy checks; every visible entry still passes `Agent.path`.
+
 ## Desktop and isolation
 
 - `udb.manager`: Qt MainWindow composition, event/lifecycle handling.
