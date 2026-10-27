@@ -46,6 +46,7 @@ jobs:
       # even on a cache hit, so a corrupt/poisoned cache fails closed.
       - name: Restore pinned helper binaries
         id: helper_cache
+        continue-on-error: true
         uses: actions/cache/restore@v4
         with:
           path: build-assets/bin
@@ -53,6 +54,7 @@ jobs:
       - run: python tools/fetch_build_assets.py
       - name: Save verified helper binaries
         if: steps.helper_cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: build-assets/bin
