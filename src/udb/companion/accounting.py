@@ -38,8 +38,6 @@ ALIASES = {
         "tong tien", "total amount",
     ),
 }
-NORMALIZED = {field: {_normalize for _normalize in ()} for field in ()}  # populated below
-
 
 def normalize(value):
     if value is None:
