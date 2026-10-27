@@ -846,7 +846,24 @@ class Browser:
             timeout=5,
         )
 
-    def _wait_for_element_action(self, tab, expression, timeout_ms=5000):
+    def _css_selector_valid(self, tab, selector):
+        """Return True/False for a CSS selector, or None if the page cannot be inspected."""
+        if not selector:
+            return True
+        expression = (
+            "(() => { try { document.querySelectorAll("
+            + json.dumps(selector)
+            + "); return true; } catch (_) { return false; } })()"
+        )
+        try:
+            result = self.evaluate(tab, expression, timeout=1)
+        except PolicyError:
+            return None
+        return result if isinstance(result, bool) else None
+
+    def _wait_for_element_action(
+        self, tab, expression, timeout_ms=5000, selector=""
+    ):
         deadline = time.monotonic() + timeout_ms / 1000
         while True:
             remaining = deadline - time.monotonic()
@@ -860,6 +877,8 @@ class Browser:
                 if self._is_transient_context_error(exc):
                     time.sleep(min(0.1, max(0, deadline - time.monotonic())))
                     continue
+                if selector and self._css_selector_valid(tab, selector) is False:
+                    return dict(ok=False, error="invalid_selector")
                 raise
             if not isinstance(result, dict):
                 return dict(ok=False, error="invalid_page_result")
@@ -949,7 +968,7 @@ class Browser:
             expression = self._locator_expression(
                 selector, role, name, exact, body
             )
-            result = self._wait_for_element_action(tab, expression)
+            result = self._wait_for_element_action(tab, expression, selector=selector)
             if not result.get("ok"):
                 return result
             self._mouse_click(tab, result["x"], result["y"])
@@ -1009,6 +1028,7 @@ class Browser:
                     selector, role, name, exact, verify_body
                 ),
                 timeout_ms=1000,
+                selector=selector,
             )
             if not verified.get("ok"):
                 return verified
@@ -1017,7 +1037,7 @@ class Browser:
         expression = self._locator_expression(
             selector, role, name, exact, body
         )
-        return self._wait_for_element_action(tab, expression)
+        return self._wait_for_element_action(tab, expression, selector=selector)
 
     def wait_for(self, tab, selector="", role="", name="", exact=True, state="visible", value="", timeout_ms=5000):
         if state not in {"attached","visible","hidden","enabled","text"}:
@@ -1051,6 +1071,8 @@ class Browser:
                         return dict(ok=False, timed_out=True, state=state)
                     time.sleep(min(0.1, max(0, deadline - time.monotonic())))
                     continue
+                if selector and self._css_selector_valid(tab, selector) is False:
+                    return dict(ok=False, error="invalid_selector", state=state)
                 if time.monotonic() >= deadline:
                     return dict(ok=False, timed_out=True, state=state)
                 raise
