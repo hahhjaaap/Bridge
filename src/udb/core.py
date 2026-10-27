@@ -133,6 +133,47 @@ def reject_links(path: Path):
         raise PolicyError("Hardlinked files are not allowed")
 
 
+_DIFF_PREVIEW_LIMIT = 16000
+_DIFF_MAX_LINES = 2048
+_DIFF_MAX_BYTES = 128 * 1024
+
+
+def diff_preview(before: bytes | None, text: str, relative: str) -> str:
+    """Bound approval preview CPU, memory and SQLite payload size.
+
+    A large or truncated preview is explicitly marked as incomplete so
+    owner approval never silently presents a partial diff as the full change.
+    The proposal still stores the full new text (bounded by MAX_TEXT).
+    """
+    old = (before or b"").decode("utf-8-sig")
+    if (
+        len(before or b"") > _DIFF_MAX_BYTES
+        or len(text.encode("utf-8")) > _DIFF_MAX_BYTES
+        or old.count("\\n") > _DIFF_MAX_LINES
+        or text.count("\\n") > _DIFF_MAX_LINES
+    ):
+        return (
+            "[UDB] Diff preview omitted: file exceeds safe preview limits. "
+            "Review the complete old and new file before approving.\\n"
+        )
+    chunks = difflib.unified_diff(
+        old.splitlines(True),
+        text.splitlines(True),
+        fromfile=relative,
+        tofile=relative,
+    )
+    parts = []
+    size = 0
+    notice = "\\n[UDB] Diff preview truncated; review the complete change before approving.\\n"
+    for chunk in chunks:
+        if size + len(chunk) > _DIFF_PREVIEW_LIMIT - len(notice):
+            parts.append(notice)
+            break
+        parts.append(chunk)
+        size += len(chunk)
+    return "".join(parts)
+
+
 class Agent(AutonomyMixin):
     def __init__(self, home: Path):
         self.home = home.absolute()
@@ -304,12 +345,11 @@ class Agent(AutonomyMixin):
 
     def read(self, project, relative):
         data = self.read_bytes(project, relative)
-        self.audit(
-            "read", {"project": project, "path": relative, "sha256": digest(data)}
-        )
+        sha = digest(data)
+        self.audit("read", {"project": project, "path": relative, "sha256": sha})
         return {
             "path": relative,
-            "sha256": digest(data),
+            "sha256": sha,
             "text": data.decode("utf-8-sig"),
         }
 
@@ -323,11 +363,13 @@ class Agent(AutonomyMixin):
         for i, f in enumerate(p.iterdir()):
             if i >= 10000:
                 break
+            # Exclude unsupported files before the expensive per-path policy
+            # check; all visible entries still pass the full policy.
+            if f.is_file() and f.suffix.lower() not in SOURCE_EXT:
+                continue
             rel = f.relative_to(root).as_posix()
             try:
                 self.path(project, rel)
-                if f.is_file() and f.suffix.lower() not in SOURCE_EXT:
-                    continue
                 visible.append({"path": rel, "directory": f.is_dir()})
             except PolicyError:
                 continue
@@ -400,14 +442,7 @@ class Agent(AutonomyMixin):
             raise PolicyError(
                 "Stale file: read current SHA256; use NEW only for new files"
             )
-        diff = "".join(
-            difflib.unified_diff(
-                (before or b"").decode("utf-8-sig").splitlines(True),
-                text.splitlines(True),
-                fromfile=relative,
-                tofile=relative,
-            )
-        )
+        diff = diff_preview(before, text, relative)
         payload = {
             "project": project,
             "path": relative,
@@ -419,7 +454,7 @@ class Agent(AutonomyMixin):
         if self.source_autonomy_authorization(project, payload["root"]):
             return self.auto_apply_write(payload)
         response = self.propose("write", payload)
-        response["diff"] = diff[:16000]
+        response["diff"] = diff
         return response
 
     def snapshot(self, project):
