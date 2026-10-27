@@ -10,7 +10,7 @@ import json
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QThreadPool, QTimer, Qt
+from PySide6.QtCore import Qt, QThreadPool, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
