@@ -12,9 +12,12 @@ from .catalog import public_catalog
 
 def catalog() -> dict[str, Any]:
     """Build the public schema and report the actual backend tool counts."""
+    from .companion.dispatch import validate_catalog
     from .companion.runtime import TOOLS
     from .core import Agent
     from .server import make_server
+
+    validate_catalog()
 
     with tempfile.TemporaryDirectory(prefix="udb-catalog-") as temporary_root:
         server = make_server(Agent(Path(temporary_root)))
