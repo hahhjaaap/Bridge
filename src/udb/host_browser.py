@@ -573,6 +573,55 @@ class Browser:
                 )
             time.sleep(min(0.1, max(0, deadline - time.monotonic())))
 
+    def _wait_for_click_navigation(
+        self, tab, previous_url, observe_ms=250, timeout_ms=10000
+    ):
+        if not isinstance(previous_url, str) or not previous_url:
+            return dict(navigation_completed=False)
+        observation_ms = max(100, min(1000, int(observe_ms)))
+        deadline = time.monotonic() + observation_ms / 1000
+        expression = "({readyState:document.readyState,href:location.href})"
+        transitioned = False
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            try:
+                state = self.evaluate(
+                    tab, expression, timeout=max(0.2, min(0.5, remaining))
+                )
+            except PolicyError as exc:
+                if self._is_transient_context_error(exc):
+                    transitioned = True
+                    break
+                raise
+            if not isinstance(state, dict):
+                break
+            current_url = str(state.get("href", ""))
+            if current_url and current_url != previous_url:
+                transitioned = True
+                break
+            if state.get("readyState") == "loading":
+                transitioned = True
+                break
+            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        if not transitioned:
+            return dict(navigation_completed=False)
+        try:
+            return self._wait_for_document_ready(
+                tab,
+                timeout_ms=timeout_ms,
+                previous_url=previous_url,
+                require_transition=True,
+            )
+        except PolicyError as exc:
+            # The click already happened. Report an observed navigation timeout
+            # without inviting the caller to repeat a potentially destructive click.
+            if "navigation timed out" in str(exc).lower():
+                return dict(
+                    navigation_completed=False,
+                    navigation_timed_out=True,
+                )
+            raise
+
     def listing(self):
         targets = self.call("Target.getTargets")["targetInfos"]
         page_targets = [t for t in targets if t.get("type") == "page"]
@@ -825,6 +874,12 @@ class Browser:
             raise PolicyError("select_option requires an option value or label")
 
         if operation == "click":
+            try:
+                previous_url = self.evaluate(tab, "location.href", timeout=1)
+            except PolicyError:
+                previous_url = None
+            if not isinstance(previous_url, str):
+                previous_url = None
             body = """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
               e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
               const s=getComputedStyle(e);if(s.pointerEvents==='none')return {ok:false,error:'not_actionable',reason:'pointer_events'};
@@ -841,7 +896,8 @@ class Browser:
             if not result.get("ok"):
                 return result
             self._mouse_click(tab, result["x"], result["y"])
-            return dict(ok=True, clicked=True)
+            navigation = self._wait_for_click_navigation(tab, previous_url)
+            return dict(ok=True, clicked=True, **navigation)
 
         if operation == "fill":
             body = """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};
@@ -865,9 +921,9 @@ class Browser:
             body = """const native=e.tagName==='INPUT'&&['checkbox','radio'].includes((e.type||'').toLowerCase());const role=(e.getAttribute('role')||'').toLowerCase();
               if(!native&&!['checkbox','radio'].includes(role))return {ok:false,error:'unsupported_control'};
               if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
-              if((native&&e.type==='radio'||role==='radio')&&__DESIRED__===false)return {ok:false,error:'radio_cannot_be_unchecked'};
               const current=native?!!e.checked:e.getAttribute('aria-checked')==='true';
               if(current===__DESIRED__)return {ok:true,checked:current,already_set:true};
+              if((native&&e.type==='radio'||role==='radio')&&__DESIRED__===false)return {ok:false,error:'radio_cannot_be_unchecked'};
               e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
               const s=getComputedStyle(e);if(s.pointerEvents==='none')return {ok:false,error:'not_actionable',reason:'pointer_events'};
               const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return {ok:false,error:'not_actionable',reason:'not_visible'};
@@ -998,44 +1054,3 @@ class Browser:
     def freeze(self, frozen):
         if self.frozen == frozen:
             return
-        errors = 0
-        for tab in list(self.tabs):
-            try:
-                if frozen:
-                    self.call("Page.stopLoading", session=self.sid(tab), timeout=2)
-                self.call(
-                    "Page.setWebLifecycleState",
-                    dict(state="frozen" if frozen else "active"),
-                    self.sid(tab),
-                    timeout=2,
-                )
-            except Exception:
-                errors += 1
-        self.freeze_errors = errors
-        if not errors:
-            self.frozen = frozen
-
-    def close_tab(self, tab):
-        self.sid(tab)
-        result = self.call("Target.closeTarget", dict(targetId=tab))
-        if result.get("success"):
-            self.tabs.pop(tab)
-        return result
-
-    def close(self):
-        if self.ws:
-            try:
-                self.ws.close(timeout=1)
-            except Exception:
-                pass  # The socket may already be closed; continue owned-process cleanup.
-            self.ws = None
-        if self.proc:
-            self.proc.close()
-            self.proc = None
-        if self.folder.exists():
-            for _ in range(6):
-                try:
-                    shutil.rmtree(self.folder)
-                    break
-                except OSError:
-                    time.sleep(0.1)
