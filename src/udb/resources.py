@@ -203,14 +203,15 @@ class Governor:
         return self.status(sample)
 
     def status(self, sample):
+        light_reason = light_capacity_reason(sample)
         return dict(
             sample,
             paused=self.paused,
             admission_ready=not self.paused and not self.reason,
             reason=self.reason,
             pressure_causes=sorted(self.pressures),
-            light_operations_ready=not light_capacity_reason(sample),
-            light_reason=light_capacity_reason(sample),
+            light_operations_ready=not light_reason,
+            light_reason=light_reason,
             limits=dict(LIMITS),
         )
 
