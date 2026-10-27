@@ -24,7 +24,10 @@ def sha(path):
 def download(url, archive, *, opener=urllib.request.urlopen, pause=time.sleep):
     if archive.exists() or archive.is_symlink():
         raise FileExistsError("Download destination already exists")
-    for attempt in range(3):
+    # External FFmpeg CDN occasionally responds 503 for several seconds.
+    # Retries stay bounded and never weaken the pinned SHA-256 verification.
+    attempts = 6
+    for attempt in range(attempts):
         created = False
         try:
             with opener(url, timeout=120) as response:
@@ -52,8 +55,14 @@ def download(url, archive, *, opener=urllib.request.urlopen, pause=time.sleep):
                 503,
                 504,
             )
-            if not retryable or attempt == 2:
+            if not retryable or attempt == attempts - 1:
                 raise
+            print(
+                f"Public helper download retry {attempt + 2}/{attempts} "
+                f"after {type(error).__name__} from "
+                f"{urllib.parse.urlsplit(url).hostname}",
+                flush=True,
+            )
             pause(2**attempt)
         except BaseException:
             if created:

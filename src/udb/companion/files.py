@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import heapq
 import os
 import re
 import tempfile
@@ -87,12 +88,20 @@ class ScopedFiles:
         if not base.is_dir():
             raise NotADirectoryError("Target is not a directory")
         count = max(1, min(int(limit), 500))
+        # Stream directory entries and keep only the first 'count' safe names.
+        # Sorting all entries can allocate unbounded memory in a large folder.
+        def allowed_entries():
+            with os.scandir(base) as entries:
+                for entry in entries:
+                    try:
+                        yield self.path(entry.path)
+                    except (PermissionError, ValueError, FileNotFoundError):
+                        continue
+
         items = []
-        for entry in sorted(base.iterdir(), key=lambda p: p.name.casefold()):
-            try:
-                safe = self.path(str(entry))
-            except (PermissionError, ValueError):
-                continue
+        for safe in heapq.nsmallest(
+            count, allowed_entries(), key=lambda p: p.name.casefold()
+        ):
             items.append(
                 {
                     "name": safe.name,
@@ -100,8 +109,6 @@ class ScopedFiles:
                     "size": safe.stat().st_size if safe.is_file() else None,
                 }
             )
-            if len(items) == count:
-                break
         return {
             "path": str(base.relative_to(self.root)),
             "items": items,
@@ -241,13 +248,20 @@ class ScopedFiles:
         matches = []
         scanned = 0
         cap = max(1, min(200, int(limit)))
+        folded_text = text.casefold() if text else ""
         for base, dirs, files in os.walk(root, followlinks=False):
-            dirs[:] = [
-                d
-                for d in dirs
-                if d.casefold() not in HIDDEN_DIRS_CASEFOLD
-                and not is_reparse(Path(base) / d)
-            ]
+            # Do not descend into protected trees just to reject every file.
+            # This also avoids scanning large datasets, model weights and secrets.
+            allowed_dirs = []
+            for name in dirs:
+                if name.casefold() in HIDDEN_DIRS_CASEFOLD:
+                    continue
+                try:
+                    self.path(str(Path(base) / name))
+                except (PermissionError, ValueError, FileNotFoundError, OSError):
+                    continue
+                allowed_dirs.append(name)
+            dirs[:] = allowed_dirs
             for name in files:
                 scanned += 1
                 if scanned > MAX_SCAN_FILES:
@@ -266,12 +280,22 @@ class ScopedFiles:
                     if text:
                         if p.stat().st_size > 1024 * 1024:
                             continue
-                        if (
-                            text.casefold()
-                            not in p.read_text(
+                        if "\n" in text or "\r" in text:
+                            # Multiline queries still need the original whole-text
+                            # semantics (including matches across line breaks).
+                            found = folded_text in p.read_text(
                                 encoding="utf-8", errors="replace"
                             ).casefold()
-                        ):
+                        else:
+                            # For ordinary literal searches, stop at the first
+                            # matching line instead of copying every file.
+                            with p.open(
+                                "r", encoding="utf-8", errors="replace"
+                            ) as stream:
+                                found = any(
+                                    folded_text in line.casefold() for line in stream
+                                )
+                        if not found:
                             continue
                 except (OSError, ValueError, PermissionError):
                     continue

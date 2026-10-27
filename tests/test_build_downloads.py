@@ -49,6 +49,21 @@ def test_partial_download_is_discarded_before_retry(tmp_path):
     assert pauses == [1]
 
 
+def test_cdn_recovers_after_multiple_http_503_responses(tmp_path):
+    attempts, pauses = [], []
+
+    def open_url(url, **kwargs):
+        attempts.append(url)
+        if len(attempts) < 5:
+            raise urllib.error.HTTPError(url, 503, "temporary", {}, None)
+        return io.BytesIO(b"verified-by-caller")
+
+    target = tmp_path / "download.zip"
+    download(URL, target, opener=open_url, pause=pauses.append)
+    assert target.read_bytes() == b"verified-by-caller"
+    assert len(attempts) == 5 and pauses == [1, 2, 4, 8]
+
+
 def test_permanent_http_error_is_not_retried(tmp_path):
     attempts, pauses = [], []
 
@@ -72,7 +87,7 @@ def test_retry_limit_does_not_leave_a_partial_file(tmp_path):
     target = tmp_path / "download.zip"
     with pytest.raises(urllib.error.HTTPError):
         download(URL, target, opener=open_url, pause=pauses.append)
-    assert len(attempts) == 3 and pauses == [1, 2] and not target.exists()
+    assert len(attempts) == 6 and pauses == [1, 2, 4, 8, 16] and not target.exists()
 
 
 def test_existing_download_is_preserved(tmp_path):
