@@ -631,9 +631,12 @@ class Browser:
         if type(timeout_ms) is not int or not 100 <= timeout_ms <= 10000:
             raise PolicyError("wait_for timeout_ms must be 100..10000")
         if state=="text":
-            if not isinstance(value,str) or not 1 <= len(value) <= 2000: raise PolicyError("wait_for state=text requires value")
-            if not selector and not role: selector="body"
-        elif value: raise PolicyError("value is only used with wait_for state=text")
+            if not isinstance(value,str) or not 1 <= len(value) <= 2000:
+                raise PolicyError("wait_for state=text requires value")
+            if not selector and not role:
+                selector="body"
+        elif value:
+            raise PolicyError("value is only used with wait_for state=text")
         validate_locator(selector,role,name,exact)
         body="""const visibleMatches=matches.filter(isVisible);const enabledMatches=visibleMatches.filter(e=>!e.disabled&&e.getAttribute('aria-disabled')!=='true');
           const textMatches=matches.filter(e=>String(e.innerText||e.textContent||'').includes(__VALUE__));const state=__STATE__;
@@ -644,14 +647,20 @@ class Browser:
         deadline=time.monotonic()+timeout_ms/1000
         while True:
             remaining=deadline-time.monotonic()
-            if remaining<=0:return dict(ok=False,timed_out=True,state=state)
-            try: result=self.evaluate(tab,expression,timeout=max(0.2,min(1.5,remaining)))
+            if remaining<=0:
+                return dict(ok=False,timed_out=True,state=state)
+            try:
+                result=self.evaluate(tab,expression,timeout=max(0.2,min(1.5,remaining)))
             except PolicyError:
-                if time.monotonic()>=deadline:return dict(ok=False,timed_out=True,state=state)
+                if time.monotonic()>=deadline:
+                    return dict(ok=False,timed_out=True,state=state)
                 raise
-            if result.get("error")=="invalid_selector":return dict(ok=False,error="invalid_selector",state=state)
-            if result.get("ok"):return result
-            if time.monotonic()>=deadline:return dict(ok=False,timed_out=True,state=state,matches=result.get("matches",0))
+            if result.get("error")=="invalid_selector":
+                return dict(ok=False,error="invalid_selector",state=state)
+            if result.get("ok"):
+                return result
+            if time.monotonic()>=deadline:
+                return dict(ok=False,timed_out=True,state=state,matches=result.get("matches",0))
             time.sleep(min(0.1,max(0,deadline-time.monotonic())))
 
     def press(self, tab, key, selector="", role="", name="", exact=True):
@@ -660,7 +669,8 @@ class Browser:
           if(typeof e.focus!=='function')return {ok:false,error:'not_focusable'};e.focus();
           return {ok:document.activeElement===e||e.contains(document.activeElement),error:'not_focusable'};"""
         focused=self.evaluate(tab,self._locator_expression(selector,role,name,exact,body))
-        if not focused.get("ok"):return focused
+        if not focused.get("ok"):
+            return focused
         session=self.sid(tab)
         params=dict(key=info["key"],code=info["code"],windowsVirtualKeyCode=info["vk"],modifiers=info["modifiers"])
         down_params=dict(params)
@@ -676,11 +686,15 @@ class Browser:
         if action=="reload":
             self.call("Page.reload",dict(ignoreCache=False),session,timeout=5)
             return dict(ok=True,action=action)
-        if action not in ("back","forward"):raise PolicyError("Unsupported history action")
+        if action not in ("back","forward"):
+            raise PolicyError("Unsupported history action")
         history=self.call("Page.getNavigationHistory",session=session,timeout=5)
-        entries=history.get("entries",[]);index=history.get("currentIndex",0)+(-1 if action=="back" else 1)
-        if not 0<=index<len(entries):return dict(ok=False,reason="no_history",action=action)
-        entry=entries[index];self.call("Page.navigateToHistoryEntry",dict(entryId=entry["id"]),session,timeout=5)
+        entries=history.get("entries",[])
+        index=history.get("currentIndex",0)+(-1 if action=="back" else 1)
+        if not 0<=index<len(entries):
+            return dict(ok=False,reason="no_history",action=action)
+        entry=entries[index]
+        self.call("Page.navigateToHistoryEntry",dict(entryId=entry["id"]),session,timeout=5)
         safe=urlsplit(str(entry.get("url","")))
         safe_url=(safe.scheme+"://"+safe.netloc+safe.path) if safe.scheme in ("http","https") else ""
         return dict(ok=True,action=action,url=safe_url)
