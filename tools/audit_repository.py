@@ -90,7 +90,11 @@ def duplicates(root: Path, paths: list[str]) -> list[list[str]]:
 
 
 def audit(root: Path, paths: list[str]) -> dict:
-    problems = [{"path": p, "reason": reason(p)} for p in paths if reason(p)]
+    problems = []
+    for path in paths:
+        finding = reason(path)
+        if finding:
+            problems.append({"path": path, "reason": finding})
     repeated = duplicates(root, paths)
     return {
         "tracked_files": len(paths),
