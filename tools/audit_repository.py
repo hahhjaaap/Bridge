@@ -44,7 +44,14 @@ def reason(path: str) -> str:
     name = normalized.name.casefold()
     if parts & CACHE_DIRS:
         return "generated/runtime directory"
-    if name in PRIVATE_NAMES or name.startswith((".env.", "credentials.", "secrets.")):
+    if (
+        name in PRIVATE_NAMES
+        or name.startswith(".env.")
+        or (
+            name.startswith(("credentials.", "secrets."))
+            and name.endswith((".json", ".toml", ".yaml", ".yml"))
+        )
+    ):
         return "private credential/configuration"
     if name.endswith(PRIVATE_SUFFIXES):
         return "private runtime/model artifact"
