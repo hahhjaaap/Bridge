@@ -577,8 +577,57 @@ def test_browser_click_waits_for_navigation_and_redacts_query_string():
         return {"ok": True, "x": 21, "y": 42}
 
     browser.evaluate = evaluate
-    browser.call = lambda *args, **kwargs: {}
+    browser.call = lambda method, params=None, session=None, timeout=10: (
+        {"targetInfos": [
+            {"targetId": "owned-tab", "url": "https://new.example/result?session=secret"}
+        ]}
+        if method == "Target.getTargets"
+        else {}
+    )
     result = browser.element("owned-tab", "click", selector="#continue")
     assert result["ok"] and result["clicked"]
     assert result["navigation_completed"]
     assert result["url"] == "https://new.example/result"
+
+def test_click_navigation_does_not_evaluate_during_context_destruction():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+    browser.evaluate = lambda *args, **kwargs: pytest.fail(
+        "Runtime.evaluate is unsafe while the clicked page is navigating"
+    )
+    calls = []
+
+    def fake_call(method, params=None, session=None, timeout=10):
+        calls.append(method)
+        assert method == "Target.getTargets"
+        return {"targetInfos": [
+            {"targetId": "owned-tab", "url": "https://next.example/"}
+        ]}
+
+    browser.call = fake_call
+    browser._wait_for_document_ready = lambda *args, **kwargs: {
+        "navigation_completed": True, "url": "https://next.example/"
+    }
+    result = browser._wait_for_click_navigation(
+        "owned-tab", "https://old.example/", observe_ms=100
+    )
+    assert result["navigation_completed"]
+    assert calls == ["Target.getTargets"]
+
+
+def test_click_without_navigation_does_not_wait_for_document_ready():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+    browser.evaluate = lambda *args, **kwargs: pytest.fail(
+        "No page evaluation needed to observe navigation"
+    )
+    browser.call = lambda method, params=None, session=None, timeout=10: {
+        "targetInfos": [{"targetId": "owned-tab", "url": "https://same.example/"}]
+    }
+    browser._wait_for_document_ready = lambda *args, **kwargs: pytest.fail(
+        "A click without navigation must not trigger a document wait"
+    )
+    result = browser._wait_for_click_navigation(
+        "owned-tab", "https://same.example/", observe_ms=100
+    )
+    assert result == {"navigation_completed": False}
