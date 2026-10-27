@@ -19,3 +19,34 @@ udb.toml
 *.zip
 
 src/udb/build_info.json
+
+# Local test/lint/coverage output
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.log
+*.pid
+*.tmp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Runtime/private data: never commit from an owner's computer
+*.dpapi
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+.env.*
+credentials*.json
+secrets*.json
+*.ckpt
+*.safetensors
+*.pth
+*.pt
