@@ -108,4 +108,5 @@ def test_repository_audit_identifies_only_high_confidence_junk(tmp_path):
     }
     assert result["identical_source_groups"] == [["src/a.py", "src/b.py"]]
     assert reason("src/udb/manager.py") == ""
+    assert reason("src/udb/credentials.py") == ""
     assert reason("THIRD_PARTY_NOTICES/lib.dist-info/LICENSE") == ""
