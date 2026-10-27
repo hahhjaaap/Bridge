@@ -72,7 +72,7 @@ def test_approval_diff_omitted_for_many_lines_without_losing_payload(tmp_path):
     next_text = "old=2\n" * 5000
     (root / "invoice.py").write_text(previous, encoding="utf-8")
     response = agent.propose_write(
-        "demo", "invoice.py", next_text, digest(previous.encode())
+        "demo", "invoice.py", next_text, digest((root / "invoice.py").read_bytes())
     )
     assert "Diff preview omitted" in response["diff"]
     assert "Review the complete" in response["diff"]
@@ -93,7 +93,7 @@ def test_approval_diff_truncation_is_explicit(tmp_path):
     previous = "".join(f"before-{i:04d} abcdefghijklmnop\n" for i in range(900))
     new = "".join(f"after-{i:04d} abcdefghijklmnop\n" for i in range(900))
     (root / "invoice.py").write_text(previous, encoding="utf-8")
-    response = agent.propose_write("demo", "invoice.py", new, digest(previous.encode()))
+    response = agent.propose_write("demo", "invoice.py", new, digest((root / "invoice.py").read_bytes()))
     assert "Diff preview truncated" in response["diff"]
     assert len(response["diff"]) <= 16000
 
