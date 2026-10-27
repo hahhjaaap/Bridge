@@ -631,3 +631,42 @@ def test_click_without_navigation_does_not_wait_for_document_ready():
         "owned-tab", "https://same.example/", observe_ms=100
     )
     assert result == {"navigation_completed": False}
+
+
+def test_browser_same_url_navigation_waits_for_new_loader():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+    browser.evaluate = lambda tab, expression, timeout=10: (
+        "https://example.com/" if expression == "location.href"
+        else {"readyState": "complete", "href": "https://example.com/"}
+    )
+    loaders = iter(["old-loader", "new-loader"])
+    calls = []
+
+    def fake_call(method, params=None, session=None, timeout=10):
+        calls.append(method)
+        if method == "Page.navigate":
+            return {"loaderId": "new-loader"}
+        if method == "Page.getFrameTree":
+            return {"frameTree": {"frame": {"loaderId": next(loaders)}}}
+        return {}
+
+    browser.call = fake_call
+    result = browser.navigate("owned-tab", "https://example.com/", timeout_ms=1000)
+    assert result["navigation_completed"] and result["ready_state"] == "complete"
+    assert calls.count("Page.getFrameTree") == 2
+
+
+def test_browser_same_url_navigation_rejects_stale_loader():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+    browser.evaluate = lambda tab, expression, timeout=10: (
+        "https://example.com/" if expression == "location.href"
+        else pytest.fail("Old page must not be mistaken for new navigation")
+    )
+    browser.call = lambda method, params=None, session=None, timeout=10: (
+        {"loaderId": "new-loader"} if method == "Page.navigate"
+        else {"frameTree": {"frame": {"loaderId": "old-loader"}}}
+    )
+    with pytest.raises(PolicyError, match="Navigation timed out"):
+        browser.navigate("owned-tab", "https://example.com/", timeout_ms=100)
