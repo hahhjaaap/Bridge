@@ -46,7 +46,11 @@ class Features(unittest.TestCase):
         self.temp.cleanup()
 
     def test_malformed_rpc_returns_error_and_server_stays_usable(self):
-        from tests.components.test_windows_durability import Client
+        try:
+            from tests.components.test_windows_durability import Client
+        except ModuleNotFoundError:
+            # The legacy unittest runner executes this file as a script.
+            from test_windows_durability import Client
 
         client = Client(self.root)
         try:
