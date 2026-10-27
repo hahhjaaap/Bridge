@@ -59,9 +59,11 @@ Keep this separate from file permissions and owner approvals.
 3. Add regression tests for schema parity, permissions, error responses and
    recovery behavior.
 4. Run `python -m pytest`, `python -m ruff check src tools tests`,
-   `python tools/audit_repository.py --strict`, and the Windows wheel/EXE
-   smoke tests. The whole-tree lint inventory may contain existing debt; fix
-   regressions in changed files before widening the gate.
+   `python tools/audit_repository.py --strict`,
+   `python tools/check_import_boundaries.py`, and the Windows wheel/EXE
+   smoke tests. CI now gates the entire source/tools/tests tree on Ruff.
+   The import check guards all canonical modules against eager import cycles;
+   it intentionally does not treat deferred function-local imports as cycles.
 
 ## Compatibility and safety
 
