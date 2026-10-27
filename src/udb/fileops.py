@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 import time
+from pathlib import Path
 
 from .core import SOURCE_EXT, PolicyError
 
@@ -36,6 +38,8 @@ def search_files(agent, project, path=".", pattern="*", text="", limit=100):
         raise PolicyError("Invalid filename pattern or literal search text")
     if type(limit) is not int or not 1 <= limit <= 200:
         raise PolicyError("Result limit must be 1..200")
+    folded_pattern = pattern.casefold()
+    folded_text = text.casefold()
     start = agent.path(project, path)
     _, root = agent.project(project)
     if not start.is_dir():
@@ -50,18 +54,13 @@ def search_files(agent, project, path=".", pattern="*", text="", limit=100):
         folder = pending.pop()
         try:
             agent.path(project, folder.relative_to(root).as_posix())
-            with __import__("os").scandir(folder) as entries:
+            with os.scandir(folder) as entries:
                 for entry in entries:
                     scanned += 1
                     if scanned > 10000 or time.monotonic() >= deadline:
                         truncated = True
                         break
-                    rel = (
-                        __import__("pathlib")
-                        .Path(entry.path)
-                        .relative_to(root)
-                        .as_posix()
-                    )
+                    rel = Path(entry.path).relative_to(root).as_posix()
                     try:
                         target = agent.path(project, rel)
                         if target.is_dir():
@@ -70,7 +69,7 @@ def search_files(agent, project, path=".", pattern="*", text="", limit=100):
                         if (
                             target.suffix.lower() not in SOURCE_EXT
                             or not fnmatch.fnmatch(
-                                target.name.casefold(), pattern.casefold()
+                                target.name.casefold(), folded_pattern
                             )
                         ):
                             continue
@@ -83,11 +82,12 @@ def search_files(agent, project, path=".", pattern="*", text="", limit=100):
                                 pending.clear()
                                 break
                             lines = data.decode("utf-8-sig").splitlines()
-                            hits = [
-                                {"line": i + 1, "text": line[:300]}
-                                for i, line in enumerate(lines)
-                                if text.casefold() in line.casefold()
-                            ][:10]
+                            hits = []
+                            for i, line in enumerate(lines, 1):
+                                if folded_text in line.casefold():
+                                    hits.append({"line": i, "text": line[:300]})
+                                    if len(hits) == 10:
+                                        break
                             if not hits:
                                 continue
                             row["matches"] = hits
