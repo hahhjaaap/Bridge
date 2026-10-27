@@ -5,11 +5,9 @@ prune state
 prune vendor
 prune vendor-office
 
-include _udb_compat.py bridge.py test.cmd
+include _udb_compat.py bridge.py
 include udb_background.py udb_companion.py udb_documents.py udb_unified.py
 recursive-include tests *.py *.ps1
 include plugin.json
-include VALIDATION.md
-include AUDIT.md
 
 include install.ps1
