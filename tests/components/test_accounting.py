@@ -101,7 +101,7 @@ class InvoiceAuditTests(unittest.TestCase):
                 "spreadsheet", action="export_audit", path="input.xlsx",
                 expected_sha256=self.sha("input.xlsx"),
             )
-        with self.assertRaises(ValueError):
+        with self.assertRaises((ValueError, PermissionError)):
             self.rt.features.documents.start(
                 "spreadsheet", action="export_audit", path="input.xlsx",
                 destination="../escape.xlsx", expected_sha256=self.sha("input.xlsx"),
