@@ -20,17 +20,20 @@ jobs:
           set -euo pipefail
           while IFS='|' read -r branch expected archive; do
             [[ -n "$branch" ]] || continue
-            current="$(gh api "repos/$GH_REPO/git/ref/heads/$branch" --jq '.object.sha // empty' 2>/dev/null || true)"
-            if [[ -z "$current" ]]; then
+            if ! gh api "repos/$GH_REPO/git/ref/heads/$branch" >/dev/null 2>&1; then
               echo "Already absent: $branch"
               continue
             fi
+            current="$(gh api "repos/$GH_REPO/git/ref/heads/$branch" --jq '.object.sha')"
             if [[ "$current" != "$expected" ]]; then
               echo "::error::Branch moved; refusing deletion: $branch"
               exit 1
             fi
             if [[ -n "$archive" ]]; then
-              saved="$(gh api "repos/$GH_REPO/git/ref/tags/$archive" --jq '.object.sha // empty' 2>/dev/null || true)"
+              saved=""
+              if gh api "repos/$GH_REPO/git/ref/tags/$archive" >/dev/null 2>&1; then
+                saved="$(gh api "repos/$GH_REPO/git/ref/tags/$archive" --jq '.object.sha')"
+              fi
               if [[ -z "$saved" ]]; then
                 gh api -X POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$archive" -f "sha=$expected" >/dev/null
                 echo "Archived: $branch -> $archive"
@@ -66,8 +69,7 @@ jobs:
           security/release-package-allowlist|0dd923706956dede925a695b03cc77d68e888e6e|archive/2026-10-27/legacy-core-release
           BRANCHES
           branch="chore/repository-hygiene-readme-20261027"
-          current="$(gh api "repos/$GH_REPO/git/ref/heads/$branch" --jq '.object.sha // empty' 2>/dev/null || true)"
-          if [[ -n "$current" ]]; then
+          if gh api "repos/$GH_REPO/git/ref/heads/$branch" >/dev/null 2>&1; then
             ahead="$(gh api "repos/$GH_REPO/compare/main...$branch" --jq '.ahead_by')"
             [[ "$ahead" == "0" ]] || { echo "::error::Cleanup branch has unmerged commits"; exit 1; }
             gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$branch" >/dev/null
