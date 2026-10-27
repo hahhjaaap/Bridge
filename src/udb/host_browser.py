@@ -511,7 +511,12 @@ class Browser:
         )
 
     def _wait_for_document_ready(
-        self, tab, timeout_ms=10000, previous_url=None, require_transition=False
+        self,
+        tab,
+        timeout_ms=10000,
+        previous_url=None,
+        require_transition=False,
+        expected_loader_id=None,
     ):
         if not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool) or not 100 <= timeout_ms <= 15000:
             raise PolicyError("Navigation timeout_ms must be 100..15000")
@@ -524,6 +529,28 @@ class Browser:
                 raise PolicyError(
                     f"Navigation timed out after {timeout_ms} ms; inspect before retrying"
                 )
+            # Same-URL navigations cannot be detected by comparing href. CDP
+            # returns the new loaderId; wait until the main frame adopts it.
+            if expected_loader_id and not transition_seen:
+                try:
+                    tree = self.call(
+                        "Page.getFrameTree",
+                        session=self.sid(tab),
+                        timeout=max(0.2, min(1.0, remaining)),
+                    )
+                except PolicyError as exc:
+                    if (
+                        self._is_transient_context_error(exc)
+                        or "timed out" in str(exc).lower()
+                    ):
+                        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                        continue
+                    raise
+                frame = tree.get("frameTree", {}).get("frame", {})
+                if frame.get("loaderId") != expected_loader_id:
+                    time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                    continue
+                transition_seen = True
             try:
                 state = self.evaluate(
                     tab, expression, timeout=max(0.2, min(1.0, remaining))
@@ -713,6 +740,9 @@ class Browser:
             timeout_ms=timeout_ms,
             previous_url=previous_url,
             require_transition=bool(result.get("loaderId")),
+            expected_loader_id=(
+                result.get("loaderId") if previous_url == url else None
+            ),
         )
         return dict(tab_id=tab, navigation_started=True, **ready)
 
