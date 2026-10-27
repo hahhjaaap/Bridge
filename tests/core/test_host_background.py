@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from udb.core import Agent, PolicyError
-from udb.host_browser import Browser, validate_url
+from udb.host_browser import Browser, parse_key, validate_locator, validate_url
 from udb.host_client import atomic_json, status
 from udb.host_service import HostService
 from udb.resources import LIMITS, Governor, require_capacity
@@ -286,3 +286,136 @@ def test_task_terminal_state_changes_mark_checkpoint_dirty():
         ("running", False, 0),
         ("running", True, 1),
     ]
+
+
+@pytest.mark.parametrize(
+    "selector,role,name",
+    [
+        ("#save", "", ""), ("", "button", "Save"), ("", "textbox", "Email"),
+        ("", "link", "Continue"), ("", "checkbox", "Agree"),
+        ("", "combobox", "Country"), ("", "heading", "Results"),
+    ],
+)
+def test_browser_locator_accepts_css_or_semantic_role(selector, role, name):
+    assert validate_locator(selector, role, name) is None
+
+
+@pytest.mark.parametrize(
+    "selector,role,name",
+    [
+        ("#save", "button", "Save"), ("", "", ""), ("", "", "Save"),
+        ("", "document", "Page"), ("x" * 501, "", ""),
+    ],
+)
+def test_browser_locator_rejects_ambiguous_or_unsupported_locators(selector, role, name):
+    with pytest.raises(PolicyError):
+        validate_locator(selector, role, name)
+
+
+def test_browser_semantic_click_uses_accessible_role_and_name():
+    browser = Browser.__new__(Browser)
+    captured = {}
+    browser.evaluate = lambda tab, expression, timeout=10: captured.update(
+        tab=tab, expression=expression, timeout=timeout
+    ) or {"ok": True}
+    result = browser.element("owned-tab", "click", role="button", name="Save")
+    assert result["ok"]
+    assert captured["tab"] == "owned-tab"
+    assert '"button"' in captured["expression"]
+    assert '"Save"' in captured["expression"]
+    assert "locator_not_unique" in captured["expression"]
+
+
+def test_browser_snapshot_is_bounded_and_redacts_secret_controls():
+    browser = Browser.__new__(Browser)
+    captured = {}
+    browser.evaluate = lambda tab, expression, timeout=10: captured.update(
+        tab=tab, expression=expression, timeout=timeout
+    ) or {"count": 0, "elements": [], "truncated": False}
+    result = browser.snapshot("owned-tab")
+    assert result["count"] == 0
+    assert "slice(0,160)" in captured["expression"]
+    assert "'[redacted]'" in captured["expression"]
+    assert "aria-labelledby" in captured["expression"]
+
+
+def test_browser_wait_for_polls_until_visible():
+    browser = Browser.__new__(Browser)
+    results = iter([{"ok": False, "state": "visible", "matches": 0},
+                    {"ok": True, "state": "visible", "matches": 1, "visible": 1}])
+    captured = []
+    browser.evaluate = lambda tab, expression, timeout=10: captured.append(expression) or next(results)
+    result = browser.wait_for("owned-tab", role="button", name="Continue", timeout_ms=1000)
+    assert result["ok"] and len(captured) == 2
+    assert all("wantedName" in expression for expression in captured)
+
+
+def test_browser_wait_for_timeout_is_explicit():
+    browser = Browser.__new__(Browser)
+    browser.evaluate = lambda *args, **kwargs: {"ok": False, "state": "visible", "matches": 0}
+    result = browser.wait_for("owned-tab", selector="#late", timeout_ms=100)
+    assert result["ok"] is False and result["timed_out"] is True
+
+
+@pytest.mark.parametrize("key", ["Enter", "Tab", "Escape", "ArrowDown", "Ctrl+A", "Shift+Tab"])
+def test_browser_key_allowlist_accepts_common_keys(key):
+    assert parse_key(key)["code"]
+
+
+@pytest.mark.parametrize("key", ["Alt+F4", "Ctrl+W", "Meta+Q", "launch-app", ""])
+def test_browser_key_allowlist_rejects_window_or_unknown_shortcuts(key):
+    with pytest.raises(PolicyError):
+        parse_key(key)
+
+
+def test_browser_press_focuses_owned_element_then_dispatches_cdp_key():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+    browser.evaluate = lambda *args, **kwargs: {"ok": True, "focused": True}
+    calls = []
+    browser.call = lambda method, params=None, session=None, timeout=10: calls.append((method, params, session)) or {}
+    result = browser.press("owned-tab", "Enter", role="button", name="Continue")
+    assert result["ok"]
+    assert [item[0] for item in calls] == ["Input.dispatchKeyEvent", "Input.dispatchKeyEvent"]
+    assert calls[0][1]["type"] == "keyDown" and calls[1][1]["type"] == "keyUp"
+    assert all(item[2] == "owned-session" for item in calls)
+    calls.clear()
+    result = browser.press("owned-tab", "a", role="textbox", name="Search")
+    assert result["ok"]
+    assert calls[0][1]["text"] == "a"
+    assert "text" not in calls[1][1] and "unmodifiedText" not in calls[1][1]
+
+
+def test_browser_select_option_requires_native_select_and_verifies_selection():
+    browser = Browser.__new__(Browser)
+    captured = {}
+    browser.evaluate = lambda tab, expression, timeout=10: captured.update(expression=expression) or {"ok": True, "value": "VN", "label": "Vietnam"}
+    result = browser.element("owned-tab", "select_option", selector="#country", value="VN")
+    assert result["ok"] and result["value"] == "VN"
+    assert "e.tagName!=='SELECT'" in captured["expression"]
+    assert "option_not_found" in captured["expression"]
+
+
+def test_browser_read_redacts_token_like_fields():
+    browser = Browser.__new__(Browser)
+    captured = {}
+    browser.evaluate = lambda tab, expression, timeout=10: captured.update(expression=expression) or {"elements": []}
+    browser.read("owned-tab")
+    assert "password|secret|token|otp|one-time-code" in captured["expression"]
+    assert "value:secret?'[redacted]'" in captured["expression"]
+
+
+def test_host_dispatch_routes_new_browser_actions(engine):
+    class FakeBrowser:
+        deadline = None
+        tabs = {"owned-tab": "session"}
+        def snapshot(self, tab): return {"ok": True, "tab": tab}
+        def wait_for(self, *args): return {"ok": True, "args": args}
+        def press(self, *args): return {"ok": True, "args": args}
+        def history(self, tab, action): return {"ok": True, "tab": tab, "action": action}
+        def element(self, *args): return {"ok": True, "args": args}
+    fake = FakeBrowser()
+    sid = "c" * 32
+    engine.sessions[sid] = {"kind": "browser", "expires": time.time() + 60, "object": fake}
+    assert engine.dispatch("browser", {"session_id": sid, "action": "snapshot", "tab_id": "owned-tab"}) == {"ok": True, "tab": "owned-tab"}
+    assert engine.dispatch("browser", {"session_id": sid, "action": "reload", "tab_id": "owned-tab"})["action"] == "reload"
