@@ -28,14 +28,12 @@ jobs:
       - run: python tools/audit_repository.py --strict
       - run: python tools/check_import_boundaries.py
       - name: Run regression tests
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            # Chrome needs a live session bus, even with headless rendering.
-            dbus-run-session -- python -m pytest
-          else
-            python -m pytest
-          fi
+        if: runner.os != 'Linux'
+        run: python -m pytest
+      - name: Run Linux regressions with a session bus
+        if: runner.os == 'Linux'
+        # Chrome needs a live session bus, even with headless rendering.
+        run: dbus-run-session -- python -m pytest
       - name: Check native Windows browser and utility APIs
         if: runner.os == 'Windows'
         run: python tools/check_windows_workflows.py --pointer-preview "${{ runner.temp }}/udb-ui/native-pointer.png"
