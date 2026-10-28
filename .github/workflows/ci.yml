@@ -27,7 +27,15 @@ jobs:
       - run: python -m ruff format --check .
       - run: python tools/audit_repository.py --strict
       - run: python tools/check_import_boundaries.py
-      - run: python -m pytest
+      - name: Run regression tests
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            # Chrome needs a live session bus, even with headless rendering.
+            dbus-run-session -- python -m pytest
+          else
+            python -m pytest
+          fi
       - name: Check native Windows browser and utility APIs
         if: runner.os == 'Windows'
         run: python tools/check_windows_workflows.py --pointer-preview "${{ runner.temp }}/udb-ui/native-pointer.png"
