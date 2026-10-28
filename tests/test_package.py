@@ -36,8 +36,8 @@ def test_single_version_and_generated_registry(tmp_path):
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
     names = {t["name"] for t in data["tools"]}
-    assert len(names) == data["tool_count"] == 60
-    assert data["backend_count"] == data["core_count"] + data["companion_count"] == 66
+    assert len(names) == data["tool_count"] == 61
+    assert data["backend_count"] == data["core_count"] + data["companion_count"] == 67
     assert {
         "virtual_pointer",
         "work_recovery",
@@ -243,7 +243,7 @@ def test_real_source_mcp_without_installed_core_or_owner_access(tmp_path):
         p.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
         p.stdin.flush()
         listing = rpc("tools/list", {})
-        assert len(listing["tools"]) == 60
+        assert len(listing["tools"]) == 61
         status = rpc("tools/call", dict(name="bridge_status", arguments={}))
         assert not status.get("isError"), status
         assert status["_meta"]["udb"]["version"] == __version__
@@ -397,3 +397,23 @@ def test_owner_options_work_with_default_start_and_either_argument_order(
             "--json",
         ]
     ]
+
+
+def test_cli_settings_scope_restores_configuration_after_nested_failure(tmp_path):
+    from udb import cli, config
+
+    outer = config.Settings(tmp_path, tmp_path / "outer")
+    inner = config.Settings(tmp_path, tmp_path / "inner")
+    baseline = config.Settings(tmp_path, tmp_path / "baseline")
+    previous = config.activate(baseline)
+    try:
+        with pytest.raises(RuntimeError, match="canceled operation"):
+            with cli._settings_scope(outer):
+                assert config.effective(tmp_path) is outer
+                with cli._settings_scope(inner):
+                    assert config.effective(tmp_path) is inner
+                assert config.effective(tmp_path) is outer
+                raise RuntimeError("canceled operation")
+        assert config.effective(tmp_path) is baseline
+    finally:
+        config.activate(previous)

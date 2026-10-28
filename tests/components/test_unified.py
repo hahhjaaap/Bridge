@@ -94,8 +94,8 @@ try:
     p.stdin.flush()
     tools = rpc(2, "tools/list")["tools"]
     names = {tool["name"] for tool in tools}
-    assert len(tools) == 60, f"Expected 60 tools, found {len(tools)}"
-    assert len(names) == 60
+    assert len(tools) == 61, f"Expected 61 tools, found {len(tools)}"
+    assert len(names) == 61
     from udb_tool_catalog import HIDDEN_ALIASES
 
     assert not names.intersection(HIDDEN_ALIASES)
@@ -118,7 +118,7 @@ try:
         "terminal_read",
     }.issubset(names)
     print(
-        "PASS | Unified tool discovery: 60 public tools (66 backend implementations retained)"
+        "PASS | Unified tool discovery: 61 public tools (67 backend implementations retained)"
     )
     status = rpc(3, "tools/call", {"name": "bridge_status", "arguments": {}})
     assert status["content"][0]["text"].startswith("PASS |")

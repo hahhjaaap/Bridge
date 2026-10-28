@@ -20,36 +20,59 @@ ALIASES = {
     "invoice_no": ("so hoa don", "so hd", "so hdon", "invoice number"),
     "series": ("ky hieu", "ky hieu hoa don", "ky hieu hd", "invoice series"),
     "seller_tax_id": (
-        "mst nguoi ban", "ma so thue nguoi ban", "mst ben ban",
-        "ma so thue ben ban", "mst nban", "seller tax id",
+        "mst nguoi ban",
+        "ma so thue nguoi ban",
+        "mst ben ban",
+        "ma so thue ben ban",
+        "mst nban",
+        "seller tax id",
         "ma so thue cua nguoi ban",
     ),
     "date": ("ngay lap", "ngay lap hoa don", "ngay hoa don", "invoice date"),
     "net": (
-        "tien truoc thue", "tien chua thue", "thanh tien chua thue",
-        "cong tien hang hoa dich vu", "cong tien hang", "doanh so chua thue",
-        "tong tien chua thue", "tong tien truoc thue", "tong tien hang hoa dich vu",
-        "tien hang", "net amount",
+        "tien truoc thue",
+        "tien chua thue",
+        "thanh tien chua thue",
+        "cong tien hang hoa dich vu",
+        "cong tien hang",
+        "doanh so chua thue",
+        "tong tien chua thue",
+        "tong tien truoc thue",
+        "tong tien hang hoa dich vu",
+        "tien hang",
+        "net amount",
     ),
     "vat": (
-        "tien thue gtgt", "tien thue vat", "thue gtgt",
-        "tong tien thue gtgt", "tong tien thue",
-        "tien thue", "vat amount",
+        "tien thue gtgt",
+        "tien thue vat",
+        "thue gtgt",
+        "tong tien thue gtgt",
+        "tong tien thue",
+        "tien thue",
+        "vat amount",
     ),
     "total": (
-        "tong tien thanh toan", "tong thanh toan", "tong cong thanh toan",
-        "tong tien", "total amount",
+        "tong tien thanh toan",
+        "tong thanh toan",
+        "tong cong thanh toan",
+        "tong tien",
+        "total amount",
     ),
 }
+
 
 def normalize(value):
     if value is None:
         return ""
     s = unicodedata.normalize("NFKD", str(value).casefold().replace("đ", "d"))
-    return re.sub(r"[^a-z0-9]+", " ", "".join(c for c in s if not unicodedata.combining(c))).strip()
+    return re.sub(
+        r"[^a-z0-9]+", " ", "".join(c for c in s if not unicodedata.combining(c))
+    ).strip()
 
 
-NORMALIZED = {field: {normalize(alias) for alias in names} for field, names in ALIASES.items()}
+NORMALIZED = {
+    field: {normalize(alias) for alias in names} for field, names in ALIASES.items()
+}
 
 
 def _column(value, headers):
@@ -77,7 +100,9 @@ def _header(sheet, a):
     if row_hint is not None and (type(row_hint) is not int or not 1 <= row_hint <= 25):
         raise ValueError("header_row must be 1..25")
     best = None
-    for n, row in enumerate(sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 25), values_only=True), 1):
+    for n, row in enumerate(
+        sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 25), values_only=True), 1
+    ):
         if row_hint is not None and n != row_hint:
             continue
         mapping = {}
@@ -99,7 +124,9 @@ def _header(sheet, a):
         if field not in ALIASES:
             raise ValueError("Unknown accounting field: " + str(field)[:50])
         mapping[field] = _column(value, headers)
-    if "invoice_no" not in mapping or not any(k in mapping for k in ("net", "vat", "total")):
+    if "invoice_no" not in mapping or not any(
+        k in mapping for k in ("net", "vat", "total")
+    ):
         raise ValueError("Map invoice_no and at least one of net, vat or total")
     if len(set(mapping.values())) != len(mapping):
         raise ValueError("Multiple accounting fields mapped to one column")
@@ -139,13 +166,19 @@ def _amount(value):
         if len(parts) != 2 or not 1 <= len(parts[1]) <= 2:
             return None, "Ambiguous amount separators"
         whole = parts[0].split(thousands_sep)
-        if len(whole) > 1 and (not 1 <= len(whole[0]) <= 3 or any(len(p) != 3 for p in whole[1:])):
+        if len(whole) > 1 and (
+            not 1 <= len(whole[0]) <= 3 or any(len(p) != 3 for p in whole[1:])
+        ):
             return None, "Invalid thousands grouping"
         s = "".join(whole) + "." + parts[1]
     elif "," in s or "." in s:
         sep = "," if "," in s else "."
         parts = s.split(sep)
-        if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]) and 1 <= len(parts[0]) <= 3:
+        if (
+            len(parts) > 1
+            and all(len(p) == 3 for p in parts[1:])
+            and 1 <= len(parts[0]) <= 3
+        ):
             s = "".join(parts)
         elif len(parts) == 2 and 1 <= len(parts[1]) <= 2:
             s = parts[0] + "." + parts[1]
@@ -179,14 +212,18 @@ def analyze(files, a):
     import openpyxl
 
     source = files.path(a["path"])
-    book = openpyxl.load_workbook(source, read_only=True, data_only=False, keep_links=False)
+    book = openpyxl.load_workbook(
+        source, read_only=True, data_only=False, keep_links=False
+    )
     try:
         sheet_name = a.get("sheet") or book.sheetnames[0]
         if sheet_name not in book:
             raise ValueError("Unknown sheet")
         sheet = book[sheet_name]
         if sheet.max_row > MAX_ROWS + 25 or sheet.max_column > MAX_COLUMNS:
-            raise ValueError("Accounting audit limited to 10000 data rows and 100 columns")
+            raise ValueError(
+                "Accounting audit limited to 10000 data rows and 100 columns"
+            )
         header_row, mapping = _header(sheet, a)
         tolerance = a.get("tolerance_vnd", 1)
         if type(tolerance) is not int or not 0 <= tolerance <= 1000000:
@@ -211,7 +248,10 @@ def analyze(files, a):
             checked += 1
             if checked > MAX_ROWS:
                 raise ValueError("Accounting audit exceeds 10000 rows")
-            values = {key: row[index] if index < len(row) else None for key, index in mapping.items()}
+            values = {
+                key: row[index] if index < len(row) else None
+                for key, index in mapping.items()
+            }
             number = _display(values.get("invoice_no")).strip()
             series = _display(values.get("series")).strip()
             seller = _display(values.get("seller_tax_id")).strip()
@@ -222,7 +262,13 @@ def analyze(files, a):
             if number:
                 key = (normalize(seller), normalize(series), normalize(number))
                 if key in keys:
-                    issue(row_index, "POSSIBLE_DUPLICATE", "Invoice identifier also occurs at row " + str(keys[key]) + "; multiple line items may be legitimate")
+                    issue(
+                        row_index,
+                        "POSSIBLE_DUPLICATE",
+                        "Invoice identifier also occurs at row "
+                        + str(keys[key])
+                        + "; multiple line items may be legitimate",
+                    )
                 else:
                     keys[key] = row_index
             amounts = {}
@@ -242,7 +288,11 @@ def analyze(files, a):
             if all(field in amounts for field in ("net", "vat", "total")):
                 delta = amounts["net"] + amounts["vat"] - amounts["total"]
                 if abs(delta) > tolerance:
-                    issue(row_index, "AMOUNT_MISMATCH", "Net + VAT - total differs by " + str(delta))
+                    issue(
+                        row_index,
+                        "AMOUNT_MISMATCH",
+                        "Net + VAT - total differs by " + str(delta),
+                    )
         by_code = defaultdict(int)
         for _, code, _ in issues:
             by_code[code] += 1
@@ -253,8 +303,12 @@ def analyze(files, a):
             "rows_checked": checked,
             "issue_count": len(issues),
             "issues_by_code": dict(sorted(by_code.items())),
-            "amount_totals": {k: str(totals[k]) for k in ("net", "vat", "total") if k in mapping},
-            "amount_cells_counted": {k: counts[k] for k in ("net", "vat", "total") if k in mapping},
+            "amount_totals": {
+                k: str(totals[k]) for k in ("net", "vat", "total") if k in mapping
+            },
+            "amount_cells_counted": {
+                k: counts[k] for k in ("net", "vat", "total") if k in mapping
+            },
             "issues_preview": [{"row": n, "code": code} for n, code, _ in issues[:30]],
             "issues": issues,
             "source": source.name,

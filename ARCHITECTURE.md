@@ -75,6 +75,26 @@ Keep this separate from file permissions and owner approvals.
   into an isolated Sandbox. Do not split it into imports without changing
   the guest deployment protocol and testing the resulting boundary.
 
+## Browser and host lifecycle
+
+- `udb.host_service` owns admission, session expiry and the serial mailbox. Session
+  creation, resolution and browser opening have separate helpers; all remote
+  operations still pass the same owner and resource checks in `dispatch`.
+- `udb.browser_actions` is the explicit browser action router and shared public
+  action catalog. It never dispatches arbitrary caller-supplied method names.
+- `udb.host_browser` owns CDP transport, tab ownership and bounded DOM operations.
+  Fixed DOM programs live in `udb.browser_dom`; page identity artwork lives in
+  `udb.browser_identity`. Callers can pass validated locators and data, not code.
+- `udb.owned_process` owns Windows Job Object containment independently of browser
+  and workspace code. `host_browser.OwnedProcess` remains a compatibility export.
+- `udb.activity.EventReader` skips unchanged idle polls using database/WAL metadata,
+  with a two-second forced rescan for deferred filesystem updates. It validates
+  paths on every poll and holds no database handle between reads, allowing log
+  replacement on Windows. One-shot callers retain `read_events`.
+- CLI commands share an exception-safe settings scope. GUI refresh is divided
+  into projects, host status, approvals, jobs and connection updates while
+  retaining its outer error boundary.
+
 ## Where new code belongs
 
 1. Define the public schema in the appropriate companion schema/feature/
@@ -88,6 +108,8 @@ Keep this separate from file permissions and owner approvals.
    `python tools/audit_repository.py --strict`,
    `python tools/check_import_boundaries.py`, and the Windows wheel/EXE
    smoke tests. CI now gates the entire source/tools/tests tree on Ruff.
+   `python -m ruff format --check .` also runs in CI. Use `python -m ruff format .`
+   before submitting formatting changes.
    The import check guards all canonical modules against eager import cycles;
    it intentionally does not treat deferred function-local imports as cycles.
 

@@ -70,7 +70,14 @@ class Documents:
         from udb.companion.processes import ManagedProcess
 
         actions = {
-            "spreadsheet": {"inspect", "read", "write", "edit_cells", "audit_invoices", "export_audit"},
+            "spreadsheet": {
+                "inspect",
+                "read",
+                "write",
+                "edit_cells",
+                "audit_invoices",
+                "export_audit",
+            },
             "word_document": {"inspect", "read", "write", "replace_text"},
             "pdf_document": {"inspect", "read", "write", "merge", "extract"},
         }
@@ -89,7 +96,14 @@ class Documents:
             raise ValueError("Use " + extension + " paths")
         expected = args.get("expected_sha256", "NEW")
         destination = args.get("destination", "")
-        writing = action in ("write", "edit_cells", "replace_text", "merge", "extract", "export_audit")
+        writing = action in (
+            "write",
+            "edit_cells",
+            "replace_text",
+            "merge",
+            "extract",
+            "export_audit",
+        )
         inputs = []
         if action not in ("write", "merge"):
             inputs.append(checked_input(files, given, extension))

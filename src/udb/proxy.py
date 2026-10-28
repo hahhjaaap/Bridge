@@ -298,6 +298,14 @@ class UnifiedProxy:
             ):
                 raise RuntimeError("Existing desktop capability is required")
             if (
+                name == "virtual_pointer"
+                and grant.get("desktop_paused")
+                and arguments.get("action") not in {"status", "hide", "stop"}
+            ):
+                raise RuntimeError(
+                    "Desktop control is paused locally; only the owner can resume in UDB"
+                )
+            if (
                 name == "terminal_start"
                 and arguments.get("mode") == "conpty"
                 and "execute" not in grant.get("capabilities", [])

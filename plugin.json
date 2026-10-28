@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "universal-desktop-bridge",
-  "description": "Universal Desktop Bridge: one package and CLI; 60 public tools.",
+  "description": "Universal Desktop Bridge: one package and CLI; 61 public tools.",
   "author": {
     "name": "Personal developer"
   },

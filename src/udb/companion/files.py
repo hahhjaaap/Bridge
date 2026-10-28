@@ -88,6 +88,7 @@ class ScopedFiles:
         if not base.is_dir():
             raise NotADirectoryError("Target is not a directory")
         count = max(1, min(int(limit), 500))
+
         # Stream directory entries and keep only the first 'count' safe names.
         # Sorting all entries can allocate unbounded memory in a large folder.
         def allowed_entries():
@@ -283,9 +284,12 @@ class ScopedFiles:
                         if "\n" in text or "\r" in text:
                             # Multiline queries still need the original whole-text
                             # semantics (including matches across line breaks).
-                            found = folded_text in p.read_text(
-                                encoding="utf-8", errors="replace"
-                            ).casefold()
+                            found = (
+                                folded_text
+                                in p.read_text(
+                                    encoding="utf-8", errors="replace"
+                                ).casefold()
+                            )
                         else:
                             # For ordinary literal searches, stop at the first
                             # matching line instead of copying every file.

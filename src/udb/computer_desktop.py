@@ -23,7 +23,7 @@ from .desktop_guest import BitmapHeader, InputEvent, KeyInput, MouseInput
 
 
 class Desktop:
-    def __init__(self, guard=None):
+    def __init__(self, guard=None, control=None):
         import win32gui
         import win32process
 
@@ -31,6 +31,7 @@ class Desktop:
         self.process = win32process
         self.windows = {}
         self.guard = guard
+        self.control = control
         self.u = ctypes.WinDLL("user32", use_last_error=True)
         self.u.SendInput.argtypes = [w.UINT, ctypes.POINTER(InputEvent), ctypes.c_int]
         self.u.SendInput.restype = w.UINT
@@ -103,7 +104,10 @@ class Desktop:
         kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
         kernel.OpenProcess.restype = w.HANDLE
         kernel.QueryFullProcessImageNameW.argtypes = [
-            w.HANDLE, w.DWORD, w.LPWSTR, ctypes.POINTER(w.DWORD)
+            w.HANDLE,
+            w.DWORD,
+            w.LPWSTR,
+            ctypes.POINTER(w.DWORD),
         ]
         kernel.QueryFullProcessImageNameW.restype = w.BOOL
         kernel.CloseHandle.argtypes = [w.HANDLE]
@@ -119,8 +123,10 @@ class Desktop:
             ):
                 return None
             path = image.value
-            if path.lower().replace("/", "\\").endswith(
-                "\\google\\chrome\\application\\chrome.exe"
+            if (
+                path.lower()
+                .replace("/", "\\")
+                .endswith("\\google\\chrome\\application\\chrome.exe")
             ):
                 return path
             return None
@@ -227,6 +233,9 @@ class Desktop:
         return hwnd
 
     def send(self, hwnd, events):
+        control = getattr(self, "control", None)
+        if control:
+            control.check()
         if self.guard is not None and not self.guard():
             raise PolicyError("Computer access was revoked; input stopped")
         if self.gui.GetForegroundWindow() != hwnd:
@@ -240,6 +249,9 @@ class Desktop:
             raise PolicyError(
                 "Windows blocked or partially accepted input; inspect before retrying. No elevation/UAC bypass"
             )
+
+        if control:
+            control.note_injected()
 
     def key(self, vk=0, scan=0, flags=0):
         event = InputEvent()
@@ -372,6 +384,22 @@ class Desktop:
         self.validate_options(
             action, button, clicks, duration_ms, horizontal, wait_ms, condition
         )
+        control = getattr(self, "control", None)
+        if action == "control_status":
+            return (
+                control.status()
+                if control
+                else {"state": "unavailable", "exclusive": False}
+            )
+        if control and action not in {
+            "list",
+            "displays",
+            "snapshot",
+            "screenshot",
+            "wait_for",
+            "batch",
+        }:
+            control.check()
         if action == "list":
             return self.listing()
         if action == "displays":
@@ -468,7 +496,11 @@ class Desktop:
             parts = key.upper().split("+")
             if not 1 <= len(parts) <= 4 or any(k not in names for k in parts):
                 raise PolicyError("Unsupported key chord")
-            if set(parts) in ({"WIN", "L"}, {"CTRL", "ALT", "DELETE"}):
+            if set(parts) in (
+                {"WIN", "L"},
+                {"CTRL", "ALT", "DELETE"},
+                {"CTRL", "ALT", "SHIFT", "BACKSPACE"},
+            ):
                 raise PolicyError("Secure/lock key combinations are refused")
             pressed = []
             try:
@@ -512,6 +544,8 @@ class Desktop:
             import win32api
 
             win32api.SetCursorPos((x, y))
+            if control:
+                control.note_injected()
             down, up = {"left": (2, 4), "right": (8, 16), "middle": (32, 64)}[button]
             if action == "click":
                 flags = [(down, 0), (up, 0)] * clicks
@@ -548,6 +582,7 @@ class Desktop:
     ):
         if action not in {
             "list",
+            "control_status",
             "focus",
             "screenshot",
             "type",
@@ -598,9 +633,8 @@ class Desktop:
             if (
                 not isinstance(row, dict)
                 or set(row) - fields
-                or row.get("action") in (
-                    "list", "batch", "screenshot", "displays", "open_chrome_tab"
-                )
+                or row.get("action")
+                in ("list", "batch", "screenshot", "displays", "open_chrome_tab")
                 or "action" not in row
             ):
                 raise PolicyError("Invalid/nested batch step; capture/list separately")
@@ -700,6 +734,8 @@ class Desktop:
         if action == "drag":
             self.checked_point(hwnd, from_x, from_y)
             win32api.SetCursorPos((from_x, from_y))
+            if getattr(self, "control", None):
+                self.control.note_injected()
             event = InputEvent()
             event.type = 0
             event.data.mi = MouseInput(0, 0, 0, down, 0, 0)
@@ -726,7 +762,11 @@ class Desktop:
                 )
                 if action == "drag":
                     self.checked_point(hwnd, *point)
+                if getattr(self, "control", None):
+                    self.control.check()
                 win32api.SetCursorPos(point)
+                if getattr(self, "control", None):
+                    self.control.note_injected()
                 last = point
                 if duration_ms:
                     time.sleep(duration_ms / count / 1000)

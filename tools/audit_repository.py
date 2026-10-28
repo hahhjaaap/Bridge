@@ -15,22 +15,51 @@ from collections import defaultdict
 from pathlib import Path, PurePosixPath
 
 CACHE_DIRS = {
-    "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
-    ".venv", "venv", "node_modules", "htmlcov", ".tox", ".nox",
-    ".udb-work-state", ".udb-recovery", "state",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".venv",
+    "venv",
+    "node_modules",
+    "htmlcov",
+    ".tox",
+    ".nox",
+    ".udb-work-state",
+    ".udb-recovery",
+    "state",
 }
 PRIVATE_NAMES = {
-    ".env", "credentials.json", "secrets.json", "http-token",
-    "computer-access.dpapi", "connection.json", "runtime.json",
+    ".env",
+    "credentials.json",
+    "secrets.json",
+    "http-token",
+    "computer-access.dpapi",
+    "connection.json",
+    "runtime.json",
 }
 PRIVATE_SUFFIXES = (
-    ".pyc", ".pyo", ".dpapi", ".sqlite3", ".sqlite3-shm", ".sqlite3-wal",
-    ".ckpt", ".safetensors", ".pth", ".pt", ".log", ".pid",
+    ".pyc",
+    ".pyo",
+    ".dpapi",
+    ".sqlite3",
+    ".sqlite3-shm",
+    ".sqlite3-wal",
+    ".ckpt",
+    ".safetensors",
+    ".pth",
+    ".pt",
+    ".log",
+    ".pid",
 )
 GENERATED_SUFFIXES = (".exe", ".dll", ".pyd", ".tmp", ".swp", ".swo")
 ROOT_COMPAT = {
-    "_udb_compat.py", "bridge.py", "udb_background.py", "udb_companion.py",
-    "udb_documents.py", "udb_unified.py",
+    "_udb_compat.py",
+    "bridge.py",
+    "udb_background.py",
+    "udb_companion.py",
+    "udb_documents.py",
+    "udb_unified.py",
 }
 EXCLUDED_DUPLICATE_ROOTS = ("THIRD_PARTY_NOTICES/", "build-assets/licenses/")
 
@@ -116,7 +145,9 @@ def audit(root: Path, paths: list[str]) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument(
+        "--root", type=Path, default=Path(__file__).resolve().parents[1]
+    )
     parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
