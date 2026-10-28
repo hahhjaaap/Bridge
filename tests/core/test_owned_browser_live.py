@@ -18,11 +18,13 @@ from udb.host_browser import Browser
 
 @pytest.fixture
 def live_browser(tmp_path, monkeypatch):
-    if os.name == "nt" or not shutil.which("chromium"):
-        pytest.skip("Linux Chromium fixture")
+    browser_exe = shutil.which("google-chrome") or shutil.which("chromium")
+    if os.name == "nt" or not browser_exe:
+        pytest.skip("Linux Chrome/Chromium fixture")
 
     class Process:
         def __init__(self, argv, cwd, memory_mib=0):
+            self.log = (tmp_path / "chromium.log").open("w+b")
             self.process = subprocess.Popen(
                 # The adapter exercises CDP/profile handoff without a display
                 # server. Native Windows window visibility is a separate check.
@@ -30,16 +32,23 @@ def live_browser(tmp_path, monkeypatch):
                 if "--headless=new" in argv
                 else [*argv[:-1], "--headless=new", argv[-1]],
                 cwd=cwd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=self.log,
+                stderr=self.log,
             )
 
         def alive(self):
             return self.process.poll() is None
 
         def close(self):
+            import sys
+
+            failed_start = self.process.poll() not in (None, 0)
             self.process.terminate()
             self.process.wait(timeout=10)
+            if failed_start:
+                self.log.seek(0)
+                sys.stderr.write(self.log.read(16384).decode("utf-8", errors="replace"))
+            self.log.close()
 
     class Page(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -70,9 +79,7 @@ def live_browser(tmp_path, monkeypatch):
         def log_message(self, *args):
             pass
 
-    monkeypatch.setattr(
-        "udb.host_browser.find_browser", lambda: shutil.which("chromium")
-    )
+    monkeypatch.setattr("udb.host_browser.find_browser", lambda: browser_exe)
     monkeypatch.setattr("udb.host_browser.OwnedProcess", Process)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Page)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
