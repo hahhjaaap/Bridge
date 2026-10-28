@@ -2,6 +2,18 @@
 const PREFIX = "udb:aura:";
 const GROUP_NAME = "UDB • AI";
 const GROUP_COLOR = "cyan";
+const tabOperations = new Map();
+
+function serialize(tabId, operation) {
+  const previous = tabOperations.get(tabId) || Promise.resolve();
+  const work = previous.catch(() => {}).then(operation);
+  tabOperations.set(tabId, work);
+  const release = () => {
+    if (tabOperations.get(tabId) === work) tabOperations.delete(tabId);
+  };
+  work.then(release, release);
+  return work;
+}
 
 function allowedUrl(raw) {
   try {
@@ -32,7 +44,11 @@ async function decorate(tabId) {
   }
 }
 
-async function mark(tabId) {
+function mark(tabId) {
+  return serialize(tabId, () => markTab(tabId));
+}
+
+async function markTab(tabId) {
   let tab;
   // tabs.create may return before the destination URL is committed.
   for (let attempt = 0; attempt < 12; attempt++) {
@@ -57,7 +73,11 @@ async function mark(tabId) {
   return {tabId, groupId};
 }
 
-async function unmark(tabId) {
+function unmark(tabId) {
+  return serialize(tabId, () => unmarkTab(tabId));
+}
+
+async function unmarkTab(tabId) {
   const state = await chrome.storage.session.get(PREFIX + tabId);
   if (!state[PREFIX + tabId]) return;
   await chrome.storage.session.remove(PREFIX + tabId);
@@ -109,10 +129,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.status !== "complete") return;
-  chrome.storage.session.get(PREFIX + tabId)
-    .then(state => { if (state[PREFIX + tabId]) return decorate(tabId); })
-    .catch(() => {});
+  serialize(tabId, async () => {
+    const state = await chrome.storage.session.get(PREFIX + tabId);
+    if (state[PREFIX + tabId]) await decorate(tabId);
+  }).catch(() => {});
 });
 chrome.tabs.onRemoved.addListener(tabId => {
-  chrome.storage.session.remove(PREFIX + tabId).catch(() => {});
+  serialize(tabId, () => chrome.storage.session.remove(PREFIX + tabId)).catch(() => {});
 });

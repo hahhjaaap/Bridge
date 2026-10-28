@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import QTreeWidgetItem
 
 from .manager_widgets import ACCENT, MUTED, RAISED, WARNING, icon
@@ -15,42 +15,60 @@ class ManagerRefreshMixin:
     def refresh(self):
         if self._closing:
             return
+        errors = []
+        source_auto_projects = set()
+        for name, refresh in (
+            ("Dự án", self._refresh_projects),
+            ("Máy tính", self._refresh_host),
+            ("Quyền AI", self._refresh_requests),
+            ("Tiến trình", self._refresh_jobs),
+        ):
+            try:
+                result = refresh()
+                if name == "Dự án":
+                    source_auto_projects = result
+            except Exception as exc:
+                errors.append(name + ": " + str(exc))
         try:
-            source_auto_projects = self._refresh_projects()
-            self._refresh_host()
-            self._refresh_requests()
-            self._refresh_jobs()
             self._refresh_connection(source_auto_projects)
-        except Exception as e:
-            self.footer_status.setText("Không tải được trạng thái: " + str(e))
+        except Exception as exc:
+            errors.append("Kết nối: " + str(exc))
+        if errors:
+            self.footer_status.setText(
+                "Không tải được trạng thái · " + " · ".join(errors)
+            )
 
     def _refresh_projects(self):
         projects = self.agent.projects()
         source_auto_projects = set(self.agent.source_autonomy_projects())
-        signature = json.dumps(projects)
+        signature = tuple(
+            (p["id"], p["root"], p["writable"], p["id"] in source_auto_projects)
+            for p in projects
+        )
         if signature != self.last_signature:
             self.last_signature = signature
             selected = self.selected_project["id"] if self.selected_project else None
-            self.projects.clear()
-            for proj in projects:
-                item = QTreeWidgetItem(
-                    [
-                        proj["id"],
-                        "AI tự sửa"
-                        if proj["id"] in source_auto_projects
-                        else "Ghi có giới hạn"
-                        if proj["writable"]
-                        else "Chỉ đọc",
-                    ]
-                )
-                item.setIcon(0, icon("folder", MUTED))
-                item.setData(0, Qt.ItemDataRole.UserRole, proj)
-                item.setToolTip(0, proj["root"])
-                self.projects.addTopLevelItem(item)
-                if proj["id"] == selected:
-                    self.projects.setCurrentItem(item)
-            if not self.projects.selectedItems() and projects:
-                self.projects.setCurrentItem(self.projects.topLevelItem(0))
+            with QSignalBlocker(self.projects):
+                self.projects.clear()
+                for proj in projects:
+                    item = QTreeWidgetItem(
+                        [
+                            proj["id"],
+                            "AI tự sửa"
+                            if proj["id"] in source_auto_projects
+                            else "Ghi có giới hạn"
+                            if proj["writable"]
+                            else "Chỉ đọc",
+                        ]
+                    )
+                    item.setIcon(0, icon("folder", MUTED))
+                    item.setData(0, Qt.ItemDataRole.UserRole, proj)
+                    item.setToolTip(0, proj["root"])
+                    self.projects.addTopLevelItem(item)
+                    if proj["id"] == selected:
+                        self.projects.setCurrentItem(item)
+                if not self.projects.selectedItems() and projects:
+                    self.projects.setCurrentItem(self.projects.topLevelItem(0))
             self.project_selected()
         elif time.monotonic() - self._last_project_auth_check >= 10.0:
             self.project_selected()
@@ -176,9 +194,11 @@ class ManagerRefreshMixin:
         self.media_auto.blockSignals(False)
         rows = self.agent.pending_local()
         self.pending_rows = {r["id"]: r for r in rows}
-        signature = tuple(self.pending_rows)
+        signature = tuple((r["id"], r["kind"], r["payload"]) for r in rows)
         if signature != self.last_pending:
             self.last_pending = signature
+            current = self.requests.currentItem()
+            selected = current.data(0, Qt.ItemDataRole.UserRole) if current else None
             self.requests.clear()
             for request in rows:
                 p = json.loads(request["payload"])
@@ -197,7 +217,9 @@ class ManagerRefreshMixin:
                 )
                 item.setData(0, Qt.ItemDataRole.UserRole, request["id"])
                 self.requests.addTopLevelItem(item)
-            if rows:
+                if request["id"] == selected:
+                    self.requests.setCurrentItem(item)
+            if rows and not self.requests.selectedItems():
                 self.requests.setCurrentItem(self.requests.topLevelItem(0))
             if rows:
                 p = json.loads(rows[0]["payload"])
@@ -246,45 +268,48 @@ class ManagerRefreshMixin:
                 dict(r)
                 for r in c.execute("SELECT * FROM jobs ORDER BY rowid DESC LIMIT 30")
             ]
-        if self.protected.topLevelItemCount() != len(protected):
+        protected_signature = tuple(protected)
+        if protected_signature != getattr(self, "_protected_signature", None):
+            self._protected_signature = protected_signature
             self.protected.clear()
             for path in protected:
                 self.protected.addTopLevelItem(QTreeWidgetItem([path]))
-        job_sig = json.dumps(jobs)
+        job_sig = tuple((j["id"], j["status"], j["info"]) for j in jobs)
         if job_sig != self.last_job_signature:
             self.last_job_signature = job_sig
             current = self.jobs.currentItem()
             old = current.data(0, Qt.ItemDataRole.UserRole) if current else None
-            self.jobs.clear()
-            for j in jobs:
-                info = json.loads(j["info"])
-                status_text = {
-                    "running": "Đang chạy",
-                    "reviewing": "Đã xong · đang xem",
-                    "completed": "Hoàn tất",
-                    "failed": "Lỗi",
-                    "timeout": "Hết thời gian",
-                    "output_limit": "Log vượt giới hạn",
-                    "stopping": "Đang dừng",
-                    "stopped": "Đã dừng",
-                }.get(j["status"], j["status"])
-                item = QTreeWidgetItem(
-                    [
-                        info.get("project", ""),
-                        info.get(
-                            "language",
-                            "Desktop" if info.get("kind") == "desktop" else "",
-                        ),
-                        status_text,
-                        j["id"],
-                    ]
-                )
-                item.setData(0, Qt.ItemDataRole.UserRole, j["id"])
-                self.jobs.addTopLevelItem(item)
-                if j["id"] == old:
-                    self.jobs.setCurrentItem(item)
-            if jobs and not self.jobs.selectedItems():
-                self.jobs.setCurrentItem(self.jobs.topLevelItem(0))
+            with QSignalBlocker(self.jobs):
+                self.jobs.clear()
+                for j in jobs:
+                    info = json.loads(j["info"])
+                    status_text = {
+                        "running": "Đang chạy",
+                        "reviewing": "Đã xong · đang xem",
+                        "completed": "Hoàn tất",
+                        "failed": "Lỗi",
+                        "timeout": "Hết thời gian",
+                        "output_limit": "Log vượt giới hạn",
+                        "stopping": "Đang dừng",
+                        "stopped": "Đã dừng",
+                    }.get(j["status"], j["status"])
+                    item = QTreeWidgetItem(
+                        [
+                            info.get("project", ""),
+                            info.get(
+                                "language",
+                                "Desktop" if info.get("kind") == "desktop" else "",
+                            ),
+                            status_text,
+                            j["id"],
+                        ]
+                    )
+                    item.setData(0, Qt.ItemDataRole.UserRole, j["id"])
+                    self.jobs.addTopLevelItem(item)
+                    if j["id"] == old:
+                        self.jobs.setCurrentItem(item)
+                if jobs and not self.jobs.selectedItems():
+                    self.jobs.setCurrentItem(self.jobs.topLevelItem(0))
         self.jobs.setVisible(bool(jobs))
         self.job_tabs.setVisible(bool(jobs))
         self.jobs_empty.setVisible(not jobs)

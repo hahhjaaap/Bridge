@@ -59,6 +59,8 @@ Keep this separate from file permissions and owner approvals.
 ## Desktop and isolation
 
 - `udb.manager`: Qt MainWindow composition, event/lifecycle handling.
+- `udb.manager_host`: assistant page composition and local owner-only browser,
+  pause and background-session controls.
 - `udb.manager_dialogs`: local source browser, connection settings, and
   owner-only approval dialogs; no remote approval API.
 - `udb.manager_refresh`: status polling and project list refresh.
@@ -93,7 +95,17 @@ Keep this separate from file permissions and owner approvals.
   replacement on Windows. One-shot callers retain `read_events`.
 - CLI commands share an exception-safe settings scope. GUI refresh is divided
   into projects, host status, approvals, jobs and connection updates while
-  retaining its outer error boundary.
+  keeping failures isolated between sections. Tree refreshes preserve selection
+  and include visible grant/payload changes in their signatures.
+- `udb.computer_files`: bounded streaming hashes, range reads and staged copies;
+  internal binary writes and public encoded writes share the same atomic commit,
+  expected-hash, recovery and path checks. No-replace copy publication precedes
+  the final source recheck for moves.
+- Idle approval polling takes no SQLite writer lock when there is nothing to
+  expire. Job-log tail reads seek within one open file and keep normal offset
+  reads compatible.
+- The host mailbox backs off to a 250 ms idle polling interval and prunes stale
+  replies every five seconds; stop events interrupt the wait immediately.
 
 ## Where new code belongs
 

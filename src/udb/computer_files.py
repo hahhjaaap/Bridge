@@ -12,6 +12,7 @@ from pathlib import Path
 from .core import RESERVED, PolicyError, reject_links
 
 MAX_FILE = 8 * 1024 * 1024
+_BLOCK_BYTES = 256 * 1024
 
 
 class Files:
@@ -45,7 +46,28 @@ class Files:
         return data
 
     def digest(self, p):
-        return hashlib.sha256(self.data(p)).hexdigest()
+        return self._scan(p)[0]
+
+    def _scan(self, p, offset=0, limit=0, sink=None):
+        """Hash one bounded byte stream, retaining only the requested range."""
+        hasher = hashlib.sha256()
+        size = 0
+        parts = []
+        with p.open("rb") as stream:
+            while block := stream.read(min(_BLOCK_BYTES, MAX_FILE + 1 - size)):
+                start = size
+                size += len(block)
+                if size > MAX_FILE:
+                    raise PolicyError(
+                        "File API limit is 8 MiB; use an explicitly authorized program for larger files"
+                    )
+                hasher.update(block)
+                if sink is not None:
+                    sink.write(block)
+                lo, hi = max(offset, start), min(offset + limit, size)
+                if lo < hi:
+                    parts.append(block[lo - start : hi - start])
+        return hasher.hexdigest(), size, b"".join(parts)
 
     def check_expected(self, p, expected):
         if expected == "NEW":
@@ -135,8 +157,9 @@ class Files:
             or not 1 <= limit <= 512 * 1024
         ):
             raise PolicyError("Read offset 0..8 MiB; limit 1..512 KiB")
-        data = self.data(p)
-        part = data[offset : offset + limit]
+        if encoding not in ("base64", "utf-8"):
+            raise PolicyError("Encoding must be utf-8 or base64")
+        checksum, size, part = self._scan(p, offset, limit)
         if encoding == "base64":
             value = base64.b64encode(part).decode("ascii")
         elif encoding == "utf-8":
@@ -146,16 +169,14 @@ class Files:
                 raise PolicyError(
                     "Read this byte range as base64; it is binary or splits a UTF-8 character"
                 ) from None
-        else:
-            raise PolicyError("Encoding must be utf-8 or base64")
         return dict(
             path=str(p),
             content=value,
             encoding=encoding,
-            sha256=hashlib.sha256(data).hexdigest(),
-            bytes=len(data),
+            sha256=checksum,
+            bytes=size,
             offset=offset,
-            next_offset=offset + len(part) if offset + len(part) < len(data) else None,
+            next_offset=offset + len(part) if offset + len(part) < size else None,
         )
 
     def _copy_move(self, action, p, destination, expected_sha256):
@@ -165,24 +186,23 @@ class Files:
                 "Copy/move requires an existing regular file and a new destination"
             )
         self.check_expected(p, expected_sha256)
-        data = self.data(p)
-        if hashlib.sha256(data).hexdigest() != expected_sha256:
-            raise PolicyError(
-                "Source changed after SHA256 verification; nothing copied"
-            )
-        self.dispatch(
-            "write",
-            str(dst),
-            content=base64.b64encode(data).decode(),
-            encoding="base64",
-            expected_sha256="NEW",
-        )
+
+        def stage(stream):
+            checksum, size, _ = self._scan(self.path(str(p)), sink=stream)
+            if checksum != expected_sha256:
+                raise PolicyError(
+                    "Source changed after SHA256 verification; nothing copied"
+                )
+            return checksum, size
+
+        result = self._commit(dst, "NEW", stage)
         if action == "move":
+            self.path(str(p))
             self.check_expected(p, expected_sha256)
             p.unlink()
         return dict(
             path=str(dst),
-            sha256=hashlib.sha256(data).hexdigest(),
+            sha256=result["sha256"],
             moved=action == "move",
         )
 
@@ -198,11 +218,24 @@ class Files:
             data = content.encode("utf-8")
         else:
             raise PolicyError("Encoding must be utf-8 or base64")
-        if len(data) > MAX_FILE:
+        return self.write_bytes(str(p), data, expected_sha256)
+
+    def write_bytes(self, path, data, expected_sha256):
+        """Internal binary write; uses the same path/hash/commit checks as MCP."""
+        if not isinstance(data, bytes) or len(data) > MAX_FILE:
             raise PolicyError("File content exceeds 8 MiB")
+        p = self.path(path)
+
+        def stage(stream):
+            stream.write(data)
+            return hashlib.sha256(data).hexdigest(), len(data)
+
+        return self._commit(p, expected_sha256, stage)
+
+    def _commit(self, p, expected_sha256, stage):
         self.check_expected(p, expected_sha256)
         recovery = None
-        if p.exists():
+        if expected_sha256 != "NEW" and p.exists():
             folder = self.agent.state / "computer-recovery"
             reject_links(folder)
             folder.mkdir(exist_ok=True)
@@ -211,7 +244,7 @@ class Files:
         temp = p.with_name(".udb-" + uuid.uuid4().hex + ".tmp")
         try:
             with temp.open("xb") as stream:
-                stream.write(data)
+                checksum, size = stage(stream)
             self.path(str(p))
             self.check_expected(p, expected_sha256)
             if expected_sha256 == "NEW":
@@ -225,12 +258,10 @@ class Files:
                 temp.replace(p)
         finally:
             temp.unlink(missing_ok=True)
-        self.agent.audit(
-            "computer_file_write", dict(bytes=len(data), recovery_id=recovery)
-        )
+        self.agent.audit("computer_file_write", dict(bytes=size, recovery_id=recovery))
         return dict(
             path=str(p),
-            sha256=hashlib.sha256(data).hexdigest(),
-            bytes=len(data),
+            sha256=checksum,
+            bytes=size,
             recovery_id=recovery,
         )

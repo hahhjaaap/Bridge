@@ -5,6 +5,7 @@ import io
 import json
 import statistics
 import tempfile
+import threading
 import time
 import timeit
 import tracemalloc
@@ -12,8 +13,95 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from udb import activity, headless
+from udb import activity, headless, host_service
 from udb.companion import terminal
+from udb.computer_files import MAX_FILE, Files
+from udb.core import Agent
+
+
+def file_costs():
+    """Measure bounded computer-file operations on disposable local fixtures."""
+    with tempfile.TemporaryDirectory(prefix="udb-file-benchmark-") as folder:
+        root = Path(folder)
+        files = Files(Agent(root / "owner"))
+        source = root / "source.bin"
+        with source.open("wb") as stream:
+            for _ in range(MAX_FILE // 1048576):
+                stream.write(b"x" * 1048576)
+        expected = files.digest(source)
+        metrics = {"input_bytes": MAX_FILE, "read_bytes": 200}
+        for name, operation in (
+            ("digest", lambda: files.digest(source)),
+            (
+                "read",
+                lambda: files.dispatch("read", str(source), limit=200),
+            ),
+            (
+                "copy",
+                lambda: files.dispatch(
+                    "copy",
+                    str(source),
+                    destination=str(root / "copy.bin"),
+                    expected_sha256=expected,
+                ),
+            ),
+        ):
+            tracemalloc.start()
+            try:
+                started = time.perf_counter()
+                result = operation()
+                metrics[name + "_seconds"] = time.perf_counter() - started
+                metrics[name + "_peak_bytes"] = tracemalloc.get_traced_memory()[1]
+            finally:
+                tracemalloc.stop()
+            if name == "digest":
+                assert result == expected
+        assert (root / "copy.bin").read_bytes() == source.read_bytes()
+        return metrics
+
+
+def idle_host_costs():
+    clock, waits, cleanups = [0.0], [], []
+
+    class Stop:
+        def is_set(self):
+            return clock[0] >= 9
+
+        def wait(self, duration):
+            waits.append(duration)
+            clock[0] += duration
+
+    with tempfile.TemporaryDirectory(prefix="udb-host-benchmark-") as folder:
+        service = host_service.HostService.__new__(host_service.HostService)
+        service.folder = Path(folder)
+        (service.folder / "inbox").mkdir()
+        (service.folder / "replies").mkdir()
+        service.stop_event = Stop()
+        service.maintenance = threading.Event()
+        glob = Path.glob
+
+        def counted(path, pattern, *args, **kwargs):
+            if path.name == "replies":
+                cleanups.append(clock[0])
+            return glob(path, pattern, *args, **kwargs)
+
+        with (
+            patch.object(
+                host_service,
+                "time",
+                SimpleNamespace(
+                    monotonic=lambda: clock[0], time=lambda: clock[0] + 1000000
+                ),
+            ),
+            patch.object(Path, "glob", counted),
+        ):
+            service._work()
+    return dict(
+        simulated_seconds=9,
+        mailbox_polls=len(waits),
+        reply_scans=len(cleanups),
+        maximum_poll_seconds=max(waits),
+    )
 
 
 def main():
@@ -86,6 +174,8 @@ def main():
                 simulated_seconds=9,
                 heartbeat_writes=len(publications) - 1,
                 local_stop_checks=len(stop_checks),
+                computer_files=file_costs(),
+                idle_host=idle_host_costs(),
             ),
             indent=2,
         )

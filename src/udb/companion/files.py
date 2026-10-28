@@ -7,6 +7,7 @@ import hashlib
 import heapq
 import os
 import re
+import stat
 import tempfile
 import time
 from pathlib import Path
@@ -34,7 +35,9 @@ def is_reparse(path: Path) -> bool:
         info = path.lstat()
     except FileNotFoundError:
         return False
-    return path.is_symlink() or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & 0x400
+    )
 
 
 class ScopedFiles:

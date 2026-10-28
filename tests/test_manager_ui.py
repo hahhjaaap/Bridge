@@ -142,3 +142,91 @@ def test_cards_stack_on_compact_window_without_horizontal_clipping(manager):
         window.host_sessions.mapTo(viewport, window.host_sessions.rect().center())
     )
     assert window.host_sessions.width() <= viewport.width()
+
+
+def test_project_grant_labels_update_without_changing_project_records(manager):
+    window, _ = manager
+    root = window.agent.home / "projects" / "demo"
+    root.mkdir(parents=True)
+    window.agent.register_local("demo", str(root), True)
+    window._refresh_projects()
+    assert window.projects.currentItem().text(1) == "Ghi có giới hạn"
+    window.agent.set_source_autonomy_local("demo", True)
+    window._refresh_projects()
+    assert window.projects.currentItem().text(1) == "AI tự sửa"
+    assert window.source_auto.isChecked()
+    window.agent.set_source_autonomy_local("demo", False)
+    window._refresh_projects()
+    assert window.projects.currentItem().text(1) == "Ghi có giới hạn"
+    assert not window.source_auto.isChecked()
+
+
+def test_replacing_a_protected_root_updates_the_list_with_the_same_row_count(manager):
+    window, _ = manager
+    first, second = window.agent.home / "first", window.agent.home / "second"
+    first.mkdir()
+    second.mkdir()
+    window.agent.protect_local(str(first))
+    window._refresh_jobs()
+    assert window.protected.topLevelItem(0).text(0) == str(first)
+    with window.agent.connect() as db:
+        db.execute("DELETE FROM protected")
+    window.agent.protect_local(str(second))
+    window._refresh_jobs()
+    assert window.protected.topLevelItem(0).text(0) == str(second)
+
+
+def test_project_refresh_failure_does_not_block_desktop_pause_state(
+    manager, monkeypatch
+):
+    from udb.desktop_control import pause_local
+
+    window, _ = manager
+
+    def unavailable():
+        raise OSError("Synthetic unavailable project")
+
+    monkeypatch.setattr(window, "_refresh_projects", unavailable)
+    pause_local(window.agent, True)
+    window.refresh()
+    assert "Đã tạm dừng" in window.desktop_state_pill.text()
+    assert window.desktop_resume_button.isEnabled()
+    assert "Synthetic unavailable project" in window.footer_status.text()
+
+
+def test_pending_payload_updates_preserve_the_selected_request(manager):
+    import json
+    import time
+
+    from PySide6.QtCore import Qt
+
+    window, _ = manager
+    first, second = "c" * 32, "d" * 32
+    payload = {"project": "demo", "path": "first.py", "diff": "reviewed preview"}
+    with window.agent.connect() as db:
+        db.execute(
+            "INSERT INTO requests VALUES (?,?,?,?,?,?,?)",
+            (first, "write", json.dumps(payload), "", time.time(), "pending", "{}"),
+        )
+    window._refresh_requests()
+    assert window.pending_title.text() == "first.py"
+    payload["path"] = "changed.py"
+    with window.agent.connect() as db:
+        db.execute(
+            "UPDATE requests SET payload=? WHERE id=?", (json.dumps(payload), first)
+        )
+        db.execute(
+            "INSERT INTO requests VALUES (?,?,?,?,?,?,?)",
+            (
+                second,
+                "write",
+                json.dumps(payload),
+                "",
+                time.time() - 1,
+                "pending",
+                "{}",
+            ),
+        )
+    window._refresh_requests()
+    assert window.requests.currentItem().data(0, Qt.ItemDataRole.UserRole) == first
+    assert window.pending_title.text() == "changed.py"
