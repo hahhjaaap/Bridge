@@ -187,6 +187,11 @@ class UnifiedProxy:
                 elif "desktop" not in grant.get("capabilities", []):
                     self.companion.request("udb/close-desktop", timeout=10)
                     self._pointer_presence_started = False
+                elif grant.get("desktop_paused"):
+                    if self._pointer_presence_started:
+                        self.companion.request("udb/close-desktop", timeout=10)
+                    self._pointer_presence_started = False
+                    self._pointer_retry_after = 0.0
                 elif (
                     not self._pointer_presence_started
                     and time.monotonic() >= self._pointer_retry_after

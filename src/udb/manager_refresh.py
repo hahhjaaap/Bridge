@@ -57,56 +57,118 @@ class ManagerRefreshMixin:
         return source_auto_projects
 
     def _refresh_host(self):
+        from .desktop_control import paused
         from .host_client import status as host_status
 
         hs = host_status(self.agent)
-        from .desktop_control import paused
-
-        self.desktop_pause_status.setText(
-            "Điều khiển Windows đã tạm dừng. Chỉ bạn có thể bấm Tiếp tục tại đây."
-            if paused(self.agent)
-            else "AI nhường khi bạn thao tác. Ctrl+Alt+Shift+Backspace để tạm dừng."
-            if hs.get("emergency_hotkey_available")
-            else "AI nhường khi bạn thao tác. Phím tắt tạm dừng chưa khả dụng; dùng nút Tạm dừng."
-        )
         rs = hs["resources"]
+        is_paused = paused(self.agent)
+        sessions = hs.get("sessions", [])
+        handed_off = any(x.get("presentation") == "visible" for x in sessions)
+        ready = hs.get("worker_ready") is True
+        enabled = hs.get("enabled") is True
+        if is_paused:
+            tone, state = "paused", "Đã tạm dừng"
+            title = "Điều khiển Windows đang tạm dừng"
+            hint = "Bạn có thể tiếp tục bất cứ lúc nào. Các phiên nền vẫn làm việc theo quyền đã cấp."
+        elif handed_off:
+            tone, state = "owner", "Bạn điều khiển"
+            title = "Browser đang được nhường cho bạn"
+            hint = "Đăng nhập trực tiếp trong cửa sổ UDB. Bấm Trả về cho AI khi bạn đã xong."
+        elif not ready:
+            tone, state = "neutral", "Chưa sẵn sàng"
+            title = "Đang chờ tác nhân UDB"
+            hint = "Trạng thái sẽ cập nhật khi tác nhân cục bộ sẵn sàng. Bạn vẫn có thể tạm dừng Windows."
+        elif not enabled:
+            tone, state = "neutral", "Chưa bật phiên nền"
+            title = "Bạn chọn khi nào AI được chạy nền"
+            hint = "Bật cho phép bên dưới để AI mở browser riêng khi bạn giao việc."
+        elif not rs.get("admission_ready"):
+            tone, state = "paused", "Đang chờ tài nguyên"
+            title = "UDB đang chờ máy bớt bận"
+            hint = "Chưa mở thêm phiên mới. Các nút tạm dừng và đóng phiên luôn ở đây."
+        else:
+            tone, state = "ready", "Sẵn sàng chạy nền"
+            title = "Bạn luôn nắm quyền điều khiển"
+            hint = "AI ưu tiên chạy nền. Khi dùng desktop, UDB nhường nếu bạn thao tác."
+        self.desktop_state_pill.set_status(state, tone)
+        self.desktop_state_title.setText(title)
+        self.desktop_pause_status.setText(hint)
+        self.desktop_pause_button.setEnabled(not is_paused)
+        self.desktop_resume_button.setEnabled(is_paused)
+        self.desktop_hotkey_hint.setText(
+            "Tạm dừng nhanh · Ctrl + Alt + Shift + Backspace"
+            if hs.get("emergency_hotkey_available")
+            else "Tạm dừng bằng nút ở trên · Phím tắt chưa sẵn sàng"
+        )
         self.host_enabled.blockSignals(True)
-        self.host_enabled.setChecked(hs["enabled"])
+        self.host_enabled.setChecked(enabled)
         self.host_enabled.blockSignals(False)
-        cpu = rs.get("cpu_percent")
-        ram = rs.get("ram_percent")
+        capacity = rs.get("admission_ready") is True
+        self.browser_start_button.setEnabled(
+            ready
+            and enabled
+            and capacity
+            and not any(x["kind"] == "browser" for x in sessions)
+        )
+        self.browser_login_button.setEnabled(
+            ready and enabled and capacity and not handed_off
+        )
+        self.browser_background_button.setEnabled(ready and enabled and handed_off)
+        self.workspace_start_button.setEnabled(
+            ready
+            and enabled
+            and capacity
+            and not any(x["kind"] == "workspace" for x in sessions)
+        )
+        browser_open = any(x["kind"] == "browser" for x in sessions)
+        self.browser_remember.setEnabled(ready and not browser_open)
+        self.browser_remember.setToolTip(
+            "Đóng browser trước khi đổi lựa chọn nhớ đăng nhập."
+            if browser_open
+            else "Chỉ nhớ đăng nhập trong browser riêng của UDB."
+        )
+        self.host_stop_button.setEnabled(enabled or bool(sessions))
+        cpu, ram = rs.get("cpu_percent"), rs.get("ram_percent")
         self.host_resource.setText(
-            "CPU "
-            + (str(cpu) + "%" if cpu is not None else "—")
-            + "   ·   RAM "
-            + (str(ram) + "%" if ram is not None else "—")
-            + "   ·   Trống "
-            + str(rs.get("available_mib", 0))
-            + " MB"
+            f"CPU {cpu if cpu is not None else '—'}%  ·  RAM {ram if ram is not None else '—'}%  ·  Trống {rs.get('available_mib', 0)} MB"
         )
         self.host_pressure.setText(
-            "Tạm dừng nhận tác vụ: máy bận hoặc đang chờ số liệu."
-            if not rs.get("admission_ready")
-            else "Đủ tài nguyên để nhận tác vụ; kiểm tra lại trước mỗi lần mở."
+            "Đủ tài nguyên để mở phiên."
+            if rs.get("admission_ready")
+            else "Máy đang bận hoặc chưa có số liệu mới; UDB đang chờ."
         )
-        self.host_sessions.setPlainText(
-            "\n\n".join(
-                x["kind"]
-                + " · "
-                + x["session_id"]
-                + "\n"
-                + x["task"]
-                + "\nTab: "
-                + str(x["tabs"])
-                + " · Tiến trình: "
-                + str(x.get("processes", 0))
-                + " · Commit cao nhất: "
-                + str(x.get("peak_commit_mib", 0))
-                + " MB"
-                for x in hs["sessions"]
+        signature = tuple(
+            (
+                x["session_id"],
+                x["kind"],
+                x.get("presentation"),
+                x.get("tabs"),
+                x.get("task", ""),
             )
-            or "Chưa có phiên nền của UDB."
+            for x in sessions
         )
+        if signature != getattr(self, "_host_sessions_signature", None):
+            self._host_sessions_signature = signature
+            self.host_sessions.clear()
+            for session in sessions:
+                browser = session["kind"] == "browser"
+                item = QTreeWidgetItem(
+                    [
+                        "Browser riêng" if browser else "Không gian ghi chú",
+                        "Bạn điều khiển"
+                        if session.get("presentation") == "visible"
+                        else "Chạy nền",
+                        str(session.get("tabs", 0)) if browser else "—",
+                    ]
+                )
+                item.setIcon(0, icon("browser" if browser else "file", ACCENT))
+                item.setToolTip(
+                    0, session.get("task", "") + "\n" + session["session_id"]
+                )
+                self.host_sessions.addTopLevelItem(item)
+        self.host_sessions.setVisible(bool(sessions))
+        self.host_sessions_empty.setVisible(not sessions)
 
     def _refresh_requests(self):
         self.media_auto.blockSignals(True)
@@ -298,5 +360,5 @@ class ManagerRefreshMixin:
             ("Tunnel sẵn sàng" if ready else "Chờ kết nối")
             + " · "
             + ("AI tự sửa theo quyền" if source_auto_projects else "Chưa bật tự sửa")
-            + " · Không chạy host shell"
+            + " · Quyền do bạn cấp"
         )

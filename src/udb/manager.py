@@ -1,4 +1,4 @@
-"""Obsidian Studio: native Qt UI. Host approvals and Sandbox autonomy grants stay local."""
+"""UDB native Qt UI. Host approvals and Sandbox autonomy grants stay local."""
 
 from __future__ import annotations
 
@@ -26,16 +26,19 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
     QStyleFactory,
     QTabWidget,
+    QToolButton,
     QTreeWidget,
     QVBoxLayout,
     QWidget,
@@ -54,7 +57,9 @@ from .manager_widgets import (
     TEXT,
     DiffHighlighter,
     MotionButton,
+    ResponsiveRow,
     StatusBand,
+    StatusPill,
     Worker,
     empty_state,
     icon,
@@ -84,12 +89,10 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         self.connection_signature = None
         self._closing = False
         self._last_project_auth_check = 0.0
-        self.setWindowTitle(
-            "Universal Desktop Bridge " + __version__ + " · Obsidian Studio"
-        )
+        self.setWindowTitle("Universal Desktop Bridge · " + __version__)
         self.resize(1220, 820)
         self.setMinimumSize(940, 640)
-        self.setWindowIcon(icon("shield", ACCENT, 32))
+        self.setWindowIcon(icon("brand", ACCENT, 32))
         root = QWidget()
         root.setObjectName("Root")
         self.setCentralWidget(root)
@@ -102,12 +105,12 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         outer.addLayout(body, 1)
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(192)
+        sidebar.setFixedWidth(200)
         nav = QVBoxLayout(sidebar)
         nav.setContentsMargins(16, 26, 16, 20)
         nav.setSpacing(9)
-        nav.addWidget(label("bridge /", "Brand"))
-        nav.addWidget(label("UNIVERSAL DESKTOP", "Eyebrow"))
+        nav.addWidget(label("UDB", "Brand"))
+        nav.addWidget(label("TRỢ LÝ TRÊN MÁY", "Eyebrow"))
         nav.addSpacing(26)
         self.nav_buttons = []
         for i, (text, glyph) in enumerate(
@@ -117,7 +120,7 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
                 ("Tiến trình", "activity"),
                 ("Bảo vệ", "shield"),
                 ("Kết nối", "settings"),
-                ("Máy tính", "activity"),
+                ("Máy tính", "cursor"),
             )
         ):
             btn = MotionButton(text, glyph, "nav")
@@ -126,10 +129,10 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
             nav.addWidget(btn)
             self.nav_buttons.append(btn)
         nav.addStretch()
-        protected = label("Checkpoint & dữ liệu\nđược bảo vệ", "Muted", True)
+        protected = label("Bạn quyết định\nAI được làm gì", "Muted", True)
         nav.addWidget(protected)
         nav.addSpacing(12)
-        nav.addWidget(label("OBSIDIAN STUDIO", "Eyebrow"))
+        nav.addWidget(label("DESKTOP BRIDGE", "Eyebrow"))
         nav.addWidget(label("Agent " + __version__, "Fine"))
         body.addWidget(sidebar)
         self.stack = QStackedWidget()
@@ -156,7 +159,7 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(1500)
-        self.navigate(0)
+        self.navigate(5)
         self.refresh()
 
     def page(self, title, subtitle):
@@ -452,67 +455,173 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
 
     def build_host(self):
         p, lay = self.page(
-            "Máy tính · chạy nền",
-            "Phiên trình duyệt riêng và cửa sổ soạn thảo riêng trên Windows. Không dùng chuột/phím hệ thống hoặc tab hiện có.",
+            "Trợ lý trên máy",
+            "Giao việc trong ChatGPT. Theo dõi và giữ quyền điều khiển tại đây.",
         )
-        self.host_enabled = QCheckBox("Cho phép UDB mở phiên nền riêng trên máy này")
-        self.host_enabled.toggled.connect(self.set_host_enabled)
-        lay.addWidget(self.host_enabled)
-        pause = MotionButton("Tạm dừng điều khiển Windows", "power", "danger")
-        pause.clicked.connect(lambda: self.pause_desktop_local(True))
-        resume = MotionButton("Tiếp tục điều khiển Windows", "power")
-        resume.clicked.connect(lambda: self.pause_desktop_local(False))
-        lay.addLayout(row(pause, resume, None))
-        self.desktop_pause_status = label("", "Muted", True)
-        lay.addWidget(self.desktop_pause_status)
-        from .browser_settings import remember_login
+        hero = panel()
+        hero.setObjectName("Hero")
+        hl = QVBoxLayout(hero)
+        hl.setContentsMargins(20, 18, 20, 18)
+        hl.setSpacing(10)
+        self.desktop_state_pill = StatusPill("Đang kiểm tra")
+        hl.addLayout(
+            row(label("QUYỀN ĐIỀU KHIỂN", "Eyebrow"), None, self.desktop_state_pill)
+        )
+        self.desktop_state_title = label("Bạn luôn có thể tạm dừng", "H2", True)
+        hl.addWidget(self.desktop_state_title)
+        self.desktop_pause_status = label("Đang lấy trạng thái…", "Muted", True)
+        hl.addWidget(self.desktop_pause_status)
+        self.desktop_pause_button = MotionButton("Tạm dừng Windows", "pause", "danger")
+        self.desktop_pause_button.clicked.connect(
+            lambda: self.pause_desktop_local(True)
+        )
+        self.desktop_resume_button = MotionButton("Tiếp tục", "play")
+        self.desktop_resume_button.clicked.connect(
+            lambda: self.pause_desktop_local(False)
+        )
+        self.desktop_resume_button.setEnabled(False)
+        hl.addLayout(row(self.desktop_pause_button, self.desktop_resume_button, None))
+        lay.addWidget(hero)
 
-        self.browser_remember = QCheckBox(
-            "Giữ đăng nhập trong trình duyệt riêng của UDB"
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumHeight(140)
+        content = QWidget()
+        content.setObjectName("Page")
+        cards = QVBoxLayout(content)
+        cards.setContentsMargins(0, 0, 8, 0)
+        cards.setSpacing(14)
+
+        browser_card = panel()
+        bl = QVBoxLayout(browser_card)
+        bl.setContentsMargins(20, 18, 20, 18)
+        bl.setSpacing(10)
+        bl.addLayout(
+            row(
+                label("Trình duyệt riêng", "H2"),
+                None,
+                StatusPill("UDB · AI", "neutral"),
+            )
         )
-        self.browser_remember.setChecked(remember_login(self.agent))
-        self.browser_remember.toggled.connect(self.set_browser_remember_local)
-        lay.addWidget(self.browser_remember)
-        login_browser = MotionButton("Mở để tôi đăng nhập", "plus")
-        login_browser.clicked.connect(lambda: self.browser_presentation_local(True))
-        background_browser = MotionButton("Trả về chạy nền", "power")
-        background_browser.clicked.connect(
+        bl.addWidget(
+            label(
+                "AI làm việc trong browser riêng, không giành chuột hay tab cá nhân.",
+                "Muted",
+                True,
+            )
+        )
+        self.host_enabled = QCheckBox("Cho phép mở phiên nền trên máy này")
+        self.host_enabled.toggled.connect(self.set_host_enabled)
+        bl.addWidget(self.host_enabled)
+        self.browser_start_button = MotionButton("Mở browser nền", "browser", "primary")
+        self.browser_start_button.clicked.connect(
+            lambda: self.start_host_local("browser")
+        )
+        self.browser_login_button = MotionButton("Tôi đăng nhập", "external")
+        self.browser_login_button.clicked.connect(
+            lambda: self.browser_presentation_local(True)
+        )
+        self.browser_background_button = MotionButton("Trả về cho AI", "arrow")
+        self.browser_background_button.clicked.connect(
             lambda: self.browser_presentation_local(False)
         )
-        lay.addLayout(row(login_browser, background_browser, None))
-        lay.addWidget(
-            label(
-                "Khi bạn đăng nhập, AI tạm ngừng thao tác browser. Đổi chế độ sẽ tải lại trang; dữ liệu biểu mẫu chưa lưu có thể mất. Đóng phiên trước khi đổi lựa chọn giữ đăng nhập. Bỏ chọn sẽ xóa đăng nhập đã lưu của UDB.",
-                "Muted",
-                True,
-            )
+        bl.addLayout(row(self.browser_start_button, None))
+        bl.addLayout(
+            row(self.browser_login_button, self.browser_background_button, None)
         )
-        self.host_resource = label("Đang lấy số liệu CPU/RAM…", "H2", True)
-        lay.addWidget(self.host_resource)
-        self.host_pressure = label("", "Muted", True)
-        lay.addWidget(self.host_pressure)
-        lay.addWidget(
+        from .browser_settings import remember_login
+
+        self.browser_remember = QCheckBox("Nhớ đăng nhập trong browser UDB")
+        self.browser_remember.setChecked(remember_login(self.agent))
+        self.browser_remember.toggled.connect(self.set_browser_remember_local)
+        bl.addWidget(self.browser_remember)
+        bl.addWidget(
             label(
-                "Tối đa 2 phiên (1 trình duyệt + 1 cửa sổ), 4 tab; một thao tác tại một thời điểm. CPU ≥85%, RAM ≥85% hoặc RAM trống <1,5 GB: chặn mở thêm và tạm đóng băng các trang UDB.",
-                "Muted",
-                True,
-            )
-        )
-        self.host_sessions = QPlainTextEdit()
-        self.host_sessions.setReadOnly(True)
-        lay.addWidget(self.host_sessions, 1)
-        browser = MotionButton("Mở trình duyệt nền", "plus")
-        browser.clicked.connect(lambda: self.start_host_local("browser"))
-        workspace = MotionButton("Mở cửa sổ riêng", "plus")
-        workspace.clicked.connect(lambda: self.start_host_local("workspace"))
-        stop = MotionButton("Dừng toàn bộ phiên UDB", "power", "danger")
-        stop.clicked.connect(self.stop_host_local)
-        lay.addLayout(row(browser, workspace, None, stop))
-        lay.addWidget(
-            label(
-                "Trình duyệt nền không hiện thành tab trên Chrome bạn đang dùng; Chat có thể tự mở hoặc dùng lại phiên nền đã được cho phép. Ảnh chụp trang có nhãn UDB • AI và con trỏ AI riêng, không di chuyển chuột thật. Không dùng tài khoản đăng nhập sẵn của bạn. Cửa sổ riêng hiện tại hỗ trợ văn bản; chưa điều khiển ứng dụng bất kỳ.",
+                "Khi bạn đăng nhập, AI nhường quyền. Đổi chế độ sẽ tải lại trang; hãy lưu biểu mẫu trước. Đóng browser trước khi đổi lựa chọn nhớ đăng nhập; bỏ chọn sẽ xóa đăng nhập UDB đã lưu.",
                 "Fine",
                 True,
+            )
+        )
+
+        sessions = panel()
+        sl = QVBoxLayout(sessions)
+        sl.setContentsMargins(20, 18, 20, 18)
+        sl.setSpacing(10)
+        workspace = MotionButton("Mở ghi chú", "file")
+        workspace.clicked.connect(lambda: self.start_host_local("workspace"))
+        self.workspace_start_button = workspace
+        sl.addLayout(row(label("Phiên đang mở", "H2"), None, workspace))
+        self.host_sessions = self.tree(["Phiên", "Trạng thái", "Trang"])
+        self.host_sessions.setMinimumHeight(110)
+        self.host_sessions.setMaximumHeight(175)
+        self.host_sessions.header().setStretchLastSection(False)
+        self.host_sessions.header().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.host_sessions.header().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.host_sessions.header().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.host_sessions_empty = label(
+            "Chưa có phiên đang mở.\nAI có thể mở phiên khi bạn giao việc và đã bật cho phép ở trên.",
+            "Muted",
+            True,
+        )
+        self.host_sessions_empty.setMinimumHeight(62)
+        self.host_sessions_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sl.addWidget(self.host_sessions_empty)
+        sl.addWidget(self.host_sessions)
+        sl.addStretch()
+        cards.addWidget(ResponsiveRow(browser_card, sessions))
+
+        details = QToolButton()
+        details.setText("Chi tiết tài nguyên")
+        details.setCheckable(True)
+        details.setArrowType(Qt.ArrowType.RightArrow)
+        details.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        details.setCursor(Qt.CursorShape.PointingHandCursor)
+        cards.addWidget(details)
+        detail_body = QWidget()
+        dl = QVBoxLayout(detail_body)
+        dl.setContentsMargins(0, 0, 0, 0)
+        self.host_resource = label("Đang lấy số liệu…", "Fine", True)
+        self.host_pressure = label("", "Fine", True)
+        dl.addWidget(self.host_resource)
+        dl.addWidget(self.host_pressure)
+        dl.addWidget(
+            label(
+                "Tối đa 2 phiên riêng · 4 tab browser. UDB chờ khi máy thiếu tài nguyên.",
+                "Fine",
+                True,
+            )
+        )
+        detail_body.hide()
+
+        def toggle_details(checked):
+            detail_body.setVisible(checked)
+            details.setArrowType(
+                Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
+            )
+
+        details.toggled.connect(toggle_details)
+        cards.addWidget(detail_body)
+        cards.addStretch()
+        scroll.setWidget(content)
+        lay.addWidget(scroll, 1)
+        self.host_stop_button = MotionButton("Tắt phiên nền", "power", "danger")
+        self.host_stop_button.setToolTip(
+            "Tắt cho phép mở phiên nền và đóng các phiên UDB hiện có."
+        )
+        self.host_stop_button.clicked.connect(self.stop_host_local)
+        self.desktop_hotkey_hint = label("Tạm dừng bằng nút ở trên", "Fine", True)
+        lay.addLayout(
+            row(
+                self.desktop_hotkey_hint,
+                None,
+                self.host_stop_button,
             )
         )
         return p
@@ -973,7 +1082,7 @@ def make_app():
     palette.setColor(QPalette.ColorRole.WindowText, QColor(TEXT))
     palette.setColor(QPalette.ColorRole.Button, QColor(PANEL))
     palette.setColor(QPalette.ColorRole.ButtonText, QColor(TEXT))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor("#345040"))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#28483f"))
     app.setPalette(palette)
     return app
 

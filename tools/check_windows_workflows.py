@@ -18,6 +18,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--visible-browser", action="store_true")
     parser.add_argument("--notify", action="store_true")
+    parser.add_argument(
+        "--pointer-preview",
+        type=Path,
+        help="Render the actual native cursor drawing to a PNG without capturing the desktop",
+    )
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("Run these acceptance checks in an interactive Windows session")
@@ -52,6 +57,59 @@ def main():
             report["notification"] = backend.notify(
                 "UDB", "Windows workflow acceptance check"
             )
+        if args.pointer_preview:
+            import subprocess
+
+            from udb.companion import virtual_pointer
+            from udb.windows_paths import system_executable
+
+            target = args.pointer_preview.resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            preview = subprocess.run(
+                [
+                    system_executable("powershell.exe"),
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-File",
+                    str(
+                        Path(virtual_pointer.__file__).with_name(
+                            "udb_pointer_overlay.ps1"
+                        )
+                    ),
+                    "-PreviewPath",
+                    str(target),
+                ],
+                timeout=45,
+                capture_output=True,
+            )
+            if preview.returncode:
+                raise RuntimeError(
+                    "Native pointer preview failed: "
+                    + preview.stderr.decode("utf-8", errors="replace")[-4000:]
+                )
+            assert target.is_file() and target.stat().st_size > 100
+            report["native_pointer_preview"] = "PASS"
+            import queue
+            import threading
+
+            pointer = virtual_pointer.VirtualPointer()
+            try:
+                cursor, foreground = pointer.cursor(), pointer.u.GetForegroundWindow()
+                pointer.show_idle()
+                pointer.overlay.stdin.write(b"probe\n")
+                painted = queue.Queue()
+                threading.Thread(
+                    target=lambda: painted.put(pointer.overlay.stdout.readline(512)),
+                    daemon=True,
+                ).start()
+                assert painted.get(timeout=10).strip() == b"painted"
+                assert pointer.cursor() == cursor
+                assert pointer.u.GetForegroundWindow() == foreground
+                report["native_pointer_no_focus_or_mouse_takeover"] = "PASS"
+            finally:
+                pointer.close()
+
         browser = Browser(Path(folder) / "browser")
         try:
             tab = next(iter(browser.tabs))

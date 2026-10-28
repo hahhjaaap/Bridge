@@ -15,10 +15,13 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .browser_dom import CLICK_POINT_SCRIPT, LOCATOR_SCRIPT
-from .browser_identity import IDENTITY_SCRIPT
+from .browser_identity import identity_script
 from .core import PolicyError, reject_links
 from .owned_process import OwnedProcess as OwnedProcess
 from .resources import LIMITS
+
+_STARTUP_TIMEOUT = 20
+_ENDPOINT_TIMEOUT = 15
 
 
 def validate_url(value):
@@ -224,7 +227,7 @@ class Browser:
         self.tabs = {}
         self.frozen = False
         self.freeze_errors = 0
-        self.deadline = time.monotonic() + 20
+        self.deadline = time.monotonic() + _STARTUP_TIMEOUT
         try:
             endpoint = self.folder / "DevToolsActivePort"
             reject_links(endpoint)
@@ -256,7 +259,7 @@ class Browser:
                 LIMITS["browser_memory_mib"],
             )
             endpoint = self.folder / "DevToolsActivePort"
-            deadline = time.monotonic() + 15
+            deadline = time.monotonic() + _ENDPOINT_TIMEOUT
             while not endpoint.exists():
                 if not self.proc.alive():
                     raise PolicyError("Private browser exited during startup")
@@ -763,11 +766,7 @@ class Browser:
             return result
 
     def identity_script(self):
-        return (
-            IDENTITY_SCRIPT.replace("Background browser", "Your control · AI paused")
-            if getattr(self, "visible", False)
-            else IDENTITY_SCRIPT
-        )
+        return identity_script(getattr(self, "visible", False))
 
     def _show_identity(self, tab, x=None, y=None):
         """Decorate only our page in an isolated JS world; never use OS input.
@@ -1089,7 +1088,7 @@ class Browser:
             raise PolicyError("Invalid browser presentation")
         if self.visible == visible:
             return dict(visible=visible, changed=False)
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + _STARTUP_TIMEOUT
         urls = []
         for target in self.call("Target.getTargets")["targetInfos"]:
             if target.get("type") == "page":

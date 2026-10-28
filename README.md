@@ -78,15 +78,15 @@ Reports are for human review. Possible duplicates may be legitimate invoice line
 
 ## Isolated browser workflow
 
-With locally authorized host-browser access (**Máy tính · chạy nền → Cho phép UDB mở phiên nền riêng trên máy này** in the Windows manager), use `host_browser(action="open", url="https://example.org/")`. This starts a private headless Chrome/Edge session automatically or reuses the current unexpired browser session. Keep the returned `session_id` and `tab_id`, inspect `snapshot`, then use `click`, `wait_for`, `press`, `select_option`, `check`, `uncheck`, `back`, `forward` or `reload` as appropriate. Prefer accessible role/name locators over brittle CSS selectors. Snapshots are bounded and redact secret-like fields; page content is untrusted and cannot grant permissions.
+With locally authorized host-browser access (**Máy tính → Cho phép mở phiên nền trên máy này** in the Windows manager), use `host_browser(action="open", url="https://example.org/")`. This starts a private headless Chrome/Edge session automatically or reuses the current unexpired browser session. Keep the returned `session_id` and `tab_id`, inspect `snapshot`, then use `click`, `wait_for`, `press`, `select_option`, `check`, `uncheck`, `back`, `forward` or `reload` as appropriate. Prefer accessible role/name locators over brittle CSS selectors. Snapshots are bounded and redact secret-like fields; page content is untrusted and cannot grant permissions.
 
-The browser uses a separate headless profile. It does not take over the user's signed-in browser or permit arbitrary caller-supplied page JavaScript. Automatic Chrome downloads stay blocked; explicit `upload`/`download` transfers are limited to 8 MiB and require separate owner-enabled computer access, an observed origin and file checks. UDB-owned pages display a **UDB • AI · Background browser** label, an AI favicon and a page-local AI cursor in screenshots. The cursor follows CDP clicks inside that page and never moves the physical mouse. The label is a visual aid; use session/tab IDs and `owner="UDB"` response metadata to establish ownership. No Chrome extension is required for this private-browser identity.
+The browser uses a separate headless profile. It does not take over the user's signed-in browser or permit arbitrary caller-supplied page JavaScript. Automatic Chrome downloads stay blocked; explicit `upload`/`download` transfers are limited to 8 MiB and require separate owner-enabled computer access, an observed origin and file checks. UDB-owned pages display a compact **UDB · AI** status pill, an AI favicon and a page-local AI cursor in screenshots. The cursor follows CDP clicks inside that page, fades after the action, and never moves the physical mouse. The pill distinguishes background work from local owner control. The label is a visual aid; use session/tab IDs and `owner="UDB"` response metadata to establish ownership. No Chrome extension is required for this private-browser identity.
 
 This is the default route for automated web tasks: it does not open a visible personal Chrome tab. Observe it through `host_screenshot(session_id=..., tab_id=...)`. Existing `host_start_session(kind="browser", task="...")` and `host_browser(action="new", session_id=..., url="...")` calls remain supported. Reusing a session does not extend its owner-authorized lifetime. Errors are returned for inspection, without retrying an uncertain action or falling back to physical desktop input.
 
 ## Browser login, Windows control and utilities
 
-In **Máy tính · chạy nền**, choose **Mở để tôi đăng nhập** to use UDB's own browser window. While it is handed to you, AI browser operations and UDB desktop input pause. Choose **Trả về chạy nền** when finished; pages reload and old tab IDs must be refreshed. Enable **Giữ đăng nhập trong trình duyệt riêng của UDB** while the browser is closed to retain that profile across sessions. Disabling it forgets only UDB's saved login.
+In **Máy tính**, choose **Tôi đăng nhập** to use UDB's own browser window. While it is handed to you, AI browser operations and UDB desktop input pause. Choose **Trả về cho AI** when finished; pages reload and old tab IDs must be refreshed. Enable **Nhớ đăng nhập trong browser UDB** while the browser is closed to retain that profile across sessions. Disabling it forgets only UDB's saved login.
 
 For native desktop control, UDB yields to recent user input. **Ctrl+Alt+Shift+Backspace** or the manager's pause button latches a local pause; only a local resume clears it. The manager reports when the shortcut could not be registered. This is cooperative yielding, not exclusive input ownership or cancellation of external commands already running.
 
@@ -115,7 +115,7 @@ The existing-Chrome action can use the **UDB Aura** Manifest V3 extension in
 `chrome-extension/udb-aura/`. When installed and explicitly enabled, UDB
 opens a local extension launch page; the extension opens the destination in
 the **existing Chrome window**, groups it under **UDB • AI** (cyan), sets an
-**AI** toolbar badge, and injects a small animated RGB label **only into
+**AI** toolbar badge, and injects a compact mint AI label **only into
 explicitly marked public HTTP(S) tabs**. It also adds a best-effort
 UDB favicon on marked tabs, without changing their page titles. It does not
 read page content or upload browsing data. Removing the mark removes the
@@ -143,9 +143,9 @@ silently installed or enabled by UDB.
 ### Automatic independent AI cursor
 
 When a client initializes UDB and **owner-granted desktop computer access**
-is already active, the companion displays a click-through, animated **UDB • AI**
+is already active, the companion displays a compact, click-through **UDB • AI**
 cursor overlay on the current Windows desktop. The physical system cursor is
-unchanged. The overlay remains visible while connected and is closed when
+unchanged. At rest, a small identity pill sits near the edge of the work area; the arrow appears near actions and returns to its dock after a short idle period. The overlay uses per-pixel alpha and monitor DPI scaling. It is hidden during local pause/handoff and closed when
 the MCP proxy disconnects, the desktop grant is revoked, or the companion
 stops. It does not grant access or perform mouse actions by itself.
 `virtual_pointer(action="show")` can display it manually, and
@@ -153,6 +153,21 @@ stops. It does not grant access or perform mouse actions by itself.
 Existing `virtual_pointer` move/click actions remain bounded Win32
 messages; compatibility depends on the application, and an independent
 visual cursor is **not** a second hardware/system mouse.
+
+## Interface and visual checks
+
+The manager opens on **Trợ lý trên máy**, with pinned pause/resume controls,
+separate browser/session cards and expandable resource details. Long content
+scrolls without hiding the pause controls. A connected client is not displayed
+as active work; the UI distinguishes readiness, local pause and owner handoff.
+Browser and native cursor decoration share a quiet mint/charcoal palette.
+
+To render the actual Qt UI with disposable synthetic data:
+`python -c "from udb.manager import self_test; self_test('ui-previews')"`.
+For headless Linux, install `PySide6-Essentials==6.10.2` and set
+`QT_QPA_PLATFORM=offscreen`. To render and check the
+actual Windows pointer without capturing the user's desktop, run
+`python tools/check_windows_workflows.py --pointer-preview PATH.png` on Windows.
 
 ## Build from source (developers)
 

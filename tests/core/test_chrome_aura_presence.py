@@ -73,7 +73,17 @@ def test_chrome_aura_javascript_syntax():
         )
 
 
-def test_virtual_pointer_presence_uses_virtual_screen_not_system_cursor():
+def test_virtual_pointer_presence_uses_virtual_screen_not_system_cursor(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(
+        sys.modules,
+        "win32api",
+        SimpleNamespace(
+            MonitorFromPoint=lambda point, flags: "primary",
+            GetMonitorInfo=lambda monitor: {"Work": (-1920, -200, 1920, 1000)},
+        ),
+    )
     pointer = VirtualPointer.__new__(VirtualPointer)
     pointer.interactive = lambda: None
     metrics = {76: -1920, 77: -200, 78: 3840, 79: 1200}
@@ -85,10 +95,10 @@ def test_virtual_pointer_presence_uses_virtual_screen_not_system_cursor():
     )
     assert pointer.show_idle() == {
         "visible": True,
-        "position": [691, 616],
+        "position": [1776, 934],
         "independent": True,
     }
-    assert points == [(691, 616)]
+    assert points == [(1776, 934)]
 
 
 class OneOrTwoCycles:
@@ -188,3 +198,17 @@ def test_standalone_package_includes_opt_in_chrome_aura(tmp_path, monkeypatch):
     assert "UDB/chrome-extension/udb-aura/icons/icon128.png" in names
     assert "UDB/tools/enable_chrome_aura.ps1" in names
     assert "UDB/STANDALONE-SHA256SUMS" in names
+
+
+def test_pointer_presence_hides_during_local_pause_and_returns_on_resume():
+    grant = {"enabled": True, "capabilities": ["desktop"]}
+    primary = FakePrimary([grant, {**grant, "desktop_paused": True}, grant])
+    companion = FakeCompanion()
+    proxy = UnifiedProxy(primary, companion)
+    proxy.closed = OneOrTwoCycles(3)
+    proxy._watch_access()
+    assert companion.calls == [
+        "udb/show-pointer",
+        "udb/close-desktop",
+        "udb/show-pointer",
+    ]

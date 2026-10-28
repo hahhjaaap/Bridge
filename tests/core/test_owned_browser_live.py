@@ -81,6 +81,11 @@ def live_browser(tmp_path, monkeypatch):
 
     monkeypatch.setattr("udb.host_browser.find_browser", lambda: browser_exe)
     monkeypatch.setattr("udb.host_browser.OwnedProcess", Process)
+    # This Linux adapter checks CDP/DOM behavior, not Windows launch latency.
+    # Cold Chrome on shared CI can exceed 20 seconds; keep a bounded fixture
+    # budget without changing the production Windows startup limits.
+    monkeypatch.setattr(host_browser, "_STARTUP_TIMEOUT", 60)
+    monkeypatch.setattr(host_browser, "_ENDPOINT_TIMEOUT", 45)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Page)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -120,6 +125,12 @@ def live_browser(tmp_path, monkeypatch):
     finally:
         if browser:
             browser.close()
+        elif (tmp_path / "chromium.log").exists():
+            import sys
+
+            sys.stderr.write(
+                (tmp_path / "chromium.log").read_text(errors="replace")[-16384:]
+            )
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)

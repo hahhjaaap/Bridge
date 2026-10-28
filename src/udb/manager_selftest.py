@@ -155,6 +155,60 @@ def self_test(preview_dir=None):
                         ), "Project path overflows its card"
                     if captures and not motion:
                         assert win.grab().save(str(captures / f"page-{i}-{width}.png"))
+        # Preview only synthetic host metadata; no worker, browser, grant or
+        # external connection is started to produce these images.
+        if captures:
+            from unittest.mock import patch
+
+            from .desktop_control import pause_local
+
+            host = dict(
+                worker_ready=True,
+                enabled=True,
+                emergency_hotkey_available=True,
+                resources=dict(
+                    cpu_percent=12,
+                    ram_percent=38,
+                    available_mib=8192,
+                    admission_ready=True,
+                ),
+                sessions=[
+                    dict(
+                        kind="browser",
+                        session_id="b" * 32,
+                        task="Synthetic preview",
+                        tabs=2,
+                        presentation="background",
+                    )
+                ],
+            )
+            win.resize(1220, 820)
+            win.navigate(5)
+            with patch("udb.host_client.status", return_value=host):
+                for state in ("ready", "owner", "paused"):
+                    host["sessions"] = (
+                        []
+                        if state == "ready"
+                        else [
+                            dict(
+                                kind="browser",
+                                session_id="b" * 32,
+                                task="Synthetic preview",
+                                tabs=2,
+                                presentation="background",
+                            )
+                        ]
+                    )
+                    if host["sessions"]:
+                        host["sessions"][0]["presentation"] = (
+                            "visible" if state == "owner" else "background"
+                        )
+                    pause_local(ctl.agent, state == "paused")
+                    win.refresh()
+                    QTest.qWait(60)
+                    assert win.grab().save(str(captures / f"assistant-{state}.png"))
+                pause_local(ctl.agent, False)
+
         # Empty states hide their corresponding tables and disable review.
         # Expire only the synthetic request in this disposable test database.
         with ctl.agent.connect() as c:
