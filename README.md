@@ -164,7 +164,8 @@ Browser and native cursor decoration share a quiet mint/charcoal palette.
 
 To render the actual Qt UI with disposable synthetic data:
 `python -c "from udb.manager import self_test; self_test('ui-previews')"`.
-For headless Linux, set `QT_QPA_PLATFORM=offscreen`. To render and check the
+For headless Linux, install `PySide6-Essentials==6.10.2` and set
+`QT_QPA_PLATFORM=offscreen`. To render and check the
 actual Windows pointer without capturing the user's desktop, run
 `python tools/check_windows_workflows.py --pointer-preview PATH.png` on Windows.
 

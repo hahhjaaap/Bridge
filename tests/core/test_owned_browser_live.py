@@ -120,6 +120,12 @@ def live_browser(tmp_path, monkeypatch):
     finally:
         if browser:
             browser.close()
+        elif (tmp_path / "chromium.log").exists():
+            import sys
+
+            sys.stderr.write(
+                (tmp_path / "chromium.log").read_text(errors="replace")[-16384:]
+            )
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)

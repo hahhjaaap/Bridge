@@ -526,13 +526,9 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         self.browser_background_button.clicked.connect(
             lambda: self.browser_presentation_local(False)
         )
+        bl.addLayout(row(self.browser_start_button, None))
         bl.addLayout(
-            row(
-                self.browser_start_button,
-                self.browser_login_button,
-                self.browser_background_button,
-                None,
-            )
+            row(self.browser_login_button, self.browser_background_button, None)
         )
         from .browser_settings import remember_login
 
