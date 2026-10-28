@@ -230,10 +230,10 @@ class VirtualPointer:
         self.position = [x, y]
 
     def show_idle(self):
-        """Display an independent AI indicator when an owner-granted client connects.
+        """Prepare the independent pointer, visible only in selected UDB Chrome tabs.
 
-        The position is on the virtual desktop, away from the real cursor.
-        This never sends system mouse input or grants computer access.
+        A native overlay watches registered Chrome tab UIA IDs. It hides the
+        pointer on all ordinary tabs and apps, without moving the real cursor.
         """
         self.interactive()
         left = self.u.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
@@ -245,7 +245,11 @@ class VirtualPointer:
         x = left + max(0, min(width - 1, round(width * 0.68)))
         y = top + max(0, min(height - 1, round(height * 0.68)))
         self.show(x, y)
-        return dict(visible=True, position=self.position, independent=True)
+        return dict(
+            visibility="selected_udb_chrome_tab_only",
+            position=self.position,
+            independent=True,
+        )
 
     def close(self):
         if self.overlay:
