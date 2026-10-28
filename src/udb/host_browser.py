@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .browser_dom import CLICK_POINT_SCRIPT, LOCATOR_SCRIPT
-from .browser_identity import IDENTITY_SCRIPT
+from .browser_identity import identity_script
 from .core import PolicyError, reject_links
 from .owned_process import OwnedProcess as OwnedProcess
 from .resources import LIMITS
@@ -763,11 +763,7 @@ class Browser:
             return result
 
     def identity_script(self):
-        return (
-            IDENTITY_SCRIPT.replace("Background browser", "Your control · AI paused")
-            if getattr(self, "visible", False)
-            else IDENTITY_SCRIPT
-        )
+        return identity_script(getattr(self, "visible", False))
 
     def _show_identity(self, tab, x=None, y=None):
         """Decorate only our page in an isolated JS world; never use OS input.

@@ -1,136 +1,148 @@
-# Independent visual AI cursor; no OS mouse input and no focus takeover.
-$ErrorActionPreference='Stop'
+# Independent, per-pixel-alpha AI identity. No OS input or focus takeover.
+param([string]$PreviewPath = '')
+$ErrorActionPreference = 'Stop'
 Add-Type -WarningAction SilentlyContinue -ReferencedAssemblies System.Windows.Forms,System.Drawing -TypeDefinition @'
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Windows.Forms;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Runtime.InteropServices;
 
 public sealed class UdbPointer : Form {
+  [StructLayout(LayoutKind.Sequential)] struct PointNative { public int X,Y; public PointNative(int x,int y){X=x;Y=y;} }
+  [StructLayout(LayoutKind.Sequential)] struct SizeNative { public int Width,Height; public SizeNative(int w,int h){Width=w;Height=h;} }
+  [StructLayout(LayoutKind.Sequential,Pack=1)] struct Blend { public byte Op,Flags,Alpha,Format; }
   [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
-  public static void ConfigureDpi() { SetThreadDpiAwarenessContext(new IntPtr(-4)); }
+  [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr hwnd);
+  [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr hwnd,IntPtr dc);
+  [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+  [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc,IntPtr obj);
+  [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+  [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+  [DllImport("user32.dll",SetLastError=true)] static extern bool UpdateLayeredWindow(IntPtr hwnd,IntPtr dst,ref PointNative pos,ref SizeNative size,IntPtr src,ref PointNative origin,int key,ref Blend blend,int flags);
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(PointNative point,int flags);
+  [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor,int kind,out uint x,out uint y);
+  static float ScaleAt(Point target){
+    try{uint x,y;if(GetDpiForMonitor(MonitorFromPoint(new PointNative(target.X,target.Y),2),0,out x,out y)==0)return Math.Max(1f,Math.Min(2.5f,x/96f));}
+    catch(DllNotFoundException){}catch(EntryPointNotFoundException){}
+    return 1f;
+  }
+  public static void ConfigureDpi(){SetThreadDpiAwarenessContext(new IntPtr(-4));}
   readonly ConcurrentQueue<string> queue = new ConcurrentQueue<string>();
   readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
-  readonly Color[] palette = new Color[] {
-    Color.FromArgb(22,232,255), Color.FromArgb(101,117,255),
-    Color.FromArgb(221,82,255), Color.FromArgb(255,96,157),
-    Color.FromArgb(24,237,196)
-  };
-  readonly Font title = new Font("Segoe UI", 10.3f, FontStyle.Bold);
-  readonly Font caption = new Font("Segoe UI", 6.8f, FontStyle.Bold);
-  readonly DateTime started = DateTime.UtcNow;
-  bool stopped = false;
-  protected override bool ShowWithoutActivation { get { return true; } }
+  readonly Font font = new Font("Segoe UI",8.2f,FontStyle.Bold);
+  bool working = false, stopped = false;
+  Point target;
+  DateTime lastAction;
+  protected override bool ShowWithoutActivation { get{return true;} }
   protected override CreateParams CreateParams {
-    get {
-      var p = base.CreateParams;
-      p.ExStyle |= 0x08000000 | 0x80 | 0x20 | 0x80000; // no activate, tool, click-through, layered
-      return p;
-    }
+    get {var p=base.CreateParams;p.ExStyle|=0x08000000|0x80|0x20|0x80000;return p;}
   }
-  protected override void WndProc(ref Message m) {
-    if (m.Msg == 0x84) { m.Result = (IntPtr)(-1); return; }
-    if (m.Msg == 0x21) { m.Result = (IntPtr)3; return; }
+  protected override void WndProc(ref Message m){
+    if(m.Msg==0x84){m.Result=(IntPtr)(-1);return;}
+    if(m.Msg==0x21){m.Result=(IntPtr)3;return;}
     base.WndProc(ref m);
   }
-  static GraphicsPath Round(Rectangle r, int radius) {
-    GraphicsPath p = new GraphicsPath();
-    int d = radius * 2;
-    p.AddArc(r.Left, r.Top, d, d, 180, 90);
-    p.AddArc(r.Right-d, r.Top, d, d, 270, 90);
-    p.AddArc(r.Right-d, r.Bottom-d, d, d, 0, 90);
-    p.AddArc(r.Left, r.Bottom-d, d, d, 90, 90);
-    p.CloseFigure();
-    return p;
+  static GraphicsPath Round(RectangleF r,float radius){
+    var p=new GraphicsPath();float d=radius*2;
+    p.AddArc(r.Left,r.Top,d,d,180,90);p.AddArc(r.Right-d,r.Top,d,d,270,90);
+    p.AddArc(r.Right-d,r.Bottom-d,d,d,0,90);p.AddArc(r.Left,r.Bottom-d,d,d,90,90);
+    p.CloseFigure();return p;
   }
-  static Color Blend(Color a, Color b, double t) {
-    return Color.FromArgb(
-      (int)Math.Round(a.R + (b.R-a.R)*t),
-      (int)Math.Round(a.G + (b.G-a.G)*t),
-      (int)Math.Round(a.B + (b.B-a.B)*t));
-  }
-  protected override void OnPaint(PaintEventArgs e) {
-    base.OnPaint(e);
-    Graphics g = e.Graphics;
-    g.SmoothingMode = SmoothingMode.AntiAlias;
-    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-    double phase = ((DateTime.UtcNow - started).TotalSeconds / 1.4) % palette.Length;
-    int index = (int)Math.Floor(phase);
-    Color a = Blend(palette[index], palette[(index+1)%palette.Length], phase-index);
-    Color b = palette[(index+2)%palette.Length];
-    using (var ring = new Pen(a, 3.0f))
-      g.DrawEllipse(ring, 2, 2, 43, 43);
-    using (var inner = new Pen(b, 1.4f))
-      g.DrawEllipse(inner, 7, 7, 33, 33);
-    Point[] arrow = new Point[] {
-      new Point(6,5), new Point(6,36), new Point(14,27),
-      new Point(21,43), new Point(27,40), new Point(20,25),
-      new Point(34,25)
-    };
-    using (var dark = new SolidBrush(Color.FromArgb(13,21,39)))
-      g.FillPolygon(dark, arrow);
-    using (var white = new Pen(Color.White, 2.3f))
-      g.DrawPolygon(white, arrow);
-    Rectangle panel = new Rectangle(48,9,120,44);
-    using (GraphicsPath shape = Round(panel, 13)) {
-      using (var shadow = new Pen(a, 4.0f))
-        g.DrawPath(shadow, shape);
-      using (var fill = new SolidBrush(Color.FromArgb(13,20,37)))
-        g.FillPath(fill, shape);
-      using (var stroke = new LinearGradientBrush(panel,a,b,0f))
-        g.DrawPath(new Pen(stroke, 1.7f), shape);
+  static void DrawPill(Graphics g,RectangleF box,string text,Font font){
+    using(var shape=Round(box,box.Height/2)){
+      using(var fill=new SolidBrush(Color.FromArgb(245,21,30,36)))g.FillPath(fill,shape);
+      using(var stroke=new Pen(Color.FromArgb(56,92,80),1))g.DrawPath(stroke,shape);
     }
-    using (var label = new SolidBrush(Color.FromArgb(248,252,255)))
-      g.DrawString("UDB  •  AI", title, label, new PointF(59,13));
-    using (var status = new SolidBrush(Color.FromArgb(107,229,248)))
-      g.DrawString("CONNECTED", caption, status, new PointF(60,32));
+    using(var dot=new SolidBrush(Color.FromArgb(120,223,188)))g.FillEllipse(dot,box.X+10,box.Y+box.Height/2-2,4,4);
+    using(var fg=new SolidBrush(Color.FromArgb(232,246,240)))
+    using(var format=new StringFormat()){format.LineAlignment=StringAlignment.Center;g.DrawString(text,font,fg,new RectangleF(box.X+21,box.Y,box.Width-24,box.Height),format);}
   }
-  public UdbPointer() {
-    FormBorderStyle=FormBorderStyle.None;
-    ShowInTaskbar=false;
-    TopMost=true;
-    BackColor=Color.Magenta;
-    TransparencyKey=Color.Magenta;
-    ClientSize=new Size(176,66);
-    StartPosition=FormStartPosition.Manual;
-    Location=new Point(-500,-500);
-    DoubleBuffered=true;
-    var reader = new Thread(() => {
-      try {
-        string line;
-        while ((line=Console.ReadLine())!=null) queue.Enqueue(line);
-      } finally { queue.Enqueue("stop"); }
-    });
-    reader.IsBackground=true;
-    reader.Start();
-    timer.Interval=60;
-    timer.Tick += (sender, ev) => {
-      string line;
-      while (queue.TryDequeue(out line)) {
-        if (line=="stop") { stopped=true; Close(); return; }
-        if (line=="hide") { Hide(); continue; }
-        string[] parts=line.Split(',');
-        int x,y;
-        if (parts.Length==2 && int.TryParse(parts[0],out x)
-            && int.TryParse(parts[1],out y)) {
-          Location=new Point(x,y);
-          if (!Visible) Show();
+  static void DrawScene(Graphics g,bool working,float tipX,float tipY,bool left,bool above,Font font){
+        if(working){
+          float sx=left?-1:1,sy=above?-1:1;
+          PointF[] points=new PointF[]{new PointF(0,0),new PointF(1,23),new PointF(7,17),new PointF(11,26),new PointF(15,24),new PointF(11,15),new PointF(22,15)};
+          for(int i=0;i<points.Length;i++)points[i]=new PointF(tipX+points[i].X*sx,tipY+points[i].Y*sy);
+          using(var shape=new GraphicsPath()){
+            shape.AddPolygon(points);
+            using(var fill=new SolidBrush(Color.FromArgb(184,244,222)))g.FillPath(fill,shape);
+            using(var edge=new Pen(Color.FromArgb(20,59,48),1.6f)){edge.LineJoin=LineJoin.Round;g.DrawPath(edge,shape);}
+          }
+          DrawPill(g,new RectangleF(left?tipX-94:tipX+28,above?tipY-31:tipY+5,64,27),"AI",font);
+        }else DrawPill(g,new RectangleF(4,10,108,30),"UDB  AI",font);
+  }
+  public static void SavePreview(string path){
+    using(var bitmap=new Bitmap(480,180,PixelFormat.Format32bppPArgb))
+    using(var g=Graphics.FromImage(bitmap))
+    using(var label=new Font("Segoe UI",10.0f,FontStyle.Regular))
+    using(var text=new SolidBrush(Color.FromArgb(159,178,186)))
+    using(var pointerFont=new Font("Segoe UI",8.2f,FontStyle.Bold)){
+      g.Clear(Color.FromArgb(13,18,22));g.SmoothingMode=SmoothingMode.AntiAlias;
+      g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+      g.DrawString("Ready",label,text,new PointF(32,26));
+      g.DrawString("Working",label,text,new PointF(252,26));
+      g.TranslateTransform(28,66);DrawScene(g,false,4,4,false,false,pointerFont);
+      g.ResetTransform();g.TranslateTransform(250,66);DrawScene(g,true,4,4,false,false,pointerFont);
+      bitmap.Save(path,ImageFormat.Png);
+    }
+  }
+  void RenderFrame(){
+    if(!Visible||stopped)return;
+    Rectangle area=Screen.FromPoint(target).WorkingArea;
+    float scale=ScaleAt(target);int width=(int)Math.Ceiling(128*scale),height=(int)Math.Ceiling(52*scale);
+    bool left=target.X+width>area.Right, above=target.Y+height>area.Bottom;
+    float tipX=left?124:4,tipY=above?48:4;
+    Point position=working?new Point(target.X-(int)(tipX*scale),target.Y-(int)(tipY*scale)):new Point(area.Right-(int)(144*scale),area.Bottom-(int)(66*scale));
+    using(var bitmap=new Bitmap(width,height,PixelFormat.Format32bppPArgb)){
+      using(var g=Graphics.FromImage(bitmap)){
+        g.Clear(Color.Transparent);g.SmoothingMode=SmoothingMode.AntiAlias;
+        g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        g.ScaleTransform(scale,scale);DrawScene(g,working,tipX,tipY,left,above,font);
+      }
+      IntPtr screen=GetDC(IntPtr.Zero),memory=IntPtr.Zero,image=IntPtr.Zero,old=IntPtr.Zero;
+      try{
+        memory=CreateCompatibleDC(screen);image=bitmap.GetHbitmap(Color.FromArgb(0));old=SelectObject(memory,image);
+        var pos=new PointNative(position.X,position.Y);var size=new SizeNative(width,height);var origin=new PointNative(0,0);
+        var blend=new Blend{Op=0,Flags=0,Alpha=255,Format=1};
+        if(!UpdateLayeredWindow(Handle,screen,ref pos,ref size,memory,ref origin,0,ref blend,2))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+      }finally{
+        if(old!=IntPtr.Zero)SelectObject(memory,old);
+        if(image!=IntPtr.Zero)DeleteObject(image);
+        if(memory!=IntPtr.Zero)DeleteDC(memory);
+        if(screen!=IntPtr.Zero)ReleaseDC(IntPtr.Zero,screen);
+      }
+    }
+  }
+  public UdbPointer(){
+    AutoScaleMode=AutoScaleMode.None;FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;TopMost=true;
+    ClientSize=new Size(128,52);StartPosition=FormStartPosition.Manual;Location=new Point(-500,-500);
+    var reader=new Thread(()=>{try{string line;while((line=Console.ReadLine())!=null)queue.Enqueue(line);}finally{queue.Enqueue("stop");}});
+    reader.IsBackground=true;reader.Start();timer.Interval=50;
+    timer.Tick+=(sender,ev)=>{
+      bool changed=false,probe=false;string line;
+      while(queue.TryDequeue(out line)){
+        if(line=="stop"){stopped=true;Close();return;}
+        if(line=="hide"){Hide();continue;}
+        if(line=="ready"){working=false;changed=true;continue;}
+        if(line=="probe"){probe=true;changed=true;continue;}
+        string[] parts=line.Split(',');int x,y;
+        if(parts.Length==2&&int.TryParse(parts[0],out x)&&int.TryParse(parts[1],out y)){
+          target=new Point(x,y);working=true;lastAction=DateTime.UtcNow;changed=true;
+          if(!Visible)Show();
         }
       }
-      if (Visible && !stopped) Invalidate();
+      if(working&&(DateTime.UtcNow-lastAction).TotalMilliseconds>1800){working=false;changed=true;}
+      if(changed)RenderFrame();
+      if(probe&&Visible){Console.WriteLine("painted");Console.Out.Flush();}
     };
-    timer.Start();
-    Console.WriteLine("ready");
-    Console.Out.Flush();
+    timer.Start();Console.WriteLine("ready");Console.Out.Flush();
   }
-  protected override void Dispose(bool disposing) {
-    if (disposing) { timer.Dispose(); title.Dispose(); caption.Dispose(); }
-    base.Dispose(disposing);
-  }
+  protected override void Dispose(bool disposing){if(disposing){timer.Dispose();font.Dispose();}base.Dispose(disposing);}
 }
 '@
+if ($PreviewPath) { [UdbPointer]::SavePreview($PreviewPath); exit }
 [UdbPointer]::ConfigureDpi()
 [System.Windows.Forms.Application]::Run((New-Object UdbPointer))
