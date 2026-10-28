@@ -20,6 +20,9 @@ from .core import PolicyError, reject_links
 from .owned_process import OwnedProcess as OwnedProcess
 from .resources import LIMITS
 
+_STARTUP_TIMEOUT = 20
+_ENDPOINT_TIMEOUT = 15
+
 
 def validate_url(value):
     if value == "about:blank":
@@ -224,7 +227,7 @@ class Browser:
         self.tabs = {}
         self.frozen = False
         self.freeze_errors = 0
-        self.deadline = time.monotonic() + 20
+        self.deadline = time.monotonic() + _STARTUP_TIMEOUT
         try:
             endpoint = self.folder / "DevToolsActivePort"
             reject_links(endpoint)
@@ -256,7 +259,7 @@ class Browser:
                 LIMITS["browser_memory_mib"],
             )
             endpoint = self.folder / "DevToolsActivePort"
-            deadline = time.monotonic() + 15
+            deadline = time.monotonic() + _ENDPOINT_TIMEOUT
             while not endpoint.exists():
                 if not self.proc.alive():
                     raise PolicyError("Private browser exited during startup")
@@ -1085,7 +1088,7 @@ class Browser:
             raise PolicyError("Invalid browser presentation")
         if self.visible == visible:
             return dict(visible=visible, changed=False)
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + _STARTUP_TIMEOUT
         urls = []
         for target in self.call("Target.getTargets")["targetInfos"]:
             if target.get("type") == "page":
