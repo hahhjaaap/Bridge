@@ -48,21 +48,31 @@ def normalized_output(tool: str, result: dict[str, Any]) -> dict[str, Any]:
     first = text_blocks[0].strip() if text_blocks else ""
     first_line = first.splitlines()[0] if first else ""
     native = native_status(first_line)
+    if native == "ERROR":
+        value["isError"] = True
+        return value
+    report = value.get("structuredContent")
+    if not isinstance(report, dict):
+        report = None
+        for text in text_blocks:
+            candidate = report_from_text(text)
+            if isinstance(candidate, dict):
+                report = candidate
+                break
     if native:
-        if value.get("isError") is True and native != "ERROR":
+        if (
+            value.get("isError") is True
+            or report_outcome(report or {}).status == "ERROR"
+        ):
+            value["isError"] = True
             value["content"] = [
                 {
                     "type": "text",
                     "text": f"ERROR | Backend reported a tool error ({tool})",
                 }
             ] + content
-        if native == "ERROR":
-            value["isError"] = True
         return value
 
-    report = value.get("structuredContent")
-    if not isinstance(report, dict):
-        report = report_from_text(first)
     state, label = report_outcome(report or {})
     if value.get("isError") is True:
         state, label = "ERROR", "Backend reported a tool error"

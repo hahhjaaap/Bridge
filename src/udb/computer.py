@@ -8,6 +8,27 @@ from .core import PolicyError
 from .resources import require_capacity, require_light_capacity
 
 
+def status_report(agent, processes=None, *, worker_ready=True):
+    """Report the local grant even when the process supervisor is unavailable."""
+    from .desktop_control import browser_handoff, paused
+
+    return dict(
+        desktop_paused=paused(agent) or browser_handoff(agent),
+        **access.summary(agent),
+        worker_ready=worker_ready,
+        command_limits=dict(
+            max_running=MAX_CONCURRENT,
+            shared_background_limit=MAX_CONCURRENT,
+            timeout_seconds=3600,
+            output_bytes=4 * 1024 * 1024,
+            memory_mib=4096,
+        ),
+        processes=processes
+        if processes is not None
+        else dict(jobs=[], available=False),
+    )
+
+
 class Computer:
     def __init__(self, agent, jobs_factory=Jobs):
         self.agent = agent
@@ -23,20 +44,7 @@ class Computer:
 
     def dispatch(self, mode, args, resource):
         if mode == "status":
-            from .desktop_control import browser_handoff, paused
-
-            return dict(
-                desktop_paused=paused(self.agent) or browser_handoff(self.agent),
-                **access.summary(self.agent),
-                command_limits=dict(
-                    max_running=MAX_CONCURRENT,
-                    shared_background_limit=MAX_CONCURRENT,
-                    timeout_seconds=3600,
-                    output_bytes=4 * 1024 * 1024,
-                    memory_mib=4096,
-                ),
-                processes=self.jobs.process("list"),
-            )
+            return status_report(self.agent, self.jobs.process("list"))
         if mode == "process" and args.get("action") == "stop":
             return self.jobs.process("stop", args.get("job_id", ""))
         grant = access.require(self.agent)

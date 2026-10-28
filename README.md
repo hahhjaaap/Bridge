@@ -196,6 +196,9 @@ The build fetches only pinned public helper binaries with SHA-256 checks; retain
 Run `python tools/benchmark_runtime.py` for repeatable synthetic file-memory,
 idle polling, terminal checkpoint and activity-log measurements. See
 [Performance measurements](docs/performance.md) for scope, baseline and limits.
+The [simulation report](docs/simulation-report.md) describes fault cases,
+platform coverage and commands to reproduce the checks. CI uploads JUnit reports
+for each Linux/Windows Python matrix job.
 
 ## Repository layout
 

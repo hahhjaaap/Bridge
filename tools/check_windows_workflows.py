@@ -2,6 +2,7 @@
 
 Optional --visible-browser opens only the temporary UDB-owned browser window.
 Optional --notify requests one UDB toast; its visual display requires human review.
+Optional --host-scenario tests a disposable host worker and its browser mailbox.
 Clipboard is read for format/API validation only and never printed or modified.
 """
 
@@ -18,6 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--visible-browser", action="store_true")
     parser.add_argument("--notify", action="store_true")
+    parser.add_argument("--host-scenario", action="store_true")
     parser.add_argument(
         "--pointer-preview",
         type=Path,
@@ -126,6 +128,10 @@ def main():
                 )
         finally:
             browser.close()
+        if args.host_scenario:
+            from check_runtime_scenarios import browser_fixture
+
+            report["host_mailbox"] = browser_fixture()
     print(json.dumps(report, ensure_ascii=True, indent=2))
     return 0
 

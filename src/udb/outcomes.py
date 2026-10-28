@@ -30,6 +30,12 @@ FAILED_STATES = frozenset(
         "cancelled",
         "canceled",
         "interrupted",
+        "timed_out",
+        "timeout",
+        "output_limit",
+        "cleanup_failed",
+        "revoked",
+        "expired",
     }
 )
 FINISHED_STATES = frozenset({"exited", "finished", "completed", "complete", "done"})
@@ -57,7 +63,7 @@ def report_from_text(text: str) -> dict[str, Any] | None:
     for _ in range(3):
         try:
             parsed = json.loads(candidate)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             return None
         if isinstance(parsed, dict):
             return parsed

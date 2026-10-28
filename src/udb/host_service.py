@@ -6,7 +6,6 @@ shell, script, HWND or browser endpoint is accepted from an MCP caller.
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import threading
@@ -15,7 +14,7 @@ import uuid
 
 from .browser_actions import dispatch_browser
 from .core import PolicyError, reject_links
-from .host_client import atomic_json, enabled
+from .host_client import _read_json, atomic_json, enabled
 from .resources import LIMITS, Governor, WindowsSampler, require_capacity
 
 _IDLE_POLL_SECONDS = 0.25
@@ -86,6 +85,7 @@ class HostService:
                     else "background",
                     pages_frozen=getattr(obj, "frozen", False),
                     freeze_errors=getattr(obj, "freeze_errors", 0),
+                    closing=bool(row.get("closing")),
                     **usage,
                 )
             )
@@ -139,28 +139,52 @@ class HostService:
 
     def _maintain(self):
         for sid, row in list(self.sessions.items()):
-            if (
-                not enabled(self.agent)
-                or time.time() > row["expires"]
-                or not row["object"].proc.alive()
-            ):
-                self._close(sid)
-            elif row["kind"] == "browser" and not getattr(
-                row["object"], "visible", False
-            ):
-                row["object"].deadline = time.monotonic() + 4
-                row["object"].freeze(not self.resource.get("admission_ready", False))
+            try:
+                obj = row["object"]
+                if (
+                    row.get("closing")
+                    or not enabled(self.agent)
+                    or time.time() > row["expires"]
+                    or obj.proc is None
+                    or not obj.proc.alive()
+                ):
+                    self._close(sid)
+                elif row["kind"] == "browser" and not getattr(obj, "visible", False):
+                    obj.deadline = time.monotonic() + 4
+                    obj.freeze(not self.resource.get("admission_ready", False))
+            except Exception:
+                continue  # Keep failed cleanup tracked and maintain the other sessions.
 
     def _close(self, sid):
-        row = self.sessions.pop(sid, None)
+        row = self.sessions.get(sid)
         if row:
+            row["closing"] = True
             row["object"].close()
             if row["kind"] == "browser":
                 atomic_json(
                     self.agent.state / "browser-handoff.json", {"active": False}
                 )
             self.agent.audit("host_close", dict(session_id=sid, kind=row["kind"]))
+            self.sessions.pop(sid, None)
         return dict(closed=bool(row), session_id=sid)
+
+    def _close_all(self):
+        failures = []
+        for sid in list(self.sessions):
+            try:
+                self._close(sid)
+            except Exception:
+                failures.append(sid)
+        return failures
+
+    def _sync_handoff(self, browser):
+        active = bool(getattr(browser, "visible", False))
+        if active:
+            try:
+                active = bool(browser.proc and browser.proc.alive())
+            except Exception:
+                active = True  # Uncertain window ownership keeps input paused.
+        atomic_json(self.agent.state / "browser-handoff.json", {"active": active})
 
     def _session(self, sid, *, kind=None):
         """Resolve an owned session once and expire it before any action."""
@@ -172,6 +196,8 @@ class HostService:
                 else "Unknown or expired owned host session"
             )
             raise PolicyError(message)
+        if row.get("closing"):
+            raise PolicyError("Owned session is closing; inspect host status")
         if time.time() > row["expires"]:
             self._close(sid)
             raise PolicyError("Host session expired")
@@ -266,8 +292,12 @@ class HostService:
                 args.get("mode", ""), args.get("arguments", {}), self.resource
             )
         if op == "stop_all":
-            for sid in list(self.sessions):
-                self._close(sid)
+            failed = self._close_all()
+            if failed:
+                raise PolicyError(
+                    "Owned session cleanup pending; inspect status: "
+                    + ", ".join(failed)
+                )
             return dict(stopped=True)
         if op == "close":
             sid = args.get("session_id")
@@ -297,11 +327,10 @@ class HostService:
                     self.sessions[sid]["expires"], time.time() + 900
                 )
                 atomic_json(self.agent.state / "browser-handoff.json", {"active": True})
-            result = obj.switch_presentation(visible)
-            if not visible:
-                atomic_json(
-                    self.agent.state / "browser-handoff.json", {"active": False}
-                )
+            try:
+                result = obj.switch_presentation(visible)
+            finally:
+                self._sync_handoff(obj)
             return dict(result, session_id=sid)
         opening_browser = op == "browser" and args.get("action") == "open"
         require_capacity(
@@ -369,6 +398,48 @@ class HostService:
             except OSError:
                 continue  # A client may consume a reply during the scan.
 
+    def _process_command(self, path):
+        reject_links(path)
+        if not re.fullmatch("[a-f0-9]{32}", path.stem) or not path.is_file():
+            return False
+        claimed = path.with_suffix(".working")
+        reject_links(claimed)
+        path.replace(claimed)
+        try:
+            try:
+                data = _read_json(claimed, 16 * 1048576)
+                if not isinstance(data, dict) or data.get("id") != claimed.stem:
+                    raise ValueError("invalid command identity")
+                expires = data.get("expires")
+                if (
+                    type(expires) not in (int, float)
+                    or not time.time() < expires <= time.time() + 30
+                ):
+                    raise PolicyError("Host command expired; not executed")
+                op, args = data.get("op"), data.get("args", {})
+                if not isinstance(op, str) or not isinstance(args, dict):
+                    raise ValueError("Invalid host command envelope")
+                with self.lock:
+                    self.current = op
+                    try:
+                        self.publish()
+                        result = self.dispatch(op, args)
+                    finally:
+                        self.current = None
+                reply = dict(ok=True, result=result)
+            except Exception as exc:
+                reply = dict(
+                    ok=False,
+                    error=str(exc)[:500]
+                    if isinstance(exc, (PolicyError, ValueError))
+                    else "Owned host operation failed; inspect status before retrying",
+                )
+            atomic_json(self.folder / "replies" / path.name, reply)
+        finally:
+            claimed.unlink(missing_ok=True)
+        self.publish()
+        return True
+
     def _work(self):
         poll = 0.06
         next_cleanup = 0.0
@@ -382,40 +453,10 @@ class HostService:
                 for p in sorted((self.folder / "inbox").glob("*.json")):
                     if self.stop_event.is_set():
                         break
-                    processed = True
-                    reject_links(p)
-                    if p.stat().st_size > 16 * 1048576:
-                        p.unlink()
-                        continue
-                    claimed = p.with_suffix(".working")
-                    p.replace(claimed)
                     try:
-                        data = json.loads(claimed.read_text("utf-8"))
-                        rid = data["id"]
-                        if not re.fullmatch("[a-f0-9]{32}", rid) or claimed.stem != rid:
-                            raise ValueError("invalid command identity")
-                        if not time.time() < data["expires"] <= time.time() + 30:
-                            raise PolicyError("Host command expired; not executed")
-                        with self.lock:
-                            self.current = data["op"]
-                            try:
-                                self.publish()
-                                result = self.dispatch(data["op"], data.get("args", {}))
-                            finally:
-                                self.current = None
-                        reply = dict(ok=True, result=result)
-                    except Exception as exc:
-                        reply = dict(
-                            ok=False,
-                            error=str(exc)[:500]
-                            if isinstance(exc, (PolicyError, ValueError))
-                            else "Owned host operation failed; inspect status before retrying",
-                        )
-                    finally:
-                        claimed.unlink(missing_ok=True)
-                    if re.fullmatch("[a-f0-9]{32}", p.stem):
-                        atomic_json(self.folder / "replies" / (p.stem + ".json"), reply)
-                    self.publish()
+                        processed = self._process_command(p) or processed
+                    except Exception:
+                        continue  # A bad/locked entry must not block the rest of the inbox.
                 now = time.monotonic()
                 if now >= next_cleanup:
                     next_cleanup = now + _REPLY_CLEANUP_SECONDS
@@ -427,14 +468,27 @@ class HostService:
 
     def close(self):
         self.stop_event.set()
+        failures = []
         if getattr(self, "pause_hotkey", None):
-            self.pause_hotkey.close()
+            try:
+                self.pause_hotkey.close()
+            except Exception:
+                failures.append("hotkey")
         # Let a bounded in-flight operation finish, then close only our jobs.
         self.worker.join(timeout=30)
         self.monitor.join(timeout=8)
         with self.lock:
-            for sid in list(self.sessions):
-                self._close(sid)
+            failures.extend(self._close_all())
             if self.computer is not None:
-                self.computer.close()
-        self.publish()
+                try:
+                    self.computer.close()
+                except Exception:
+                    failures.append("computer jobs")
+        try:
+            self.publish()
+        except Exception:
+            failures.append("status publication")
+        if failures:
+            raise PolicyError(
+                "Host cleanup incomplete; inspect status: " + ", ".join(failures)
+            )

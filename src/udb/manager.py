@@ -832,7 +832,14 @@ class MainWindow(ManagerHostMixin, ManagerRefreshMixin, QMainWindow):
         if not self._closing:
             self._closing = True
             self.timer.stop()
-            self.controller.close()
+            try:
+                self.controller.close()
+            except Exception as exc:
+                self._closing = False
+                self.timer.start(1500)
+                event.ignore()
+                QMessageBox.warning(self, "Chưa thể đóng UDB", str(exc))
+                return
         event.accept()
 
 

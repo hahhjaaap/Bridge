@@ -106,6 +106,15 @@ Keep this separate from file permissions and owner approvals.
   reads compatible.
 - The host mailbox backs off to a 250 ms idle polling interval and prunes stale
   replies every five seconds; stop events interrupt the wait immediately.
+- Mailbox commands are claimed and handled independently. JSON reads are bounded,
+  malformed envelopes are rejected before dispatch, and RPC waits use a monotonic
+  deadline while command expiry remains tied to wall time.
+- Failed session cleanup retains a closing record for maintenance/retry and
+  rejects new actions for that session. Host/controller shutdown attempts all
+  owned resources before reporting incomplete cleanup. Browser handoff state is
+  reconciled against the surviving owned window after a transition failure.
+- `computer_status` can report the local grant without a running host worker;
+  process availability is explicitly unknown in that fallback. It issues no grant.
 
 ## Where new code belongs
 
