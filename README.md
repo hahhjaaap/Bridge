@@ -82,6 +82,23 @@ With locally authorized host-browser access, start a browser session, open a pub
 
 The browser uses a separate headless profile. It does not take over the user's signed-in browser, upload/download files, or permit arbitrary page JavaScript.
 
+## Visible tab in an existing Chrome window (owner computer access)
+
+For a **visible** tab in a Chrome window that is already open, call
+`computer_desktop(action="open_chrome_tab", text="https://example.org/")` after
+the owner has locally enabled `udb --access computer`. UDB checks for a real
+running Google Chrome process and asks Chrome to open a **new tab**, without
+creating a separate automation profile or injecting mouse/keyboard input.
+The action refuses to launch Chrome if no existing Chrome window is found.
+
+This is **not** the isolated `host_browser` API: it does not attach CDP,
+claim ownership of personal tabs, or provide DOM/CSS automation. To interact
+with the visible tab, use the owner-granted `computer_desktop` UIA/screenshot
+operations after observing a fresh window ID. Chrome may select a different
+window when several Chrome windows/profiles are open; inspect the returned
+window-reuse observation and the actual desktop before continuing. The tab
+uses the user's current Chrome profile and signed-in website context.
+
 ## Build from source (developers)
 
 Python **3.11+** is required for development. Windows is required for native desktop/GUI and frozen EXE acceptance; Linux supports source, protocol and policy tests.
