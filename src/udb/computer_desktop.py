@@ -96,6 +96,110 @@ class Desktop:
             windows=rows, expires_in_seconds=60, coordinates="physical screen pixels"
         )
 
+    @staticmethod
+    def _chrome_image_path(pid):
+        """Resolve a Chrome process image without trusting PATH or a window title."""
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+        kernel.OpenProcess.restype = w.HANDLE
+        kernel.QueryFullProcessImageNameW.argtypes = [
+            w.HANDLE, w.DWORD, w.LPWSTR, ctypes.POINTER(w.DWORD)
+        ]
+        kernel.QueryFullProcessImageNameW.restype = w.BOOL
+        kernel.CloseHandle.argtypes = [w.HANDLE]
+        kernel.CloseHandle.restype = w.BOOL
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        try:
+            size = w.DWORD(32768)
+            image = ctypes.create_unicode_buffer(size.value)
+            if not kernel.QueryFullProcessImageNameW(
+                handle, 0, image, ctypes.byref(size)
+            ):
+                return None
+            path = image.value
+            if path.lower().replace("/", "\\").endswith(
+                "\\google\\chrome\\application\\chrome.exe"
+            ):
+                return path
+            return None
+        finally:
+            kernel.CloseHandle(handle)
+
+    def _chrome_windows(self):
+        """Observe only top-level windows belonging to real Chrome processes."""
+        images = {}
+        rows = []
+
+        def visit(hwnd, _):
+            if (
+                not self.gui.IsWindowVisible(hwnd)
+                or self.gui.GetClassName(hwnd) != "Chrome_WidgetWin_1"
+            ):
+                return
+            pid = self.process.GetWindowThreadProcessId(hwnd)[1]
+            if pid not in images:
+                images[pid] = self._chrome_image_path(pid)
+            if images[pid]:
+                rows.append((hwnd, pid, images[pid]))
+
+        self.gui.EnumWindows(visit, None)
+        return rows
+
+    def open_chrome_tab(self, url):
+        """Ask an already-running Chrome to open a visible tab.
+
+        This is explicitly owner-granted computer access, NOT an owned CDP
+        session. No existing tab is inspected, adopted, or controlled.
+        """
+        from .chrome_aura import launch_target
+        from .host_browser import validate_url
+
+        self.interactive()
+        target = validate_url(url)
+        chrome_target, branding_requested = launch_target(target)
+        before = self._chrome_windows()
+        if not before:
+            raise PolicyError(
+                "No existing Google Chrome window; no browser was launched"
+            )
+        foreground = self.gui.GetForegroundWindow()
+        chosen = next((row for row in before if row[0] == foreground), before[0])
+        try:
+            result = subprocess.run(
+                [chosen[2], "--new-tab", chrome_target],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=False,
+                timeout=15,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise PolicyError(
+                "Chrome did not acknowledge the new-tab request; inspect "
+                "the browser before retrying"
+            ) from exc
+        if result.returncode != 0:
+            raise PolicyError(
+                "Chrome rejected the new-tab request; inspect before retrying"
+            )
+        after = self._chrome_windows()
+        return dict(
+            requested=True,
+            chrome_pid=chosen[1],
+            chrome_windows_before=len(before),
+            chrome_windows_after=len(after),
+            existing_window_reused_observed=bool(after)
+            and {row[0] for row in before} == {row[0] for row in after},
+            branding_requested=branding_requested,
+            branding_verified=False,
+            dom_attached=False,
+            user_input_injected=False,
+        )
+
     def resolve(self, window_id, focus=True):
         self.interactive()
         row = self.windows.get(window_id)
@@ -278,6 +382,8 @@ class Desktop:
             return self.display_capture(display_index, region)
         if action == "batch":
             return self.batch(window_id, steps)
+        if action == "open_chrome_tab":
+            return self.open_chrome_tab(text)
         hwnd = self.resolve(
             window_id,
             focus=action
@@ -460,6 +566,7 @@ class Desktop:
             "wait_for",
             "batch",
             "displays",
+            "open_chrome_tab",
         }:
             raise PolicyError("Unsupported desktop action")
         if (
@@ -491,7 +598,9 @@ class Desktop:
             if (
                 not isinstance(row, dict)
                 or set(row) - fields
-                or row.get("action") in ("list", "batch", "screenshot", "displays")
+                or row.get("action") in (
+                    "list", "batch", "screenshot", "displays", "open_chrome_tab"
+                )
                 or "action" not in row
             ):
                 raise PolicyError("Invalid/nested batch step; capture/list separately")

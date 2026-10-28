@@ -82,6 +82,68 @@ With locally authorized host-browser access, start a browser session, open a pub
 
 The browser uses a separate headless profile. It does not take over the user's signed-in browser, upload/download files, or permit arbitrary page JavaScript.
 
+## Visible tab in an existing Chrome window (owner computer access)
+
+For a **visible** tab in a Chrome window that is already open, call
+`computer_desktop(action="open_chrome_tab", text="https://example.org/")` after
+the owner has locally enabled `udb --access computer`. UDB checks for a real
+running Google Chrome process and asks Chrome to open a **new tab**, without
+creating a separate automation profile or injecting mouse/keyboard input.
+The action refuses to launch Chrome if no existing Chrome window is found.
+
+This is **not** the isolated `host_browser` API: it does not attach CDP,
+claim ownership of personal tabs, or provide DOM/CSS automation. To interact
+with the visible tab, use the owner-granted `computer_desktop` UIA/screenshot
+operations after observing a fresh window ID. Chrome may select a different
+window when several Chrome windows/profiles are open; inspect the returned
+window-reuse observation and the actual desktop before continuing. The tab
+uses the user's current Chrome profile and signed-in website context.
+
+### UDB Aura tab identity (optional Chrome extension)
+
+The existing-Chrome action can use the **UDB Aura** Manifest V3 extension in
+`chrome-extension/udb-aura/`. When installed and explicitly enabled, UDB
+opens a local extension launch page; the extension opens the destination in
+the **existing Chrome window**, groups it under **UDB • AI** (cyan), sets an
+**AI** toolbar badge, and injects a small animated RGB label **only into
+explicitly marked public HTTP(S) tabs**. It also adds a best-effort
+UDB favicon on marked tabs, without changing their page titles. It does not
+read page content or upload browsing data. Removing the mark removes the
+UDB favicon; Chrome does not allow arbitrary RGB effects in its native tab strip.
+
+1. In Chrome, visit `chrome://extensions`, turn on **Developer mode**,
+   choose **Load unpacked**, and select `chrome-extension/udb-aura/`.
+2. Verify that the extension ID is `ancaoelohcjcbbmncfhimpookhdelhle`.
+3. In a **local owner terminal**, run
+   `powershell -NoProfile -File tools/enable_chrome_aura.ps1` and confirm
+   the ID displayed in Chrome. This writes an opt-in marker under
+   `%LOCALAPPDATA%\UniversalDesktopBridge`.
+4. After deploying a new UDB build, call `computer_desktop` with
+   `action="open_chrome_tab"` and a public URL in `text`. The result
+   reports `branding_requested`; actual group/badge application must be
+   verified visually. Without the marker, the ordinary visible tab is used.
+5. Disable via `powershell -NoProfile -File tools/enable_chrome_aura.ps1 -Disable`.
+
+**Permissions:** The extension requests Chrome `tabs`, `tabGroups`,
+`storage`, `scripting` and HTTP(S) site access to decorate only the
+marked tabs. This is broader Chrome permission than the original headless
+browser; review the extension source before installing. It is never
+silently installed or enabled by UDB.
+
+### Automatic independent AI cursor
+
+When a client initializes UDB and **owner-granted desktop computer access**
+is already active, the companion displays a click-through, animated **UDB • AI**
+cursor overlay on the current Windows desktop. The physical system cursor is
+unchanged. The overlay remains visible while connected and is closed when
+the MCP proxy disconnects, the desktop grant is revoked, or the companion
+stops. It does not grant access or perform mouse actions by itself.
+`virtual_pointer(action="show")` can display it manually, and
+`virtual_pointer(action="hide")` hides it for the current connection.
+Existing `virtual_pointer` move/click actions remain bounded Win32
+messages; compatibility depends on the application, and an independent
+visual cursor is **not** a second hardware/system mouse.
+
 ## Build from source (developers)
 
 Python **3.11+** is required for development. Windows is required for native desktop/GUI and frozen EXE acceptance; Linux supports source, protocol and policy tests.

@@ -63,6 +63,7 @@ class VirtualPointer:
             ctypes.POINTER(ctypes.c_size_t),
         )
         api(self.u, "GetCursorPos", w.BOOL, ctypes.POINTER(w.POINT))
+        api(self.u, "GetSystemMetrics", ctypes.c_int, ctypes.c_int)
         api(self.u, "GetAsyncKeyState", ctypes.c_short, ctypes.c_int)
         api(self.u, "GetLastInputInfo", w.BOOL, ctypes.c_void_p)
         api(self.u, "OpenInputDesktop", w.HANDLE, w.DWORD, w.BOOL, w.DWORD)
@@ -228,6 +229,24 @@ class VirtualPointer:
         self.overlay.stdin.write((str(x) + "," + str(y) + "\n").encode())
         self.position = [x, y]
 
+    def show_idle(self):
+        """Display an independent AI indicator when an owner-granted client connects.
+
+        The position is on the virtual desktop, away from the real cursor.
+        This never sends system mouse input or grants computer access.
+        """
+        self.interactive()
+        left = self.u.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
+        top = self.u.GetSystemMetrics(77)  # SM_YVIRTUALSCREEN
+        width = self.u.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
+        height = self.u.GetSystemMetrics(79)  # SM_CYVIRTUALSCREEN
+        if width <= 0 or height <= 0:
+            raise RuntimeError("Virtual screen dimensions unavailable")
+        x = left + max(0, min(width - 1, round(width * 0.68)))
+        y = top + max(0, min(height - 1, round(height * 0.68)))
+        self.show(x, y)
+        return dict(visible=True, position=self.position, independent=True)
+
     def close(self):
         if self.overlay:
             self.overlay.close()
@@ -289,6 +308,8 @@ class VirtualPointer:
                 self.close()
                 return dict(stopped=True)
             self.interactive()
+            if action == "show":
+                return self.show_idle()
             if action == "status":
                 return dict(
                     position=self.position,
@@ -300,7 +321,7 @@ class VirtualPointer:
             if action == "list":
                 return self.list()
             if action not in ("move", "click", "drag", "scroll"):
-                raise ValueError("Action list/status/hide/move/click/drag/scroll")
+                raise ValueError("Action list/status/show/hide/move/click/drag/scroll")
             if (
                 button not in ("left", "right", "middle")
                 or type(clicks) is not int

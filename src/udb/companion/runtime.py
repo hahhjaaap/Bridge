@@ -349,6 +349,13 @@ def serve(rt: Runtime) -> None:
             elif method == "udb/close-sessions":
                 rt.shutdown()
                 value = {}
+            elif method == "udb/show-pointer":
+                # Private lifecycle RPC, invoked only by the owner-grant-gated
+                # proxy. Never exposed as a public unauthenticated tool.
+                try:
+                    value = rt.features.ensure_pointer().call(action="show")
+                except (OSError, RuntimeError, ValueError) as exc:
+                    value = {"visible": False, "error": type(exc).__name__}
             elif method == "udb/close-desktop":
                 if hasattr(rt.features, "pointer"):
                     rt.features.pointer.close()
