@@ -6,7 +6,7 @@ const GROUP_COLOR = "cyan";
 function allowedUrl(raw) {
   try {
     const url = new URL(raw);
-    if (!["http:", "https:"].includes(url.protocol)) return false;
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return false;
     const host = url.hostname.toLowerCase().replace(/\.$/, "");
     if (!host || host === "localhost" || host.endsWith(".localhost")
         || host.endsWith(".local") || host.endsWith(".internal")) return false;
@@ -24,7 +24,7 @@ function allowedUrl(raw) {
 
 async function decorate(tabId) {
   const tab = await chrome.tabs.get(tabId);
-  if (!allowedUrl(tab.url || tab.pendingUrl || "")) return;
+  if (!allowedUrl(tab.pendingUrl || tab.url || "")) return;
   try {
     await chrome.scripting.executeScript({target: {tabId}, files: ["aura.js"]});
   } catch {
@@ -33,8 +33,16 @@ async function decorate(tabId) {
 }
 
 async function mark(tabId) {
-  const tab = await chrome.tabs.get(tabId);
-  if (!allowedUrl(tab.url || tab.pendingUrl || "")) throw new Error("Chỉ hỗ trợ trang web HTTP(S) công khai");
+  let tab;
+  // tabs.create may return before the destination URL is committed.
+  for (let attempt = 0; attempt < 12; attempt++) {
+    tab = await chrome.tabs.get(tabId);
+    if (allowedUrl(tab.pendingUrl || tab.url || "")) break;
+    if (attempt < 11) await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  if (!allowedUrl(tab.pendingUrl || tab.url || "")) {
+    throw new Error("Chỉ hỗ trợ trang web HTTP(S) công khai");
+  }
   const groups = await chrome.tabGroups.query({windowId: tab.windowId});
   const existing = groups.find(group => group.title === GROUP_NAME);
   const options = {tabIds: [tabId]};
