@@ -58,7 +58,11 @@ async function unmark(tabId) {
   try {
     await chrome.scripting.executeScript({
       target: {tabId},
-      func: () => document.getElementById("__udb_aura_badge_v1")?.remove()
+      func: () => {
+        document.getElementById("__udb_aura_badge_v1")?.remove();
+        document.querySelectorAll('link[data-udb-aura-favicon="1"]')
+          .forEach(icon => icon.remove());
+      }
     });
   } catch { /* inaccessible tab */ }
 }

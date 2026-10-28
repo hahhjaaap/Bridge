@@ -39,4 +39,21 @@
   frame.append(label);
   root.append(style, frame);
   document.documentElement.appendChild(host);
+  // Best-effort tab favicon identity. No page text or credentials are read.
+  if (document.head) {
+    const favicon = document.createElement("link");
+    favicon.rel = "icon";
+    favicon.type = "image/svg+xml";
+    favicon.dataset.udbAuraFavicon = "1";
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+      + '<defs><linearGradient id="g"><stop stop-color="#18e8ff"/>'
+      + '<stop offset=".5" stop-color="#746eff"/>'
+      + '<stop offset="1" stop-color="#ff5caa"/></linearGradient></defs>'
+      + '<rect x="3" y="3" width="58" height="58" rx="15" fill="#111b30" '
+      + 'stroke="url(#g)" stroke-width="5"/>'
+      + '<text x="32" y="39" fill="white" font-family="Arial" '
+      + 'font-size="19" font-weight="bold" text-anchor="middle">UDB</text></svg>';
+    favicon.href = "data:image/svg+xml," + encodeURIComponent(svg);
+    document.head.appendChild(favicon);
+  }
 })();

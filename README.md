@@ -106,9 +106,10 @@ The existing-Chrome action can use the **UDB Aura** Manifest V3 extension in
 opens a local extension launch page; the extension opens the destination in
 the **existing Chrome window**, groups it under **UDB • AI** (cyan), sets an
 **AI** toolbar badge, and injects a small animated RGB label **only into
-explicitly marked public HTTP(S) tabs**. It does not read page content or
-upload browsing data. The destination's real favicon and title are preserved;
-Chrome does not allow changing native tab-strip rendering arbitrarily.
+explicitly marked public HTTP(S) tabs**. It also adds a best-effort
+UDB favicon on marked tabs, without changing their page titles. It does not
+read page content or upload browsing data. Removing the mark removes the
+UDB favicon; Chrome does not allow arbitrary RGB effects in its native tab strip.
 
 1. In Chrome, visit `chrome://extensions`, turn on **Developer mode**,
    choose **Load unpacked**, and select `chrome-extension/udb-aura/`.
