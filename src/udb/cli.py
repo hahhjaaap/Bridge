@@ -6,9 +6,20 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from contextlib import contextmanager
 
 from ._version import VERSION
 from .config import Settings, activate, checked, load, serve_options
+
+
+@contextmanager
+def _settings_scope(settings: Settings):
+    """Restore the previous runtime settings even on cancellation or failure."""
+    previous = activate(settings)
+    try:
+        yield
+    finally:
+        activate(previous)
 
 
 def _run_legacy_proxy(args: Sequence[str]) -> int:
@@ -214,6 +225,126 @@ def _initialize_config(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def _run_setup(args: argparse.Namespace, settings: Settings) -> int:
+    if args.json or args.access or args.offline or args.online:
+        raise ValueError(
+            "Use udb setup directly in your own terminal without --json/--access/--offline"
+        )
+    from .onboarding import run
+
+    with _settings_scope(settings):
+        try:
+            if args.edit or args.local:
+                return run(settings, edit=args.edit, local=args.local)
+            return run(settings)
+        except KeyboardInterrupt:
+            print("\nSetup canceled.", file=sys.stderr)
+            return 130
+
+
+def _prepare_startup(args: argparse.Namespace, settings: Settings) -> int | None:
+    from . import onboarding
+
+    startup_state = {}
+    if not (args.offline or args.online):
+        preferred = onboarding.saved_mode(settings)
+        from . import owner_command
+
+        startup_state = owner_command.headless_state(settings.home) or {}
+        if startup_state.get("connection_mode") == "offline" or (
+            not startup_state and preferred == "offline"
+        ):
+            args.offline = True
+    if (
+        not (args.offline or args.detach or args.json or args.access)
+        and not startup_state
+        and onboarding.attended_console()
+        and not onboarding.saved_connection(settings)
+    ):
+        with _settings_scope(settings):
+            try:
+                return onboarding.run(settings)
+            except KeyboardInterrupt:
+                print("\nSetup canceled.", file=sys.stderr)
+                return 130
+
+
+def _print_mcp_config(args: argparse.Namespace, settings: Settings) -> int:
+    from .launcher import command
+
+    with _settings_scope(settings):
+        argv = command(serve_options(settings.home))
+    print(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "universal-desktop-bridge": {
+                        "type": "stdio",
+                        "command": argv[0],
+                        "args": argv[1:],
+                    }
+                }
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _run_gui(args: argparse.Namespace, settings: Settings) -> int:
+    if args.access:
+        raise ValueError("Owner activation requires the separate attended command")
+    import subprocess
+
+    from .config import prepare_workspace
+    from .launcher import worker_command
+
+    prepare_workspace(settings)
+    with _settings_scope(settings):
+        from .config import manager_options
+
+        return subprocess.run(
+            worker_command(
+                "core",
+                [
+                    "--gui",
+                    "--home",
+                    str(settings.home),
+                    *manager_options(settings.home),
+                ],
+            ),
+            shell=False,
+        ).returncode
+
+
+def _run_maintenance(action: str, args: argparse.Namespace, settings: Settings) -> int:
+    if args.access or args.offline or args.online:
+        raise ValueError(
+            "Maintenance does not activate owner access or select connection mode"
+        )
+    from .owner_command import CommandError
+
+    try:
+        if action == "autostart":
+            from .autostart import run
+
+            return run(settings, args.operation, as_json=args.json)
+        from .maintenance import run
+
+        return run(
+            action,
+            settings,
+            check=getattr(args, "check", False),
+            as_json=args.json,
+        )
+    except CommandError as exc:
+        if args.json:
+            print(json.dumps({"error": str(exc)}))
+        else:
+            print("UDB: " + str(exc), file=sys.stderr)
+        return 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["_worker"]:
@@ -293,98 +424,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_missing_config=action == "init",
         )
         if action == "setup":
-            if args.json or args.access or args.offline or args.online:
-                raise ValueError(
-                    "Use udb setup directly in your own terminal without --json/--access/--offline"
-                )
-            from .onboarding import run
-
-            previous = activate(settings)
-            try:
-                if args.edit or args.local:
-                    return run(settings, edit=args.edit, local=args.local)
-                return run(settings)
-            except KeyboardInterrupt:
-                print("\nSetup canceled.", file=sys.stderr)
-                return 130
-            finally:
-                activate(previous)
+            return _run_setup(args, settings)
         if action in ("autostart", "update", "rollback"):
-            if args.access or args.offline or args.online:
-                raise ValueError(
-                    "Maintenance does not activate owner access or select connection mode"
-                )
-            from .owner_command import CommandError
-
-            try:
-                if action == "autostart":
-                    from .autostart import run
-
-                    return run(settings, args.operation, as_json=args.json)
-                from .maintenance import run
-
-                return run(
-                    action,
-                    settings,
-                    check=getattr(args, "check", False),
-                    as_json=args.json,
-                )
-            except CommandError as exc:
-                if args.json:
-                    print(json.dumps({"error": str(exc)}))
-                else:
-                    print("UDB: " + str(exc), file=sys.stderr)
-                return 2
+            return _run_maintenance(action, args, settings)
         if action == "start":
-            from . import onboarding
-
-            startup_state = {}
-            if not (args.offline or args.online):
-                preferred = onboarding.saved_mode(settings)
-                from . import owner_command
-
-                startup_state = owner_command.headless_state(settings.home) or {}
-                if startup_state.get("connection_mode") == "offline" or (
-                    not startup_state and preferred == "offline"
-                ):
-                    args.offline = True
-            if (
-                not (args.offline or args.detach or args.json or args.access)
-                and not startup_state
-                and onboarding.attended_console()
-                and not onboarding.saved_connection(settings)
-            ):
-                previous = activate(settings)
-                try:
-                    return onboarding.run(settings)
-                except KeyboardInterrupt:
-                    print("\nSetup canceled.", file=sys.stderr)
-                    return 130
-                finally:
-                    activate(previous)
+            startup_result = _prepare_startup(args, settings)
+            if startup_result is not None:
+                return startup_result
         if action == "mcp-config":
-            from .launcher import command
-
-            previous = activate(settings)
-            try:
-                argv = command(serve_options(settings.home))
-            finally:
-                activate(previous)
-            print(
-                json.dumps(
-                    {
-                        "mcpServers": {
-                            "universal-desktop-bridge": {
-                                "type": "stdio",
-                                "command": argv[0],
-                                "args": argv[1:],
-                            }
-                        }
-                    },
-                    indent=2,
-                )
-            )
-            return 0
+            return _print_mcp_config(args, settings)
         if (args.offline or args.online) and action != "start":
             raise ValueError("--offline/--online apply only to start")
         if action == "init":
@@ -402,34 +450,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 as_json=args.json,
             )
         if action == "gui":
-            if args.access:
-                raise ValueError(
-                    "Owner activation requires the separate attended command"
-                )
-            import subprocess
-
-            from .config import prepare_workspace
-            from .launcher import worker_command
-
-            prepare_workspace(settings)
-            previous = activate(settings)
-            try:
-                from .config import manager_options
-
-                return subprocess.run(
-                    worker_command(
-                        "core",
-                        [
-                            "--gui",
-                            "--home",
-                            str(settings.home),
-                            *manager_options(settings.home),
-                        ],
-                    ),
-                    shell=False,
-                ).returncode
-            finally:
-                activate(previous)
+            return _run_gui(args, settings)
         if action in ("allow-source", "revoke-source"):
             if args.access or args.json:
                 raise ValueError(
@@ -467,11 +488,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.offline:
             legacy_args.append("--offline")
 
-        previous_settings = activate(settings)
-        try:
+        with _settings_scope(settings):
             return owner_command.main(legacy_args)
-        finally:
-            activate(previous_settings)
     except (ValueError, OSError) as exc:
         print(f"UDB: {exc}", file=sys.stderr)
         return 2

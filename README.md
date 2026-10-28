@@ -1,6 +1,6 @@
 # Universal Desktop Bridge (UDB)
 
-**Windows-first MCP bridge for ChatGPT and other supported MCP clients.** UDB provides one Python package, one `udb` CLI and **60 public tools** for guarded local computer work. Its source of truth is `src/udb/`; the root-level `bridge.py` and `udb_*.py` files are compatibility launchers, not separate implementations.
+**Windows-first MCP bridge for ChatGPT and other supported MCP clients.** UDB provides one Python package, one `udb` CLI and **61 public tools** for guarded local computer work. Its source of truth is `src/udb/`; the root-level `bridge.py` and `udb_*.py` files are compatibility launchers, not separate implementations.
 
 **Tiếng Việt:** UDB kết nối trợ lý AI với máy tính Windows theo quyền do chủ máy cấp. Hỗ trợ thao tác tệp, terminal, ứng dụng, trình duyệt riêng biệt và rà soát hóa đơn Excel. **Không tự cấp quyền, không tự kê khai thuế, không tự sửa dữ liệu kế toán gốc.**
 
@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | Files and terminals | Scoped reads, guarded writes, search, background jobs, Windows terminal/ConPTY | Owner permissions, protected paths, quotas and no uncertain-write replay |
 | Desktop and applications | Owner-enabled Windows UI and process operations | Windows session/UAC limits; local owner consent |
-| Browser | Isolated headless Chrome/Edge, accessible snapshots, semantic locators, waits and navigation | Does **not** attach to the user's existing browser profile; uploads/downloads disabled |
+| Browser | Isolated headless Chrome/Edge, accessible snapshots, semantic locators, waits and navigation | Own profile, local login handoff; explicit same-origin file transfers require separate file access |
 | Accounting work tools | Read-only Vietnamese XLSX invoice audit and a **new** review workbook | No original-file overwrite, tax filing, MISA posting or legal tax determination |
 | Operations | Activity logs, status/doctor, up to 10 concurrent RPC calls and 10 shared background work slots | Capacity is a limit, not a promise of 10 simultaneous heavy workloads |
 | Recovery | Saved job state, safe read/recovery paths and managed installer rollback | Uncertain mutations are **never** automatically replayed |
@@ -78,13 +78,23 @@ Reports are for human review. Possible duplicates may be legitimate invoice line
 
 ## Isolated browser workflow
 
-With locally authorized host-browser access, start a browser session, open a public HTTP(S) page, inspect `snapshot`, then use `click`, `wait_for`, `press`, `select_option`, `check`, `uncheck`, `back`, `forward` or `reload` as appropriate. Prefer accessible role/name locators over brittle CSS selectors. Snapshots are bounded and redact secret-like fields; page content is untrusted and cannot grant permissions.
+With locally authorized host-browser access (**Máy tính · chạy nền → Cho phép UDB mở phiên nền riêng trên máy này** in the Windows manager), use `host_browser(action="open", url="https://example.org/")`. This starts a private headless Chrome/Edge session automatically or reuses the current unexpired browser session. Keep the returned `session_id` and `tab_id`, inspect `snapshot`, then use `click`, `wait_for`, `press`, `select_option`, `check`, `uncheck`, `back`, `forward` or `reload` as appropriate. Prefer accessible role/name locators over brittle CSS selectors. Snapshots are bounded and redact secret-like fields; page content is untrusted and cannot grant permissions.
 
-The browser uses a separate headless profile. It does not take over the user's signed-in browser, upload/download files, or permit arbitrary page JavaScript.
+The browser uses a separate headless profile. It does not take over the user's signed-in browser or permit arbitrary caller-supplied page JavaScript. Automatic Chrome downloads stay blocked; explicit `upload`/`download` transfers are limited to 8 MiB and require separate owner-enabled computer access, an observed origin and file checks. UDB-owned pages display a **UDB • AI · Background browser** label, an AI favicon and a page-local AI cursor in screenshots. The cursor follows CDP clicks inside that page and never moves the physical mouse. The label is a visual aid; use session/tab IDs and `owner="UDB"` response metadata to establish ownership. No Chrome extension is required for this private-browser identity.
+
+This is the default route for automated web tasks: it does not open a visible personal Chrome tab. Observe it through `host_screenshot(session_id=..., tab_id=...)`. Existing `host_start_session(kind="browser", task="...")` and `host_browser(action="new", session_id=..., url="...")` calls remain supported. Reusing a session does not extend its owner-authorized lifetime. Errors are returned for inspection, without retrying an uncertain action or falling back to physical desktop input.
+
+## Browser login, Windows control and utilities
+
+In **Máy tính · chạy nền**, choose **Mở để tôi đăng nhập** to use UDB's own browser window. While it is handed to you, AI browser operations and UDB desktop input pause. Choose **Trả về chạy nền** when finished; pages reload and old tab IDs must be refreshed. Enable **Giữ đăng nhập trong trình duyệt riêng của UDB** while the browser is closed to retain that profile across sessions. Disabling it forgets only UDB's saved login.
+
+For native desktop control, UDB yields to recent user input. **Ctrl+Alt+Shift+Backspace** or the manager's pause button latches a local pause; only a local resume clears it. The manager reports when the shortcut could not be registered. This is cooperative yielding, not exclusive input ownership or cancellation of external commands already running.
+
+The new `computer_utilities` tool provides text clipboard read/write with version checks, UDB toast notifications, and Start Menu app discovery/launch by exact name or app ID. Existing `udb --access computer` owner activation is required. See [Windows workflows](docs/windows-workflows.md) for limits and examples.
 
 ## Visible tab in an existing Chrome window (owner computer access)
 
-For a **visible** tab in a Chrome window that is already open, call
+Use this separate option only when explicitly asking for a **visible personal Chrome tab**; it can activate Chrome and is not background automation. For a tab in a Chrome window that is already open, call
 `computer_desktop(action="open_chrome_tab", text="https://example.org/")` after
 the owner has locally enabled `udb --access computer`. UDB checks for a real
 running Google Chrome process and asks Chrome to open a **new tab**, without

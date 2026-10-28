@@ -103,7 +103,7 @@ def main():
 
     try:
         tools = client.rpc("tools/list", {})["tools"]
-        assert len(tools) == 60
+        assert len(tools) == 61
         assert not tool("bridge_status").get("isError")
         terminate_backend(client.p.pid, "original")
         assert not recovered_read("bridge_status").get("isError"), (

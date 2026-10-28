@@ -41,8 +41,7 @@ def test_search_unicode_accounting_content_and_filenames(tmp_path):
         content = _wait(bg, content_job["job_id"])
         assert content["state"] == "completed", content
         assert any(
-            r["line"] == 1 and "HÓA ĐƠN" in r["text"]
-            for r in content["results"]
+            r["line"] == 1 and "HÓA ĐƠN" in r["text"] for r in content["results"]
         )
         file_job = bg.search(text="hóa đơn", search_type="files")
         filenames = _wait(bg, file_job["job_id"])
@@ -66,8 +65,8 @@ def test_iterative_file_copy_preserves_nested_tree(tmp_path):
         result = _wait(bg, job["job_id"])
         assert result["state"] == "completed", result
         assert result["result"]["entries"] == 32
-        assert (
-            tmp_path / "backup" / Path(*(["d"] * 30)) / "hoa_don.txt"
-        ).read_text(encoding="utf-8") == "Thuế GTGT"
+        assert (tmp_path / "backup" / Path(*(["d"] * 30)) / "hoa_don.txt").read_text(
+            encoding="utf-8"
+        ) == "Thuế GTGT"
     finally:
         bg.close()

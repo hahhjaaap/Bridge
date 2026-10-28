@@ -458,6 +458,35 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         self.host_enabled = QCheckBox("Cho phép UDB mở phiên nền riêng trên máy này")
         self.host_enabled.toggled.connect(self.set_host_enabled)
         lay.addWidget(self.host_enabled)
+        pause = MotionButton("Tạm dừng điều khiển Windows", "power", "danger")
+        pause.clicked.connect(lambda: self.pause_desktop_local(True))
+        resume = MotionButton("Tiếp tục điều khiển Windows", "power")
+        resume.clicked.connect(lambda: self.pause_desktop_local(False))
+        lay.addLayout(row(pause, resume, None))
+        self.desktop_pause_status = label("", "Muted", True)
+        lay.addWidget(self.desktop_pause_status)
+        from .browser_settings import remember_login
+
+        self.browser_remember = QCheckBox(
+            "Giữ đăng nhập trong trình duyệt riêng của UDB"
+        )
+        self.browser_remember.setChecked(remember_login(self.agent))
+        self.browser_remember.toggled.connect(self.set_browser_remember_local)
+        lay.addWidget(self.browser_remember)
+        login_browser = MotionButton("Mở để tôi đăng nhập", "plus")
+        login_browser.clicked.connect(lambda: self.browser_presentation_local(True))
+        background_browser = MotionButton("Trả về chạy nền", "power")
+        background_browser.clicked.connect(
+            lambda: self.browser_presentation_local(False)
+        )
+        lay.addLayout(row(login_browser, background_browser, None))
+        lay.addWidget(
+            label(
+                "Khi bạn đăng nhập, AI tạm ngừng thao tác browser. Đổi chế độ sẽ tải lại trang; dữ liệu biểu mẫu chưa lưu có thể mất. Đóng phiên trước khi đổi lựa chọn giữ đăng nhập. Bỏ chọn sẽ xóa đăng nhập đã lưu của UDB.",
+                "Muted",
+                True,
+            )
+        )
         self.host_resource = label("Đang lấy số liệu CPU/RAM…", "H2", True)
         lay.addWidget(self.host_resource)
         self.host_pressure = label("", "Muted", True)
@@ -481,12 +510,33 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         lay.addLayout(row(browser, workspace, None, stop))
         lay.addWidget(
             label(
-                "Trình duyệt nền không hiện thành tab trên Chrome bạn đang dùng; có thể đọc/chụp trang qua công cụ host. Không dùng tài khoản đăng nhập sẵn của bạn. Cửa sổ riêng hiện tại hỗ trợ văn bản; chưa điều khiển ứng dụng bất kỳ.",
+                "Trình duyệt nền không hiện thành tab trên Chrome bạn đang dùng; Chat có thể tự mở hoặc dùng lại phiên nền đã được cho phép. Ảnh chụp trang có nhãn UDB • AI và con trỏ AI riêng, không di chuyển chuột thật. Không dùng tài khoản đăng nhập sẵn của bạn. Cửa sổ riêng hiện tại hỗ trợ văn bản; chưa điều khiển ứng dụng bất kỳ.",
                 "Fine",
                 True,
             )
         )
         return p
+
+    def set_browser_remember_local(self, value):
+        from .browser_settings import remember_login, set_remember_login_local
+
+        self.guarded(lambda: set_remember_login_local(self.agent, value))
+        self.browser_remember.blockSignals(True)
+        self.browser_remember.setChecked(remember_login(self.agent))
+        self.browser_remember.blockSignals(False)
+
+    def browser_presentation_local(self, visible):
+        from .host_client import command
+
+        self.run_background(
+            lambda: command(self.agent, "browser_presentation", visible=visible)
+        )
+
+    def pause_desktop_local(self, value):
+        from .desktop_control import pause_local
+
+        pause_local(self.agent, value)
+        self.refresh()
 
     def set_host_enabled(self, value):
         from .host_client import atomic_json

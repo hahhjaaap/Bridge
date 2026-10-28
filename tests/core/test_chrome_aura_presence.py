@@ -46,7 +46,14 @@ def test_chrome_aura_manifest_has_stable_id_and_scoped_injection():
     assert manifest["manifest_version"] == 3
     assert "web_accessible_resources" not in manifest
     assert "nativeMessaging" not in manifest["permissions"]
-    for file in ("launch.html", "launch.js", "background.js", "aura.js", "popup.html", "popup.js"):
+    for file in (
+        "launch.html",
+        "launch.js",
+        "background.js",
+        "aura.js",
+        "popup.html",
+        "popup.js",
+    ):
         assert (root / file).is_file()
     for size in (16, 32, 48, 128):
         assert (root / "icons" / f"icon{size}.png").is_file()
@@ -72,7 +79,10 @@ def test_virtual_pointer_presence_uses_virtual_screen_not_system_cursor():
     metrics = {76: -1920, 77: -200, 78: 3840, 79: 1200}
     pointer.u = SimpleNamespace(GetSystemMetrics=lambda i: metrics[i])
     points = []
-    pointer.show = lambda x, y: (points.append((x, y)), setattr(pointer, "position", [x, y]))
+    pointer.show = lambda x, y: (
+        points.append((x, y)),
+        setattr(pointer, "position", [x, y]),
+    )
     assert pointer.show_idle() == {
         "visible": True,
         "position": [691, 616],

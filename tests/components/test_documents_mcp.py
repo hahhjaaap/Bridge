@@ -31,7 +31,7 @@ def main():
             return row["result"]
 
         try:
-            assert len(client.rpc("tools/list", {})["tools"]) == 60
+            assert len(client.rpc("tools/list", {})["tools"]) == 61
             name = prefix + "/data.xlsx"
             created = job(
                 "spreadsheet",

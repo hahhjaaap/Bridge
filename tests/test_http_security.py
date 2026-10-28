@@ -15,17 +15,21 @@ def invoke(headers=(), events=None, client=("127.0.0.1", 40000), kind="http"):
             return
         request = await receive()
         reached.append(request.get("body"))
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [(b"cache-control", b"public, max-age=100")],
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"cache-control", b"public, max-age=100")],
+            }
+        )
         await send({"type": "http.response.body", "body": b"ok"})
 
     async def run():
-        queue = list(events if events is not None else [
-            {"type": "http.request", "body": b"{}", "more_body": False}
-        ])
+        queue = list(
+            events
+            if events is not None
+            else [{"type": "http.request", "body": b"{}", "more_body": False}]
+        )
 
         async def receive():
             return queue.pop(0) if queue else {"type": "http.disconnect"}
@@ -76,7 +80,11 @@ def test_chunked_body_limit_applies_without_content_length():
     events, reached = invoke(
         [AUTH],
         events=[
-            {"type": "http.request", "body": b"x" * (16 * 1024 * 1024), "more_body": True},
+            {
+                "type": "http.request",
+                "body": b"x" * (16 * 1024 * 1024),
+                "more_body": True,
+            },
             {"type": "http.request", "body": b"x", "more_body": False},
         ],
     )
@@ -97,10 +105,12 @@ def test_lifespan_is_forwarded_without_http_auth():
 
 
 def test_duplicate_content_length_is_rejected():
-    events, reached = invoke([
-        AUTH,
-        (b"content-length", b"2"),
-        (b"content-length", b"2"),
-    ])
+    events, reached = invoke(
+        [
+            AUTH,
+            (b"content-length", b"2"),
+            (b"content-length", b"2"),
+        ]
+    )
     assert events[0]["status"] == 400
     assert reached == []

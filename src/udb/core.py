@@ -164,7 +164,9 @@ def diff_preview(before: bytes | None, text: str, relative: str) -> str:
     )
     parts = []
     size = 0
-    notice = "\n[UDB] Diff preview truncated; review the complete change before approving.\n"
+    notice = (
+        "\n[UDB] Diff preview truncated; review the complete change before approving.\n"
+    )
     for chunk in chunks:
         if size + len(chunk) > _DIFF_PREVIEW_LIMIT - len(notice):
             parts.append(notice)

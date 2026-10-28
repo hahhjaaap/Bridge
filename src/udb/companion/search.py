@@ -210,4 +210,3 @@ def search_worker():
     except Exception as exc:
         send("error", type(exc).__name__ + ": " + str(exc))
         raise SystemExit(1) from exc
-

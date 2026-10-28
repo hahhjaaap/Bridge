@@ -20,6 +20,10 @@ def main():
         required = {
             "udb/__main__.py",
             "udb/cli.py",
+            "udb/browser_files.py",
+            "udb/desktop_control.py",
+            "udb/windows_utilities.py",
+            "udb/windows_utilities.ps1",
             "udb/companion/runtime.py",
             "udb/companion/udb_pointer_overlay.ps1",
             "udb/computer_uia.ps1",
@@ -89,7 +93,7 @@ def main():
             timeout=45,
         )
         data = json.loads(result.stdout)
-        if data["version"] != info["version"] or data["tool_count"] != 60:
+        if data["version"] != info["version"] or data["tool_count"] != 61:
             raise RuntimeError("Installed wheel has wrong catalog/version")
         print(
             json.dumps(

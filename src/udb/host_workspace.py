@@ -11,7 +11,7 @@ import re
 import time
 
 from .core import PolicyError
-from .host_browser import OwnedProcess
+from .owned_process import OwnedProcess
 
 
 def run(token):

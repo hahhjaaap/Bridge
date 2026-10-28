@@ -1,0 +1,2 @@
+# Keep Python source identical on Windows and Linux for the Ruff format gate.
+*.py text eol=lf
