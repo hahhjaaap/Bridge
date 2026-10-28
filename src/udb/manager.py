@@ -574,6 +574,7 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         self.host_sessions_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sl.addWidget(self.host_sessions_empty)
         sl.addWidget(self.host_sessions)
+        sl.addStretch()
         cards.addWidget(ResponsiveRow(browser_card, sessions))
 
         details = QToolButton()
@@ -615,9 +616,10 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
             "Tắt cho phép mở phiên nền và đóng các phiên UDB hiện có."
         )
         self.host_stop_button.clicked.connect(self.stop_host_local)
+        self.desktop_hotkey_hint = label("Tạm dừng bằng nút ở trên", "Fine", True)
         lay.addLayout(
             row(
-                label("Tạm dừng nhanh · Ctrl + Alt + Shift + Backspace", "Fine"),
+                self.desktop_hotkey_hint,
                 None,
                 self.host_stop_button,
             )

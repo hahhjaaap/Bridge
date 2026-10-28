@@ -100,6 +100,16 @@ def test_unknown_worker_does_not_claim_ai_is_ready(manager):
     assert window.desktop_pause_button.isEnabled()
 
 
+def test_unavailable_hotkey_has_a_visible_button_fallback(manager):
+    window, host = manager
+    assert "Backspace" in window.desktop_hotkey_hint.text()
+    host["emergency_hotkey_available"] = False
+    window._refresh_host()
+    assert "chưa sẵn sàng" in window.desktop_hotkey_hint.text()
+    assert "Backspace" not in window.desktop_hotkey_hint.text()
+    assert window.desktop_pause_button.isEnabled()
+
+
 def test_cards_stack_on_compact_window_without_horizontal_clipping(manager):
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QScrollArea

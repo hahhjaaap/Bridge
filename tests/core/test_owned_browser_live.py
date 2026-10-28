@@ -34,6 +34,13 @@ def live_browser(tmp_path, monkeypatch):
                 cwd=cwd,
                 stdout=self.log,
                 stderr=self.log,
+                # No desktop integrations are exercised by this Linux adapter.
+                # Avoid Chrome's slow D-Bus autolaunch on headless CI runners.
+                env={
+                    **os.environ,
+                    "DBUS_SESSION_BUS_ADDRESS": "unix:path="
+                    + str(tmp_path / "unused-session-bus"),
+                },
             )
 
         def alive(self):

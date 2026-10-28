@@ -96,6 +96,11 @@ class ManagerRefreshMixin:
         self.desktop_pause_status.setText(hint)
         self.desktop_pause_button.setEnabled(not is_paused)
         self.desktop_resume_button.setEnabled(is_paused)
+        self.desktop_hotkey_hint.setText(
+            "Tạm dừng nhanh · Ctrl + Alt + Shift + Backspace"
+            if hs.get("emergency_hotkey_available")
+            else "Tạm dừng bằng nút ở trên · Phím tắt chưa sẵn sàng"
+        )
         self.host_enabled.blockSignals(True)
         self.host_enabled.setChecked(enabled)
         self.host_enabled.blockSignals(False)
