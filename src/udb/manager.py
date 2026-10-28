@@ -1,4 +1,4 @@
-"""Obsidian Studio: native Qt UI. Host approvals and Sandbox autonomy grants stay local."""
+"""UDB native Qt UI. Host approvals and Sandbox autonomy grants stay local."""
 
 from __future__ import annotations
 
@@ -617,7 +617,7 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         self.host_stop_button.clicked.connect(self.stop_host_local)
         lay.addLayout(
             row(
-                label("Tạm dừng nhanh · Ctrl + Alt + Shift + ⌫", "Fine"),
+                label("Tạm dừng nhanh · Ctrl + Alt + Shift + Backspace", "Fine"),
                 None,
                 self.host_stop_button,
             )
