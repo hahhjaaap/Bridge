@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "UDB Aura — AI Tab Identity",
+  "short_name": "UDB Aura",
+  "version": "0.1.0",
+  "description": "Distinguish explicitly UDB-opened Chrome tabs with an AI tab group and a lightweight RGB page badge.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7GsO94eHrF0KV8ls07tDUvuOgD3drNvcQc6GTOeuF88fyECJZKyfTKwXD+9dotSBBRW84kN/X9YIkpb9ULy0h1oqOaYowX0SSrGjMhFse4bl2qZ5sZwslyGDPIu2CxhKvDQFWJSpodAG9USIAAXKGAcRkhRTkpFSWS5/Hzp9mWLVbkA6RAtuuPF+Z4BVbWqieFb2xuVbAlEClY71P2Mfw3I/HZX4+B1uVeMCs3eOpa3+ydi2qChvBZxwuXwquPxOkKIpbJiUKF1/NvcftMiAmVy+Nci3D/lx1ziPBwPup8fLj4jgeGqB7nFDLBhjNaEpSWA5JfTDR0NH5DbxkXz93QIDAQAB",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "UDB Aura • AI tabs",
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

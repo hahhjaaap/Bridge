@@ -89,6 +89,8 @@ class UnifiedProxy:
         self.active_limit = threading.BoundedSemaphore(MAX_CONCURRENT)
         self.initialization_lock = threading.Lock()
         self.activity = activity
+        self._pointer_presence_started = False
+        self._pointer_retry_after = 0.0
 
     def activity_event(
         self,
@@ -181,8 +183,27 @@ class UnifiedProxy:
                     or grant.get("enabled") is not True
                 ):
                     self.companion.request("udb/close-sessions", timeout=10)
+                    self._pointer_presence_started = False
                 elif "desktop" not in grant.get("capabilities", []):
                     self.companion.request("udb/close-desktop", timeout=10)
+                    self._pointer_presence_started = False
+                elif (
+                    not self._pointer_presence_started
+                    and time.monotonic() >= self._pointer_retry_after
+                ):
+                    # Visual presence is automatic only after an existing
+                    # owner desktop grant is verified. No input injection.
+                    self._pointer_retry_after = time.monotonic() + 10
+                    try:
+                        reply = self.companion.request("udb/show-pointer", timeout=15)
+                        self._pointer_presence_started = (
+                            not reply.get("error")
+                            and reply.get("result", {}).get("visible") is True
+                        )
+                    except (RuntimeError, TimeoutError, OSError):
+                        # Visual decoration is optional. Never close work
+                        # sessions because a pointer overlay failed to start.
+                        pass
             except (
                 ValueError,
                 KeyError,
@@ -194,6 +215,7 @@ class UnifiedProxy:
             ):
                 try:
                     self.companion.request("udb/close-sessions", timeout=10)
+                    self._pointer_presence_started = False
                 except (RuntimeError, TimeoutError, OSError):
                     return
 

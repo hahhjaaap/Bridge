@@ -17,6 +17,13 @@ class Features:
         self.catalog = ProcessCatalog(rt.files.root, getattr(rt, "bridge_home", None))
         self.documents = Documents(self.background)
 
+    def ensure_pointer(self):
+        if not hasattr(self, "pointer"):
+            from udb.companion.virtual_pointer import VirtualPointer
+
+            self.pointer = VirtualPointer()
+        return self.pointer
+
     def close(self):
         if hasattr(self, "pointer"):
             self.pointer.close()
@@ -32,11 +39,7 @@ class Features:
 
             return result(WorkRecovery(self.rt).call(**a))
         if name == "virtual_pointer":
-            if not hasattr(self, "pointer"):
-                from udb.companion.virtual_pointer import VirtualPointer
-
-                self.pointer = VirtualPointer()
-            return result(self.pointer.call(**a))
+            return result(self.ensure_pointer().call(**a))
         if name in ("spreadsheet", "word_document", "pdf_document"):
             return result(self.documents.start(name, **a))
         if name == "terminal_interact":

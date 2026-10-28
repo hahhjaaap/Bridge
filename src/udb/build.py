@@ -164,10 +164,38 @@ def standalone_package(base, destination, asset_root, components):
         "an installed supported browser, and FFmpeg/FFprobe for media work when those helpers are not bundled. "
         "Commands that intentionally launch user-selected software require that software. "
         "The legacy installed-core backend is an explicit compatibility mode, not a standalone default.\n\n"
+        "Optional UDB Aura: in Chrome, Load unpacked from chrome-extension/udb-aura, then run "
+        "tools/enable_chrome_aura.ps1 in an attended PowerShell window and confirm the extension ID. "
+        "The extension requests HTTP(S) site access only to draw labels on explicitly marked AI tabs; "
+        "it is never silently installed.\n\n"
         "SHA256 detects accidental corruption, not publisher identity. This build is not code-signed.\n",
         encoding="utf-8",
     )
     files.append(readme)
+    # Optional Chrome Aura extension is shipped as unpacked browser resources.
+    # It is never installed into the owner's Chrome profile automatically.
+    aura_root = base / "chrome-extension" / "udb-aura"
+    if aura_root.is_dir():
+        for source in sorted(aura_root.rglob("*")):
+            if not source.is_file():
+                continue
+            if source.is_symlink() or source.suffix.lower() not in {
+                ".json", ".html", ".js", ".css", ".png"
+            }:
+                raise ValueError("Unsafe Chrome Aura package resource")
+            target = (
+                destination / "chrome-extension" / "udb-aura"
+                / source.relative_to(aura_root)
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            files.append(target)
+        helper = base / "tools" / "enable_chrome_aura.ps1"
+        if helper.is_file():
+            target = destination / "tools" / "enable_chrome_aura.ps1"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(helper, target)
+            files.append(target)
     files.extend(copy_notices(destination))
     for record in components:
         source = asset_root / record["license"]

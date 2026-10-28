@@ -153,10 +153,12 @@ class Desktop:
         This is explicitly owner-granted computer access, NOT an owned CDP
         session. No existing tab is inspected, adopted, or controlled.
         """
+        from .chrome_aura import launch_target
         from .host_browser import validate_url
 
         self.interactive()
         target = validate_url(url)
+        chrome_target, branding_requested = launch_target(target)
         before = self._chrome_windows()
         if not before:
             raise PolicyError(
@@ -166,7 +168,7 @@ class Desktop:
         chosen = next((row for row in before if row[0] == foreground), before[0])
         try:
             result = subprocess.run(
-                [chosen[2], "--new-tab", target],
+                [chosen[2], "--new-tab", chrome_target],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -192,6 +194,8 @@ class Desktop:
             chrome_windows_after=len(after),
             existing_window_reused_observed=bool(after)
             and {row[0] for row in before} == {row[0] for row in after},
+            branding_requested=branding_requested,
+            branding_verified=False,
             dom_attached=False,
             user_input_injected=False,
         )
