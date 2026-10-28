@@ -74,7 +74,7 @@ def test_virtual_pointer_presence_uses_virtual_screen_not_system_cursor():
     points = []
     pointer.show = lambda x, y: (points.append((x, y)), setattr(pointer, "position", [x, y]))
     assert pointer.show_idle() == {
-        "visible": True,
+        "visibility": "selected_udb_chrome_tab_only",
         "position": [691, 616],
         "independent": True,
     }
