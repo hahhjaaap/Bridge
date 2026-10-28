@@ -1,136 +1,134 @@
-# Independent visual AI cursor; no OS mouse input and no focus takeover.
-$ErrorActionPreference='Stop'
-Add-Type -WarningAction SilentlyContinue -ReferencedAssemblies System.Windows.Forms,System.Drawing -TypeDefinition @'
+# Compact independent AI cursor. Native WPF overlay; no Chrome extension, DOM access,
+# physical mouse injection or window focus takeover. Screen positions are physical pixels.
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase
+Add-Type -TypeDefinition @'
 using System;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Windows.Forms;
 using System.Collections.Concurrent;
-using System.Threading;
 using System.Runtime.InteropServices;
+using System.Threading;
 
-public sealed class UdbPointer : Form {
-  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
-  public static void ConfigureDpi() { SetThreadDpiAwarenessContext(new IntPtr(-4)); }
-  readonly ConcurrentQueue<string> queue = new ConcurrentQueue<string>();
-  readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
-  readonly Color[] palette = new Color[] {
-    Color.FromArgb(22,232,255), Color.FromArgb(101,117,255),
-    Color.FromArgb(221,82,255), Color.FromArgb(255,96,157),
-    Color.FromArgb(24,237,196)
-  };
-  readonly Font title = new Font("Segoe UI", 10.3f, FontStyle.Bold);
-  readonly Font caption = new Font("Segoe UI", 6.8f, FontStyle.Bold);
-  readonly DateTime started = DateTime.UtcNow;
-  bool stopped = false;
-  protected override bool ShowWithoutActivation { get { return true; } }
-  protected override CreateParams CreateParams {
-    get {
-      var p = base.CreateParams;
-      p.ExStyle |= 0x08000000 | 0x80 | 0x20 | 0x80000; // no activate, tool, click-through, layered
-      return p;
-    }
-  }
-  protected override void WndProc(ref Message m) {
-    if (m.Msg == 0x84) { m.Result = (IntPtr)(-1); return; }
-    if (m.Msg == 0x21) { m.Result = (IntPtr)3; return; }
-    base.WndProc(ref m);
-  }
-  static GraphicsPath Round(Rectangle r, int radius) {
-    GraphicsPath p = new GraphicsPath();
-    int d = radius * 2;
-    p.AddArc(r.Left, r.Top, d, d, 180, 90);
-    p.AddArc(r.Right-d, r.Top, d, d, 270, 90);
-    p.AddArc(r.Right-d, r.Bottom-d, d, d, 0, 90);
-    p.AddArc(r.Left, r.Bottom-d, d, d, 90, 90);
-    p.CloseFigure();
-    return p;
-  }
-  static Color Blend(Color a, Color b, double t) {
-    return Color.FromArgb(
-      (int)Math.Round(a.R + (b.R-a.R)*t),
-      (int)Math.Round(a.G + (b.G-a.G)*t),
-      (int)Math.Round(a.B + (b.B-a.B)*t));
-  }
-  protected override void OnPaint(PaintEventArgs e) {
-    base.OnPaint(e);
-    Graphics g = e.Graphics;
-    g.SmoothingMode = SmoothingMode.AntiAlias;
-    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-    double phase = ((DateTime.UtcNow - started).TotalSeconds / 1.4) % palette.Length;
-    int index = (int)Math.Floor(phase);
-    Color a = Blend(palette[index], palette[(index+1)%palette.Length], phase-index);
-    Color b = palette[(index+2)%palette.Length];
-    using (var ring = new Pen(a, 3.0f))
-      g.DrawEllipse(ring, 2, 2, 43, 43);
-    using (var inner = new Pen(b, 1.4f))
-      g.DrawEllipse(inner, 7, 7, 33, 33);
-    Point[] arrow = new Point[] {
-      new Point(6,5), new Point(6,36), new Point(14,27),
-      new Point(21,43), new Point(27,40), new Point(20,25),
-      new Point(34,25)
-    };
-    using (var dark = new SolidBrush(Color.FromArgb(13,21,39)))
-      g.FillPolygon(dark, arrow);
-    using (var white = new Pen(Color.White, 2.3f))
-      g.DrawPolygon(white, arrow);
-    Rectangle panel = new Rectangle(48,9,120,44);
-    using (GraphicsPath shape = Round(panel, 13)) {
-      using (var shadow = new Pen(a, 4.0f))
-        g.DrawPath(shadow, shape);
-      using (var fill = new SolidBrush(Color.FromArgb(13,20,37)))
-        g.FillPath(fill, shape);
-      using (var stroke = new LinearGradientBrush(panel,a,b,0f))
-        g.DrawPath(new Pen(stroke, 1.7f), shape);
-    }
-    using (var label = new SolidBrush(Color.FromArgb(248,252,255)))
-      g.DrawString("UDB  •  AI", title, label, new PointF(59,13));
-    using (var status = new SolidBrush(Color.FromArgb(107,229,248)))
-      g.DrawString("CONNECTED", caption, status, new PointF(60,32));
-  }
-  public UdbPointer() {
-    FormBorderStyle=FormBorderStyle.None;
-    ShowInTaskbar=false;
-    TopMost=true;
-    BackColor=Color.Magenta;
-    TransparencyKey=Color.Magenta;
-    ClientSize=new Size(176,66);
-    StartPosition=FormStartPosition.Manual;
-    Location=new Point(-500,-500);
-    DoubleBuffered=true;
+public static class UdbCursorNative {
+  public static readonly ConcurrentQueue<string> Lines = new ConcurrentQueue<string>();
+  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+  [DllImport("user32.dll", EntryPoint="GetWindowLongW")]
+  public static extern int GetWindowLong(IntPtr hwnd, int index);
+  [DllImport("user32.dll", EntryPoint="SetWindowLongW")]
+  public static extern int SetWindowLong(IntPtr hwnd, int index, int value);
+  [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter,
+      int x, int y, int cx, int cy, uint flags);
+  public static void StartReader() {
     var reader = new Thread(() => {
       try {
         string line;
-        while ((line=Console.ReadLine())!=null) queue.Enqueue(line);
-      } finally { queue.Enqueue("stop"); }
+        while ((line = Console.ReadLine()) != null) Lines.Enqueue(line);
+      } finally { Lines.Enqueue("stop"); }
     });
-    reader.IsBackground=true;
+    reader.IsBackground = true;
     reader.Start();
-    timer.Interval=60;
-    timer.Tick += (sender, ev) => {
-      string line;
-      while (queue.TryDequeue(out line)) {
-        if (line=="stop") { stopped=true; Close(); return; }
-        if (line=="hide") { Hide(); continue; }
-        string[] parts=line.Split(',');
-        int x,y;
-        if (parts.Length==2 && int.TryParse(parts[0],out x)
-            && int.TryParse(parts[1],out y)) {
-          Location=new Point(x,y);
-          if (!Visible) Show();
-        }
-      }
-      if (Visible && !stopped) Invalidate();
-    };
-    timer.Start();
-    Console.WriteLine("ready");
-    Console.Out.Flush();
-  }
-  protected override void Dispose(bool disposing) {
-    if (disposing) { timer.Dispose(); title.Dispose(); caption.Dispose(); }
-    base.Dispose(disposing);
   }
 }
 '@
-[UdbPointer]::ConfigureDpi()
-[System.Windows.Forms.Application]::Run((New-Object UdbPointer))
+# Windows 10+ per-monitor-v2 DPI context. UDB sends physical screen pixels.
+[void][UdbCursorNative]::SetThreadDpiAwarenessContext([IntPtr](-4))
+$xaml = @'
+<Canvas xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="72" Height="56" Background="Transparent" SnapsToDevicePixels="False">
+  <Canvas.Resources>
+    <LinearGradientBrush x:Key="accent" StartPoint="0,0" EndPoint="1,1">
+      <GradientStop Color="#23E6FF" Offset="0"/>
+      <GradientStop Color="#697AFF" Offset=".52"/>
+      <GradientStop Color="#DE6EFF" Offset="1"/>
+    </LinearGradientBrush>
+  </Canvas.Resources>
+  <!-- Soft aura is separate from the precise pointer silhouette. -->
+  <Ellipse Canvas.Left="1" Canvas.Top="2" Width="39" Height="39"
+           Stroke="{StaticResource accent}" StrokeThickness="1.3" Opacity=".52">
+    <Ellipse.Effect>
+      <DropShadowEffect Color="#568BFF" BlurRadius="10" ShadowDepth="0" Opacity=".65"/>
+    </Ellipse.Effect>
+  </Ellipse>
+  <!-- Dark outer stroke creates contrast on light and dark websites. -->
+  <Path Data="M 7,5 L 7,37 L 14,29 L 21,44 L 27,41 L 20,26 L 34,26 Z"
+        Fill="#0B1427" Stroke="#09111F" StrokeThickness="4"
+        StrokeLineJoin="Round">
+    <Path.Effect>
+      <DropShadowEffect Color="#4A66FF" BlurRadius="8" ShadowDepth="0" Opacity=".75"/>
+    </Path.Effect>
+  </Path>
+  <Path Data="M 7,5 L 7,37 L 14,29 L 21,44 L 27,41 L 20,26 L 34,26 Z"
+        Fill="#101C32" Stroke="#F7FDFF" StrokeThickness="2.1"
+        StrokeLineJoin="Round"/>
+  <Path Data="M 10,11 L 10,29 L 14,25 L 21,39"
+        Stroke="{StaticResource accent}" StrokeThickness="1.8"
+        StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+        Opacity=".95"/>
+  <!-- Compact identity chip, not the previous 120px CONNECTED banner. -->
+  <Border Canvas.Left="35" Canvas.Top="12" Width="29" Height="22"
+          CornerRadius="7" Background="#10192C"
+          BorderBrush="{StaticResource accent}" BorderThickness="1.4">
+    <Border.Effect>
+      <DropShadowEffect Color="#697AFF" BlurRadius="7" ShadowDepth="0" Opacity=".65"/>
+    </Border.Effect>
+    <TextBlock Text="AI" FontFamily="Segoe UI" FontSize="11" FontWeight="Bold"
+               Foreground="#F5FAFF" TextAlignment="Center" VerticalAlignment="Center"/>
+  </Border>
+  <Ellipse Canvas.Left="62" Canvas.Top="10" Width="4" Height="4"
+           Fill="#2EF3DE"/>
+</Canvas>
+'@
+$reader = New-Object System.Xml.XmlNodeReader ([xml]$xaml)
+$visual = [System.Windows.Markup.XamlReader]::Load($reader)
+$window = New-Object System.Windows.Window
+$window.WindowStyle = [System.Windows.WindowStyle]::None
+$window.ResizeMode = [System.Windows.ResizeMode]::NoResize
+$window.AllowsTransparency = $true
+$window.Background = [System.Windows.Media.Brushes]::Transparent
+$window.ShowInTaskbar = $false
+$window.ShowActivated = $false
+$window.Focusable = $false
+$window.Topmost = $true
+$window.Width = 72
+$window.Height = 56
+$window.Left = -500
+$window.Top = -500
+$window.Content = $visual
+$script:hwnd = [IntPtr]::Zero
+$window.Add_SourceInitialized({
+  $helper = New-Object System.Windows.Interop.WindowInteropHelper ($window)
+  $script:hwnd = $helper.Handle
+  $style = [UdbCursorNative]::GetWindowLong($script:hwnd, -20)
+  # WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED
+  [void][UdbCursorNative]::SetWindowLong($script:hwnd, -20,
+      ($style -bor 0x20 -bor 0x80 -bor 0x08000000 -bor 0x80000))
+})
+$timer = New-Object System.Windows.Threading.DispatcherTimer
+$timer.Interval = [TimeSpan]::FromMilliseconds(35)
+$timer.Add_Tick({
+  $line = $null
+  while ([UdbCursorNative]::Lines.TryDequeue([ref]$line)) {
+    if ($line -eq 'stop') { $timer.Stop(); $window.Close(); return }
+    if ($line -eq 'hide') { $window.Hide(); continue }
+    $parts = $line.Split(',')
+    $px = 0
+    $py = 0
+    if ($parts.Length -eq 2 -and
+        [int]::TryParse($parts[0], [ref]$px) -and
+        [int]::TryParse($parts[1], [ref]$py)) {
+      if (-not $window.IsVisible) { $window.Show() }
+      if ($script:hwnd -ne [IntPtr]::Zero) {
+        # SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+        [void][UdbCursorNative]::SetWindowPos(
+          $script:hwnd, [IntPtr](-1), ($px - 7), ($py - 5), 0, 0, 0x0051)
+      }
+    }
+  }
+})
+[UdbCursorNative]::StartReader()
+$timer.Start()
+[Console]::WriteLine('ready')
+[Console]::Out.Flush()
+$app = New-Object System.Windows.Application
+[void]$app.Run($window)
