@@ -45,10 +45,15 @@ def owner(tmp_path):
         {"sessions": [{"session_id": "a" * 32, "kind": "browser", "tabs": "two"}]},
         {"resources": {"at": "now", "admission_ready": True}},
         {"resources": {"at": float("nan"), "admission_ready": True}},
-        {"resources": {"at": time.time(), "admission_ready": "false"}},
+        pytest.param(
+            lambda: {"resources": {"at": time.time(), "admission_ready": "false"}},
+            id="invalid-admission-type",
+        ),
     ],
 )
 def test_malformed_health_never_reports_a_ready_worker(owner, changes):
+    if callable(changes):
+        changes = changes()
     host_client.atomic_json(owner.state / "host/status.json", health(**changes))
     result = host_client.status(owner)
     assert result["worker_ready"] is False
