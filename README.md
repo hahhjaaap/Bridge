@@ -174,7 +174,7 @@ actual Windows pointer without capturing the user's desktop, run
 Python **3.11+** is required for development. Windows is required for native desktop/GUI and frozen EXE acceptance; Linux supports source, protocol and policy tests.
 
 ```powershell
-python -m pip install ".[office,dev]"
+python -m pip install -e ".[office,dev]"
 python -m ruff check .
 python tools/check_import_boundaries.py
 python tools/audit_repository.py --strict
@@ -192,6 +192,10 @@ python tools/check_frozen.py dist/udb.exe
 ```
 
 The build fetches only pinned public helper binaries with SHA-256 checks; retain their license notices in `THIRD_PARTY_NOTICES/`. CI tests Linux/Windows Python matrices and Windows EXE/installer smoke tests. An Actions success does not by itself mean a new GitHub Release was published.
+
+Run `python tools/benchmark_runtime.py` for repeatable synthetic file-memory,
+idle polling, terminal checkpoint and activity-log measurements. See
+[Performance measurements](docs/performance.md) for scope, baseline and limits.
 
 ## Repository layout
 

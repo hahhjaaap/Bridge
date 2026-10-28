@@ -18,6 +18,9 @@ from .core import PolicyError, reject_links
 from .host_client import atomic_json, enabled
 from .resources import LIMITS, Governor, WindowsSampler, require_capacity
 
+_IDLE_POLL_SECONDS = 0.25
+_REPLY_CLEANUP_SECONDS = 5.0
+
 
 class HostService:
     def __init__(self, agent):
@@ -330,7 +333,6 @@ class HostService:
         raise PolicyError("Unsupported action for this owned session")
 
     def _browser_transfer(self, browser, args):
-        import base64
         import hashlib
 
         from . import browser_files, computer_access
@@ -355,17 +357,23 @@ class HostService:
         data, content_type = browser_files.download(
             browser, tab, args.get("url", ""), expected_origin
         )
-        result = files.dispatch(
-            "write",
-            str(target),
-            content=base64.b64encode(data).decode("ascii"),
-            encoding="base64",
-            expected_sha256="NEW",
-        )
+        result = files.write_bytes(str(target), data, "NEW")
         return dict(result, content_type=content_type, executed=False)
 
+    def _prune_replies(self):
+        cutoff = time.time() - 120
+        for p in (self.folder / "replies").glob("*.json"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink(missing_ok=True)
+            except OSError:
+                continue  # A client may consume a reply during the scan.
+
     def _work(self):
+        poll = 0.06
+        next_cleanup = 0.0
         while not self.stop_event.is_set():
+            processed = False
             try:
                 if self.maintenance.is_set():
                     with self.lock:
@@ -374,6 +382,7 @@ class HostService:
                 for p in sorted((self.folder / "inbox").glob("*.json")):
                     if self.stop_event.is_set():
                         break
+                    processed = True
                     reject_links(p)
                     if p.stat().st_size > 16 * 1048576:
                         p.unlink()
@@ -407,12 +416,14 @@ class HostService:
                     if re.fullmatch("[a-f0-9]{32}", p.stem):
                         atomic_json(self.folder / "replies" / (p.stem + ".json"), reply)
                     self.publish()
-                for p in (self.folder / "replies").glob("*.json"):
-                    if time.time() - p.stat().st_mtime > 120:
-                        p.unlink(missing_ok=True)
+                now = time.monotonic()
+                if now >= next_cleanup:
+                    next_cleanup = now + _REPLY_CLEANUP_SECONDS
+                    self._prune_replies()
             except Exception:
                 pass  # Transient mailbox errors are retried on the next poll.
-            self.stop_event.wait(0.06)
+            poll = 0.06 if processed else min(_IDLE_POLL_SECONDS, poll * 1.5)
+            self.stop_event.wait(poll)
 
     def close(self):
         self.stop_event.set()
