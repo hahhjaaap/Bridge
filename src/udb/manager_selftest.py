@@ -23,8 +23,9 @@ def self_test(preview_dir=None):
     if captures:
         captures.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="udb-gui-selftest-") as temp:
-        home = Path(temp) / "bridge"
-        source = Path(temp) / "source"
+        # Windows temp roots may use an 8.3 alias; Agent stores canonical paths.
+        home = Path(temp).resolve() / "bridge"
+        source = Path(temp).resolve() / "source"
         source.mkdir()
         (source / "hello.py").write_text("value = 1\n", encoding="utf-8")
         ctl = DesktopController(home, monitor=False)
