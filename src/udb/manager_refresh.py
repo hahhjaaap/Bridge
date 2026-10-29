@@ -37,6 +37,12 @@ class ManagerRefreshMixin:
             self.footer_status.setText(
                 "Không tải được trạng thái · " + " · ".join(errors)
             )
+        if getattr(self, "quick_controls", None):
+            self.quick_controls.sync(
+                status_error=any(
+                    e.startswith(("Máy tính:", "Kết nối:")) for e in errors
+                )
+            )
 
     def _refresh_projects(self):
         projects = self.agent.projects()
@@ -83,6 +89,7 @@ class ManagerRefreshMixin:
         is_paused = paused(self.agent)
         sessions = hs.get("sessions", [])
         handed_off = any(x.get("presentation") == "visible" for x in sessions)
+        self._browser_handed_off = handed_off
         closing = any(x.get("closing") for x in sessions)
         ready = hs.get("worker_ready") is True
         enabled = hs.get("enabled") is True
@@ -129,19 +136,31 @@ class ManagerRefreshMixin:
         self.host_enabled.blockSignals(False)
         capacity = rs.get("admission_ready") is True
         self.browser_start_button.setEnabled(
-            ready
+            not self.busy
+            and ready
             and enabled
             and capacity
             and not any(x["kind"] == "browser" for x in sessions)
         )
         self.browser_login_button.setEnabled(
-            ready and enabled and capacity and not handed_off and not closing
+            not self.busy
+            and ready
+            and enabled
+            and capacity
+            and not handed_off
+            and not closing
         )
         self.browser_background_button.setEnabled(
-            ready and enabled and capacity and handed_off and not closing
+            not self.busy
+            and ready
+            and enabled
+            and capacity
+            and handed_off
+            and not closing
         )
         self.workspace_start_button.setEnabled(
-            ready
+            not self.busy
+            and ready
             and enabled
             and capacity
             and not any(x["kind"] == "workspace" for x in sessions)
@@ -329,6 +348,7 @@ class ManagerRefreshMixin:
     def _refresh_connection(self, source_auto_projects):
         status = self.controller.status()
         ready = status["ready"]
+        self._connection_ready = ready
         alive = status["tunnel_running"]
         wanted = status["tunnel_wanted"]
         text = (
