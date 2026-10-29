@@ -228,6 +228,7 @@ def self_test(preview_dir=None):
         while not quick.events and time.monotonic() < deadline:
             quick.poll_activity()
             QTest.qWait(20)
+            time.sleep(0.005)  # Qt test waits must also yield to the Python reader.
         assert quick.history.topLevelItemCount() == 1
         assert "Chọn dropdown" in quick.activity_detail.text()
         for button in (

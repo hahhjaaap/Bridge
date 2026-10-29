@@ -89,16 +89,24 @@ def test_browser_return_keeps_its_label_while_resources_block_the_action(quick):
 def test_activity_reads_off_thread_and_never_marks_a_connection_as_work(quick):
     from PySide6.QtTest import QTest
 
+    from udb.activity import read_events
+
     win, panel, _ = quick
     assert panel.activity_title.text() == "Chưa có hoạt động"
     Activity(win.agent.home).emit(
         "call", "host_browser", "synthetic", details={"action": "select_option"}
     )
+    assert read_events(win.agent.home), "Synthetic activity was not persisted"
     deadline = time.monotonic() + 3
     while panel.history.topLevelItemCount() == 0 and time.monotonic() < deadline:
         panel.poll_activity()
         QTest.qWait(20)
-    assert panel.history.topLevelItemCount() == 1
+        time.sleep(0.005)  # Let Python reader threads run between Qt-only waits.
+    assert panel.history.topLevelItemCount() == 1, (
+        panel.activity_note.text(),
+        panel.worker is not None,
+        panel.feed.after,
+    )
     assert "Chọn dropdown" in panel.activity_detail.text()
     assert panel.activity_title.text() == "Đang gọi công cụ"
     Activity(win.agent.home).emit("call", "<b>untrusted</b>", "literal")
@@ -106,6 +114,7 @@ def test_activity_reads_off_thread_and_never_marks_a_connection_as_work(quick):
     while panel.history.topLevelItemCount() < 2 and time.monotonic() < deadline:
         panel.poll_activity()
         QTest.qWait(20)
+        time.sleep(0.005)
     item = panel.history.topLevelItem(0)
     assert item.text(0) == "<b>untrusted</b>"
     assert "&lt;b&gt;" in item.toolTip(0) and "<b>" not in item.toolTip(0)
@@ -126,6 +135,7 @@ def test_activity_failure_preserves_emergency_controls(quick):
     deadline = time.monotonic() + 3
     while panel.worker is not None and time.monotonic() < deadline:
         QTest.qWait(20)
+        time.sleep(0.005)
     assert panel.activity_title.text() == "Nhật ký chưa cập nhật"
     assert "raw log" not in panel.activity_note.text()
     panel.pause_button.click()
@@ -153,6 +163,7 @@ def test_a_slow_log_reader_does_not_block_local_pause(quick):
         deadline = time.monotonic() + 2
         while not entered.is_set() and time.monotonic() < deadline:
             QTest.qWait(10)
+            time.sleep(0.005)
         assert entered.is_set()
         panel.pause_button.click()
         assert paused(win.agent) and panel.worker is not None
