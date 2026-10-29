@@ -13,6 +13,7 @@ existing application is changed by these simulations.
 | Host mailbox | A linked, locked or directory entry sorts before a valid command | Bad entries are isolated; later valid commands are still processed |
 | Session cleanup | Process close or handoff cleanup fails | Session stays tracked as closing; new actions are blocked; cleanup can be retried |
 | Multiple owned sessions | One close fails while another session is healthy | Other sessions still close; failed cleanup remains visible |
+| Browser startup on Windows | Chrome publishes its endpoint before releasing the write lock, or writes only the first line | Waits for a readable, complete endpoint within the original deadline; invalid records still fail |
 | Browser handoff | Restart fails before a visible owner window exists, or return fails with the owner window still alive | Input-pause flag follows the surviving window; explicit emergency pause is preserved |
 | Computer jobs | Start after shutdown, failed stop, unavailable grant observer | Closed managers refuse launches, stop can retry cleanup, observation failure revokes owned jobs |
 | Result classification | Timeout, output quota, revocation, expired approval or cleanup failure | Error status is preserved, including when a stale PASS header is present |
@@ -21,7 +22,7 @@ existing application is changed by these simulations.
 
 The initial targeted reproductions failed in 18 host-case variants, four job
 cases, six outcome cases and one stale-label case. Positive and boundary cases
-were added alongside those regressions. The fault suite now contains 49 checks.
+were added alongside those regressions. The fault suite now contains 59 checks.
 
 ## Coverage
 
@@ -37,7 +38,7 @@ were added alongside those regressions. The fault suite now contains 49 checks.
 | GUI and extension | Actual Qt geometry/control tests plus per-tab extension ordering/race checks |
 | Packaging | Isolated wheel, frozen Windows integration and installer update/rollback acceptance |
 
-Local Linux validation with Qt installed: **884 passed, 9 skipped**, plus
+Local Linux validation with Qt installed: **894 passed, 9 skipped**, plus
 **27 subtests passed**. Qt self-test exercises all six pages at 1220×820 and
 960×680 with motion enabled and disabled. The extension behavior test and
 isolated wheel acceptance also pass; the public catalog remains 61 tools.

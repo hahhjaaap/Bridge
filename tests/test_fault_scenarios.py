@@ -506,3 +506,73 @@ def test_invalid_command_envelopes_never_reach_dispatch(service, changes):
     assert service._process_command(path)
     reply = json.loads((service.folder / "replies" / path.name).read_text())
     assert reply["ok"] is False and calls == [] and service.current is None
+
+
+@pytest.fixture
+def browser_startup(monkeypatch):
+    import io
+
+    from udb import host_browser
+
+    clock = SimpleNamespace(now=0, reads=0)
+
+    def sleep(seconds):
+        clock.now += seconds
+
+    monkeypatch.setattr(
+        host_browser, "time", SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep)
+    )
+
+    def read(sequence):
+        rows = iter(sequence)
+        last = sequence[-1]
+
+        def open_file(mode):
+            assert mode == "rb"
+            clock.reads += 1
+            value = next(rows, last)
+            if isinstance(value, Exception):
+                raise value
+            return io.BytesIO(value)
+
+        return host_browser._browser_endpoint(
+            SimpleNamespace(open=open_file), SimpleNamespace(alive=lambda: True), 0.2
+        )
+
+    return read, clock
+
+
+@pytest.mark.parametrize("pending", [PermissionError(), FileNotFoundError(), b"9222\n"])
+def test_browser_startup_waits_for_readable_complete_endpoint(browser_startup, pending):
+    read, clock = browser_startup
+    assert read([pending, b"9222\n/devtools/browser/owned"]) == (
+        "9222",
+        "/devtools/browser/owned",
+    )
+    assert clock.reads == 2 and clock.now == 0.05
+
+
+@pytest.mark.parametrize("pending", [PermissionError(), b"9222\n"])
+def test_browser_endpoint_wait_is_bounded(browser_startup, pending):
+    read, clock = browser_startup
+    with pytest.raises(PolicyError, match="startup timed out"):
+        read([pending])
+    assert clock.now == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [b"0\n/devtools/browser/owned", b"x" * 4097, b"\xff", b"9222\n/foreign"],
+)
+def test_browser_endpoint_still_rejects_invalid_records(browser_startup, invalid):
+    read, clock = browser_startup
+    with pytest.raises(PolicyError, match="Invalid private browser endpoint"):
+        read([invalid])
+    assert clock.reads == 1
+
+
+def test_browser_endpoint_stops_waiting_when_owned_process_exits():
+    from udb.host_browser import _browser_endpoint
+
+    with pytest.raises(PolicyError, match="exited during startup"):
+        _browser_endpoint(None, SimpleNamespace(alive=lambda: False), 1)
