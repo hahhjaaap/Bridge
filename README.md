@@ -158,7 +158,14 @@ visual cursor is **not** a second hardware/system mouse.
 
 ## Interface and visual checks
 
-The manager opens on **Trợ lý trên máy**, with pinned pause/resume controls,
+`udb gui` opens a compact control panel when a system tray is available. It keeps
+connection, Windows pause/resume, browser handoff and background-session closure
+together, with recent metadata-only tool activity. Closing its windows returns
+to the tray; use **Thoát UDB** in the tray menu to stop the GUI-owned runtime.
+Without a tray, the full manager stays reachable; **Thu gọn** opens the small
+panel and closing it returns to the manager. See [Compact controls](docs/compact-controls.md).
+
+The full manager opens on **Trợ lý trên máy**, with pinned pause/resume controls,
 separate browser/session cards and expandable resource details. Long content
 scrolls without hiding the pause controls. A connected client is not displayed
 as active work; the UI distinguishes readiness, local pause and owner handoff.

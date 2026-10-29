@@ -94,6 +94,15 @@ jobs:
       - run: .\dist\udb.exe --version
       - run: .\dist\udb.exe tools
       - run: python tools/check_frozen.py dist/udb.exe
+      - name: Check frozen compact controls and native GUI
+        run: .\dist\udb.exe _worker core --gui-check --gui-qa-dir "${{ runner.temp }}/udb-quick-ui"
+      - name: Upload compact GUI previews
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: compact-gui-previews
+          path: ${{ runner.temp }}/udb-quick-ui/*.png
+          retention-days: 3
       - name: Exercise managed update and rollback on Windows
         run: python tools/check_installer.py install.ps1 (Get-ChildItem dist/udb-*-windows-standalone.zip | Select-Object -First 1).FullName
       - uses: actions/upload-artifact@v4

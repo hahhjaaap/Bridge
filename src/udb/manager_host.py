@@ -216,7 +216,7 @@ class ManagerHostMixin:
     def pause_desktop_local(self, value):
         from .desktop_control import pause_local
 
-        pause_local(self.agent, value)
+        self.guarded(lambda: pause_local(self.agent, value))
         self.refresh()
 
     def set_host_enabled(self, value):
@@ -227,6 +227,7 @@ class ManagerHostMixin:
                 self.agent.state / "host-settings.json", {"enabled": bool(value)}
             )
         )
+        self.refresh()
 
     def start_host_local(self, kind):
         from .host_client import command

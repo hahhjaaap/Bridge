@@ -13,8 +13,11 @@ binaries = [
 ]
 assets = collect_data_files(
     "udb",
-    includes=["*.ps1", "companion/*.ps1", "desktop_guest.py", "build_info.json", "plugin.template.json"],
+    includes=["*.ps1", "companion/*.ps1", "build_info.json", "plugin.template.json"],
 )
+# collect_data_files excludes Python sources by default. The Sandbox broker
+# hashes and stages this standalone guest payload as bytes, even in a frozen app.
+assets.append((str(base / "src/udb/desktop_guest.py"), "udb"))
 assets += collect_data_files("mcp") + copy_metadata("mcp", recursive=True)
 assets.append((str(base / "install.ps1"), "udb"))
 if components:

@@ -23,8 +23,9 @@ def self_test(preview_dir=None):
     if captures:
         captures.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="udb-gui-selftest-") as temp:
-        home = Path(temp) / "bridge"
-        source = Path(temp) / "source"
+        # Windows temp roots may use an 8.3 alias; Agent stores canonical paths.
+        home = Path(temp).resolve() / "bridge"
+        source = Path(temp).resolve() / "source"
         source.mkdir()
         (source / "hello.py").write_text("value = 1\n", encoding="utf-8")
         ctl = DesktopController(home, monitor=False)
@@ -209,6 +210,70 @@ def self_test(preview_dir=None):
                     assert win.grab().save(str(captures / f"assistant-{state}.png"))
                 pause_local(ctl.agent, False)
 
+        # The compact view uses only metadata from this disposable owner home.
+        import time
+
+        from .activity import Activity
+        from .desktop_control import paused
+
+        win.refresh()
+        win.open_quick_controls()
+        quick = win.quick_controls
+        quick.resize(480, 700)
+        app.processEvents()
+        writer = Activity(ctl.agent.home)
+        writer.emit(
+            "call", "host_browser", "quick-preview", details={"action": "select_option"}
+        )
+        deadline = time.monotonic() + 5
+        while not quick.events and time.monotonic() < deadline:
+            quick.poll_activity()
+            QTest.qWait(20)
+            time.sleep(0.005)  # Qt test waits must also yield to the Python reader.
+        assert quick.history.topLevelItemCount() == 1
+        assert "Chọn dropdown" in quick.activity_detail.text()
+        for button in (
+            quick.pause_button,
+            quick.resume_button,
+            quick.handoff_button,
+            quick.stop_button,
+        ):
+            assert button.isVisible()
+            assert quick.rect().contains(button.mapTo(quick, button.rect().center()))
+        quick.resize(480, 560)
+        app.processEvents()
+        assert quick.height() <= 560
+        for button in (
+            quick.pause_button,
+            quick.resume_button,
+            quick.handoff_button,
+            quick.stop_button,
+            quick.expand_button,
+        ):
+            assert quick.rect().contains(button.mapTo(quick, button.rect().center()))
+        if captures:
+            assert quick.grab().save(str(captures / "quick-small.png"))
+        quick.resize(480, 700)
+        quick.pause_button.click()
+        assert quick.resume_button.isEnabled() and paused(ctl.agent)
+        if captures:
+            assert quick.grab().save(str(captures / "quick-paused.png"))
+        quick.resume_button.click()
+        assert not paused(ctl.agent)
+        if captures:
+            assert quick.grab().save(str(captures / "quick-activity.png"))
+        # Actual native tray registration is tested when the CI desktop supports it.
+        if quick.install_tray():
+            assert win.close() is False and not win.isVisible()
+            assert not ctl.closed.is_set()
+            assert quick.close() is False
+            quick.tray.hide()
+            win._keep_in_tray = False
+            app.setQuitOnLastWindowClosed(True)
+        quick.hide()
+        win.show()
+        assert not (ctl.agent.state / "computer-access.dpapi").exists()
+
         # Empty states hide their corresponding tables and disable review.
         # Expire only the synthetic request in this disposable test database.
         with ctl.agent.connect() as c:
@@ -222,5 +287,8 @@ def self_test(preview_dir=None):
             assert win.grab().save(str(captures / "approvals-empty.png"))
         assert not (source / "gui-proof.py").exists()
         win.close()
+        from PySide6.QtCore import QThreadPool
+
+        assert QThreadPool.globalInstance().waitForDone(2000)
         app.processEvents()
         ctl.close()

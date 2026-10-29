@@ -147,6 +147,10 @@ class MainWindow(ManagerHostMixin, ManagerRefreshMixin, QMainWindow):
         self.footer_status = label("MCP riêng tư · Quyền tự động theo dự án", "Fine")
         fl.addWidget(self.footer_status)
         fl.addStretch()
+        quick = MotionButton("Thu gọn", "cursor")
+        quick.setFixedHeight(30)
+        quick.clicked.connect(self.open_quick_controls)
+        fl.addWidget(quick)
         self.footer_project = label("Chưa chọn dự án", "Fine")
         fl.addWidget(self.footer_project)
         outer.addWidget(foot)
@@ -456,6 +460,14 @@ class MainWindow(ManagerHostMixin, ManagerRefreshMixin, QMainWindow):
         self.stack.currentWidget().updateGeometry()
         self.stack.currentWidget().update()
 
+    def open_quick_controls(self):
+        from .manager_quick import QuickControls
+
+        if not getattr(self, "quick_controls", None):
+            self.quick_controls = QuickControls(self)
+        self.quick_controls.show_panel()
+        self.hide()
+
     def guarded(self, fn):
         try:
             return fn()
@@ -470,6 +482,15 @@ class MainWindow(ManagerHostMixin, ManagerRefreshMixin, QMainWindow):
         self.local_button.setEnabled(False)
         self.configure_button.setEnabled(False)
         self.status_label.setText("●  Đang xử lý…")
+        for button in (
+            self.browser_start_button,
+            self.browser_login_button,
+            self.browser_background_button,
+            self.workspace_start_button,
+        ):
+            button.setEnabled(False)
+        if getattr(self, "quick_controls", None):
+            self.quick_controls.sync()
         self.band.flash()
         worker = Worker(fn)
         self.workers.append(worker)
@@ -485,7 +506,7 @@ class MainWindow(ManagerHostMixin, ManagerRefreshMixin, QMainWindow):
 
         def failed(message):
             complete(None)
-            QMessageBox.warning(self, "Không kết nối được", message)
+            QMessageBox.warning(self, "Không thực hiện được", message)
 
         worker.signals.done.connect(complete, Qt.ConnectionType.QueuedConnection)
         worker.signals.error.connect(failed, Qt.ConnectionType.QueuedConnection)
@@ -826,6 +847,12 @@ class MainWindow(ManagerHostMixin, ManagerRefreshMixin, QMainWindow):
                 pass  # DWM styling is cosmetic and may be unsupported.
 
     def closeEvent(self, event):
+        if getattr(self, "_keep_in_tray", False) and not getattr(
+            self, "_quit_requested", False
+        ):
+            self.hide()
+            event.ignore()
+            return
         if self.busy:
             event.ignore()
             return
@@ -840,6 +867,10 @@ class MainWindow(ManagerHostMixin, ManagerRefreshMixin, QMainWindow):
                 event.ignore()
                 QMessageBox.warning(self, "Chưa thể đóng UDB", str(exc))
                 return
+        if getattr(self, "quick_controls", None):
+            self.quick_controls.hide()
+            if self.quick_controls.tray:
+                self.quick_controls.tray.hide()
         event.accept()
 
 
@@ -869,21 +900,37 @@ def run(home: Path, start_tunnel=False, screenshot=None):
 
         ctypes.windll.kernel32.FreeConsole()
     app = make_app()
-    controller = DesktopController(home)
-    settings = controller.settings()
-    app.setProperty("motion", settings.get("motion", True))
-    lock = QLockFile(str(controller.agent.state / "manager.lock"))
+    from .core import Agent
+
+    agent = Agent(home)
+    lock = QLockFile(str(agent.state / "manager.lock"))
     lock.setStaleLockTime(30000)
     if not lock.tryLock(50):
+        from .headless import manager_status
+
+        headless = manager_status(agent.state)["mode"] == "headless"
         QMessageBox.information(
             None,
             "Bridge đang mở",
-            "Ứng dụng đã được mở. Kiểm tra cửa sổ hoặc thanh tác vụ Windows.",
+            "UDB đang chạy ẩn, không có cửa sổ hoặc biểu tượng khay. Để chuyển sang GUI, dùng udb stop rồi udb gui. Dừng tác nhân sẽ đóng các phiên UDB đang chạy."
+            if headless
+            else "Ứng dụng đã được mở. Kiểm tra biểu tượng UDB ở khay hệ thống hoặc thanh tác vụ Windows.",
         )
         return
+    controller = DesktopController(home)
+    settings = controller.settings()
+    app.setProperty("motion", settings.get("motion", True))
     controller.start_host()
     window = MainWindow(home, controller)
-    window.show()
+    # The full manager remains the fallback when a tray cannot be reached.
+    # Screenshots retain the full-page capture contract.
+    from .manager_quick import QuickControls
+
+    window.quick_controls = QuickControls(window)
+    if not screenshot and window.quick_controls.install_tray():
+        window.quick_controls.show_panel()
+    else:
+        window.show()
     if start_tunnel or settings.get("autoconnect", False):
         QTimer.singleShot(350, window.toggle_tunnel)
     if screenshot:
