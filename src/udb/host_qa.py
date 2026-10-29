@@ -12,7 +12,9 @@ from .host_service import HostService
 
 FIXTURE = """<!doctype html><meta charset="utf-8"><title>UDB owned fixture</title>
 <h1>Private UDB acceptance fixture</h1><input id="name"><button id="confirm"
-onclick="document.querySelector('#result').innerText=document.querySelector('#name').value">Confirm</button><p id="result"></p>"""
+onclick="document.querySelector('#result').innerText=document.querySelector('#name').value">Confirm</button><p id="result"></p>
+<select id="choice"><option value="">Choose</option><option value="VN">Vietnam</option></select>
+<input id="disabled" disabled><input id="readonly" readonly value="locked">"""
 
 
 def run(home):

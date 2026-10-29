@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .browser_dom import CLICK_POINT_SCRIPT, LOCATOR_SCRIPT
+from .browser_dom import CLICK_POINT_SCRIPT, LOCATOR_SCRIPT, SELECT_OPTION_SCRIPT
 from .browser_identity import identity_script
 from .core import PolicyError, reject_links
 from .owned_process import OwnedProcess as OwnedProcess
@@ -465,8 +465,13 @@ class Browser:
                     tab, expression, timeout=max(0.2, min(1.0, remaining))
                 )
             except PolicyError as exc:
-                if self._is_transient_context_error(exc):
-                    transition_seen = True
+                if (
+                    self._is_transient_context_error(exc)
+                    or "browser operation timed out" in str(exc).lower()
+                ):
+                    transition_seen = (
+                        transition_seen or self._is_transient_context_error(exc)
+                    )
                     time.sleep(min(0.1, max(0, deadline - time.monotonic())))
                     continue
                 raise
@@ -510,7 +515,12 @@ class Browser:
             time.sleep(min(0.1, max(0, deadline - time.monotonic())))
 
     def _wait_for_click_navigation(
-        self, tab, previous_url, observe_ms=1000, timeout_ms=10000
+        self,
+        tab,
+        previous_url,
+        observe_ms=1000,
+        timeout_ms=10000,
+        previous_loader_id=None,
     ):
         if not isinstance(previous_url, str) or not previous_url:
             return dict(navigation_completed=False)
@@ -519,6 +529,7 @@ class Browser:
         # Runtime.evaluate may lose its reply while a click destroys the old
         # execution context. Observe navigation from the browser target instead.
         transitioned = False
+        next_loader_id = None
         while time.monotonic() < deadline:
             remaining = deadline - time.monotonic()
             try:
@@ -537,6 +548,29 @@ class Browser:
             if current_url and current_url != previous_url:
                 transitioned = True
                 break
+            if previous_loader_id:
+                try:
+                    frame = (
+                        self.call(
+                            "Page.getFrameTree",
+                            session=self.sid(tab),
+                            timeout=max(0.2, min(0.5, deadline - time.monotonic())),
+                        )
+                        .get("frameTree", {})
+                        .get("frame", {})
+                    )
+                except PolicyError as exc:
+                    if (
+                        self._is_transient_context_error(exc)
+                        or "timed out" in str(exc).lower()
+                    ):
+                        continue
+                    raise
+                loader = frame.get("loaderId")
+                if loader and loader != previous_loader_id:
+                    next_loader_id = loader
+                    transitioned = True
+                    break
             time.sleep(min(0.05, max(0, deadline - time.monotonic())))
         if not transitioned:
             return dict(navigation_completed=False)
@@ -546,6 +580,7 @@ class Browser:
                 timeout_ms=timeout_ms,
                 previous_url=previous_url,
                 require_transition=True,
+                expected_loader_id=next_loader_id,
             )
         except PolicyError as exc:
             # The click already happened. Report an observed navigation timeout
@@ -670,7 +705,9 @@ class Browser:
                     const secret=type==='password'||type==='file'||/password|secret|token|otp|one-time-code/i.test([e.autocomplete,e.name,e.id].join(' '));
                     return {tag:e.tagName,id:String(e.id||'').slice(0,120),name:e.getAttribute('name'),type,
                       role:e.getAttribute('role')||'',placeholder:String(e.getAttribute('placeholder')||'').slice(0,160),
-                      text:textOf(e).slice(0,200),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true',
+                      text:textOf(e).slice(0,200),disabled:e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||!!e.closest('[inert]'),readonly:!!e.readOnly,
+                      options:e.tagName==='SELECT'&&!secret?Array.from(e.options).slice(0,20).map(o=>({value:String(o.value).slice(0,80),label:String(o.label).slice(0,120),disabled:o.matches(':disabled'),selected:o.selected})):undefined,
+                      options_truncated:e.tagName==='SELECT'?e.options.length>20:undefined,
                       value:secret?'[redacted]':String(e.value||'').slice(0,300)};
                   })};
             })()""",
@@ -714,7 +751,9 @@ class Browser:
                 let href='';try{const u=new URL(e.href,location.href);if(['http:','https:'].includes(u.protocol))href=u.origin+u.pathname;}catch(_){}
                 return {index:i+1,role:roleOf(e),name:nameOf(e),tag:e.tagName.toLowerCase(),type,
                   id:String(e.id||'').slice(0,120),name_attr:String(e.getAttribute('name')||'').slice(0,120),
-                  placeholder:String(e.getAttribute('placeholder')||'').slice(0,160),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true',
+                  placeholder:String(e.getAttribute('placeholder')||'').slice(0,160),disabled:e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||!!e.closest('[inert]'),readonly:!!e.readOnly,
+                  options:e.tagName==='SELECT'&&!secret?Array.from(e.options).slice(0,20).map(o=>({value:String(o.value).slice(0,80),label:String(o.label).slice(0,120),disabled:o.matches(':disabled'),selected:o.selected})):undefined,
+                  options_truncated:e.tagName==='SELECT'?e.options.length>20:undefined,
                   checked:typeof e.checked==='boolean'?e.checked:null,selected:typeof e.selected==='boolean'?e.selected:null,
                   value:secret?'[redacted]':String(e.value||'').slice(0,160),href};});
               return {url:location.origin==='null'?'about:blank':location.origin+location.pathname,title:String(document.title||'').slice(0,500),
@@ -738,7 +777,9 @@ class Browser:
             return None
         return result if isinstance(result, bool) else None
 
-    def _wait_for_element_action(self, tab, expression, timeout_ms=5000, selector=""):
+    def _wait_for_element_action(
+        self, tab, expression, timeout_ms=5000, selector="", retry_context=True
+    ):
         deadline = time.monotonic() + timeout_ms / 1000
         while True:
             remaining = deadline - time.monotonic()
@@ -750,6 +791,10 @@ class Browser:
                 )
             except PolicyError as exc:
                 if self._is_transient_context_error(exc):
+                    if not retry_context:
+                        raise PolicyError(
+                            "Browser action outcome unknown; inspect before retrying"
+                        ) from exc
                     time.sleep(min(0.1, max(0, deadline - time.monotonic())))
                     continue
                 if selector and self._css_selector_valid(tab, selector) is False:
@@ -765,10 +810,11 @@ class Browser:
                 return result
             if error == "invalid_selector":
                 return result
+            if error == "state_mismatch" and not retry_context:
+                return result  # An input/change handler already ran; never replay it.
             if error in {
                 "locator_not_unique",
                 "not_actionable",
-                "disabled",
                 "state_mismatch",
             }:
                 remaining = deadline - time.monotonic()
@@ -858,7 +904,7 @@ class Browser:
             raise PolicyError("Unsupported browser element action")
         if not isinstance(value, str) or len(value) > 16000:
             raise PolicyError("Text exceeds limit")
-        if operation == "select_option" and (not value or len(value) > 500):
+        if operation == "select_option" and len(value) > 500:
             raise PolicyError("select_option requires an option value or label")
 
         if operation == "click":
@@ -869,7 +915,8 @@ class Browser:
             if not isinstance(previous_url, str):
                 previous_url = None
             body = (
-                """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+                """if(e.tagName==='OPTION')return {ok:false,error:'use_select_option',action:'select_option'};
+                if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
 """
                 + CLICK_POINT_SCRIPT
                 + """              return {ok:true,x:point[0],y:point[1]};"""
@@ -878,27 +925,39 @@ class Browser:
             result = self._wait_for_element_action(tab, expression, selector=selector)
             if not result.get("ok"):
                 return result
+            previous_loader_id = None
+            try:
+                previous_loader_id = (
+                    self.call("Page.getFrameTree", session=self.sid(tab), timeout=1)
+                    .get("frameTree", {})
+                    .get("frame", {})
+                    .get("loaderId")
+                )
+            except PolicyError:
+                pass  # URL observation is still available if a frame is transitioning.
             self._mouse_click(tab, result["x"], result["y"])
-            navigation = self._wait_for_click_navigation(tab, previous_url)
-            return dict(ok=True, clicked=True, **navigation)
+            navigation = self._wait_for_click_navigation(
+                tab, previous_url, previous_loader_id=previous_loader_id
+            )
+            return dict(ok=True, clicked=True, replay_safe=False, **navigation)
 
+        select_body = SELECT_OPTION_SCRIPT.replace("__VALUE__", json.dumps(value))
         if operation == "fill":
-            body = """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};
+            body = (
+                "if(e.tagName==='SELECT'){"
+                + select_body
+                + "}\n"
+                + """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
               if(e.readOnly)return {ok:false,error:'readonly'};
               if(e.isContentEditable){e.focus();e.textContent=__VALUE__;}else{
                 if(!['INPUT','TEXTAREA'].includes(e.tagName)||e.type==='file'||['button','submit','reset','checkbox','radio','hidden','image'].includes((e.type||'').toLowerCase()))return {ok:false,error:'unsupported_control'};
                 e.focus();const p=e.tagName==='INPUT'?HTMLInputElement.prototype:HTMLTextAreaElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e,__VALUE__);}
               e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return {ok:true};""".replace(
-                "__VALUE__", json.dumps(value)
+                    "__VALUE__", json.dumps(value)
+                )
             )
         elif operation == "select_option":
-            body = """if(e.tagName!=='SELECT'||e.matches(':disabled')||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'unsupported_control'};
-              const wanted=__VALUE__;const option=Array.from(e.options).find(o=>o.value===wanted||o.label===wanted||String(o.textContent||'').trim()===wanted);
-              if(!option||option.disabled)return {ok:false,error:'option_not_found'};e.value=option.value;
-              e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));
-              return {ok:e.value===option.value,value:e.value,label:option.label||String(option.textContent||'').trim()};""".replace(
-                "__VALUE__", json.dumps(value)
-            )
+            body = select_body
         else:
             desired = operation == "check"
             body = (
@@ -935,7 +994,9 @@ class Browser:
             return dict(ok=True, checked=verified["checked"])
 
         expression = self._locator_expression(selector, role, name, exact, body)
-        return self._wait_for_element_action(tab, expression, selector=selector)
+        return self._wait_for_element_action(
+            tab, expression, selector=selector, retry_context=False
+        )
 
     def wait_for(
         self,
@@ -962,7 +1023,7 @@ class Browser:
         elif value:
             raise PolicyError("value is only used with wait_for state=text")
         validate_locator(selector, role, name, exact)
-        body = """const visibleMatches=matches.filter(isVisible);const enabledMatches=visibleMatches.filter(e=>!e.disabled&&e.getAttribute('aria-disabled')!=='true');
+        body = """const visibleMatches=matches.filter(isVisible);const enabledMatches=visibleMatches.filter(e=>!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!e.closest('[inert]'));
           const textMatches=matches.filter(e=>String(e.innerText||e.textContent||'').includes(__VALUE__));const state=__STATE__;
           const ok=state==='attached'?matches.length>0:state==='visible'?visibleMatches.length>0:state==='hidden'?(matches.length===0||visibleMatches.length===0):state==='enabled'?enabledMatches.length>0:state==='text'?textMatches.length>0:false;
           return {ok,state,matches:matches.length,visible:visibleMatches.length,enabled:enabledMatches.length};"""

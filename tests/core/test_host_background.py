@@ -593,6 +593,40 @@ def test_browser_navigation_times_out_if_document_stays_loading():
         browser.navigate("owned-tab", "https://example.com/", timeout_ms=100)
 
 
+def test_navigation_retries_read_only_timeouts_during_context_swap():
+    browser = Browser.__new__(Browser)
+    results = iter(
+        [
+            PolicyError("Browser operation timed out; outcome may be unknown"),
+            {"readyState": "complete", "href": "https://next.example/"},
+        ]
+    )
+
+    def evaluate(*args, **kwargs):
+        result = next(results)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    browser.evaluate = evaluate
+    ready = browser._wait_for_document_ready("owned-tab", timeout_ms=1000)
+    assert ready["navigation_completed"] and ready["url"] == "https://next.example/"
+
+
+def test_fill_is_not_replayed_when_change_handler_destroys_context():
+    browser = Browser.__new__(Browser)
+    calls = []
+
+    def evaluate(*args, **kwargs):
+        calls.append(args)
+        raise PolicyError("Browser operation failed: Execution context was destroyed")
+
+    browser.evaluate = evaluate
+    with pytest.raises(PolicyError, match="outcome unknown; inspect before retrying"):
+        browser.element("owned-tab", "fill", selector="#name", value="once")
+    assert len(calls) == 1
+
+
 def test_browser_click_waits_for_actionability_then_dispatches_pointer_events():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
