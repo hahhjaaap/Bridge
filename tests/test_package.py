@@ -47,6 +47,40 @@ def test_single_version_and_generated_registry(tmp_path):
     } <= names
 
 
+def test_frozen_spec_bundles_guest_source_as_a_byte_readable_payload(monkeypatch):
+    import types
+
+    for name in ("PyInstaller", "PyInstaller.utils", "PyInstaller.utils.hooks"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    hooks = sys.modules["PyInstaller.utils.hooks"]
+    # Normal data collection intentionally supplies no Python source files.
+    hooks.collect_data_files = lambda *args, **kwargs: []
+    hooks.collect_submodules = lambda *args, **kwargs: []
+    hooks.copy_metadata = lambda *args, **kwargs: []
+    monkeypatch.setattr("udb.components.verified_assets", lambda root: [])
+
+    def analyze(*args, **kwargs):
+        return types.SimpleNamespace(
+            pure=[], scripts=[], binaries=[], datas=kwargs["datas"]
+        )
+
+    namespace = dict(
+        SPECPATH=str(ROOT / "tools"),
+        Analysis=analyze,
+        PYZ=lambda *args: None,
+        EXE=lambda *args, **kwargs: None,
+    )
+    spec = ROOT / "tools/udb.spec"
+    exec(compile(spec.read_text(), str(spec), "exec"), namespace)
+    payloads = [
+        (Path(source), target)
+        for source, target in namespace["a"].datas
+        if Path(source).name == "desktop_guest.py"
+    ]
+    assert payloads == [(ROOT / "src/udb/desktop_guest.py", "udb")]
+    compile(payloads[0][0].read_bytes(), "desktop_guest.py", "exec")
+
+
 def test_mcp_config_generates_current_stdio_command(tmp_path):
     home = tmp_path / "home"
     project = tmp_path / "project"
