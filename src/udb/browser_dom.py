@@ -3,6 +3,19 @@
 Callers may supply only validated locators and JSON-encoded values, never code.
 """
 
+SELECT_OPTION_SCRIPT = """if(e.tagName!=='SELECT')return {ok:false,error:'unsupported_control'};
+              if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+              const wanted=__VALUE__,options=Array.from(e.options);
+              let choices=options.filter(o=>o.value===wanted);
+              if(!choices.length)choices=options.filter(o=>o.label===wanted||String(o.textContent||'').trim()===wanted);
+              if(!choices.length)return {ok:false,error:'option_not_found'};
+              if(choices.length!==1)return {ok:false,error:'option_not_unique',matches:choices.length};
+              const option=choices[0];if(option.matches(':disabled'))return {ok:false,error:'disabled'};
+              Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(e,option.value);
+              e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));
+              const ok=e.value===option.value;
+              return {ok,value:e.value,label:option.label||String(option.textContent||'').trim(),error:ok?'':'state_mismatch'};"""
+
 CLICK_POINT_SCRIPT = """              e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
               const s=getComputedStyle(e);if(s.pointerEvents==='none')return {ok:false,error:'not_actionable',reason:'pointer_events'};
               const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return {ok:false,error:'not_actionable',reason:'not_visible'};
@@ -38,9 +51,9 @@ LOCATOR_SCRIPT = """(() => {
           };
           let matches=[];
           if(selector){try{matches=Array.from(document.querySelectorAll(selector));}catch(_){return {ok:false,error:'invalid_selector'};}}
-          else matches=Array.from(document.querySelectorAll('a[href],button,input:not([type="hidden"]),textarea,select,summary,[role],[contenteditable="true"],[tabindex],h1,h2,h3,h4,h5,h6'))
+          else matches=Array.from(document.querySelectorAll('a[href],button,input:not([type="hidden"]),textarea,select,option,summary,[role],[contenteditable="true"],[tabindex],h1,h2,h3,h4,h5,h6'))
             .filter(e=>roleOf(e)===wantedRole&&(!wantedName||(exact?nameOf(e)===wantedName:nameOf(e).includes(wantedName))));
-          if(__VISIBLE_ONLY__)matches=matches.filter(isVisible);
+          if(__VISIBLE_ONLY__)matches=matches.filter(e=>e.tagName==='OPTION'?!!e.closest('select')&&isVisible(e.closest('select')):isVisible(e));
           if(__UNIQUE__&&matches.length!==1)return {ok:false,error:'locator_not_unique',matches:matches.length};
           const e=matches[0]||null;
           __BODY__

@@ -63,6 +63,36 @@ def browser_fixture():
                     value
                     in host_command(agent, "browser", action="read", **args)["text"]
                 )
+                selected = host_command(
+                    agent,
+                    "browser",
+                    action="select_option",
+                    selector="#choice",
+                    value="VN",
+                    **args,
+                )
+                assert selected["ok"] and selected["value"] == "VN"
+                assert host_command(
+                    agent,
+                    "browser",
+                    action="fill",
+                    selector="#choice",
+                    value="",
+                    **args,
+                )["ok"]
+                for selector, error in (
+                    ("#disabled", "disabled"),
+                    ("#readonly", "readonly"),
+                ):
+                    result = host_command(
+                        agent,
+                        "browser",
+                        action="fill",
+                        selector=selector,
+                        value="changed",
+                        **args,
+                    )
+                    assert result["error"] == error and not result.get("timed_out")
                 image = host_command(agent, "browser", action="screenshot", **args)
                 assert base64.b64decode(image["png_base64"]).startswith(
                     b"\x89PNG\r\n\x1a\n"
@@ -80,7 +110,10 @@ def browser_fixture():
                     process.wait(timeout=10)
             assert process.returncode == 0
     return dict(
-        browser="PASS", read_fill_click_screenshot=True, permissions_issued=False
+        browser="PASS",
+        read_fill_click_screenshot=True,
+        native_select_and_disabled=True,
+        permissions_issued=False,
     )
 
 
