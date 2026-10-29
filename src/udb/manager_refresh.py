@@ -112,7 +112,7 @@ class ManagerRefreshMixin:
         elif not enabled:
             tone, state = "neutral", "Chưa bật phiên nền"
             title = "Bạn chọn khi nào AI được chạy nền"
-            hint = "Bật cho phép bên dưới để AI mở browser riêng khi bạn giao việc."
+            hint = "Mở UDB đầy đủ → Máy tính để cho phép AI mở browser riêng khi bạn giao việc."
         elif not rs.get("admission_ready"):
             tone, state = "paused", "Đang chờ tài nguyên"
             title = "UDB đang chờ máy bớt bận"
