@@ -70,7 +70,8 @@ current-user and unsandboxed, as stated in the existing owner grant.
 
 ## Windows utilities
 
-Use `computer_utilities` after the existing attended `udb --access computer` grant:
+Use `computer_desktop` in the unified catalog after the existing attended
+`udb --access computer` grant. The legacy `computer_utilities` name remains callable:
 
 | Action | Behavior |
 |---|---|

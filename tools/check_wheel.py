@@ -93,7 +93,7 @@ def main():
             timeout=45,
         )
         data = json.loads(result.stdout)
-        if data["version"] != info["version"] or data["tool_count"] != 61:
+        if data["version"] != info["version"] or data["tool_count"] != 59:
             raise RuntimeError("Installed wheel has wrong catalog/version")
         print(
             json.dumps(

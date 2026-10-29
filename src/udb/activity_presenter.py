@@ -38,6 +38,19 @@ ACTION_LABELS = {
     "list": "Xem danh sách",
     "check": "Đánh dấu lựa chọn",
     "uncheck": "Bỏ đánh dấu",
+    "read_text": "Đọc văn bản",
+    "set_checked": "Đặt trạng thái checkbox",
+    "select": "Chọn mục",
+    "expand": "Mở nội dung",
+    "collapse": "Thu nội dung",
+    "scroll_into_view": "Đưa mục vào vùng nhìn",
+    "close_window": "Yêu cầu đóng cửa sổ",
+    "apps": "Danh sách ứng dụng",
+    "launch_app": "Mở ứng dụng",
+    "clipboard_get": "Đọc clipboard",
+    "clipboard_set": "Ghi clipboard",
+    "start": "Khởi chạy",
+    "stop": "Dừng tác vụ",
 }
 
 

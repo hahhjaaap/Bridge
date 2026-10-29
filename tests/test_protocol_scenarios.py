@@ -58,7 +58,7 @@ from test_uia_provider import Client, object_data
 client=Client()
 try:
     tools=client.rpc("tools/list", {})["tools"]
-    assert len(tools)==61
+    assert len(tools)==59
     assert not {"enable_computer_access", "grant_computer_access"}.intersection(t["name"] for t in tools)
     status=object_data(client.rpc("tools/call", {"name":"computer_status", "arguments":{}}))
     assert status["enabled"] is False

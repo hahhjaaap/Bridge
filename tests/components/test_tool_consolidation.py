@@ -56,7 +56,38 @@ CORE = [
     ),
     core_tool("propose_sandbox_job", {}, []),
     core_tool("propose_media_download", {}, []),
-    core_tool("computer_desktop", {}, []),
+    core_tool(
+        "computer_desktop",
+        {k: {"type": "string"} for k in ("action", "window_id", "text", "name")},
+        ["action"],
+    ),
+    core_tool(
+        "computer_utilities",
+        {
+            k: {"type": "string"}
+            for k in ("action", "text", "title", "name", "expected_version")
+        },
+        ["action"],
+    ),
+    core_tool(
+        "computer_process",
+        {
+            "action": {"type": "string"},
+            "job_id": {"type": "string"},
+            "offset": {"type": "integer"},
+        },
+        [],
+    ),
+    core_tool(
+        "computer_execute",
+        {
+            "program": {"type": "string"},
+            "arguments": {"type": "array"},
+            "cwd": {"type": "string"},
+            "timeout_seconds": {"type": "integer"},
+        },
+        ["program", "arguments", "cwd"],
+    ),
     core_tool("host_browser", {}, []),
 ]
 
@@ -158,6 +189,48 @@ class Consolidation(unittest.TestCase):
         self.assertEqual(self.primary.calls[-1]["arguments"]["expected_sha256"], "old")
         self.assertFalse(self.companion.calls)
 
+    def test_windows_utilities_use_the_original_owner_backend_once(self):
+        self.call(
+            "computer_desktop",
+            action="clipboard_set",
+            text="fixture",
+            expected_version="12",
+        )
+        self.assertEqual(
+            self.primary.calls,
+            [
+                dict(
+                    name="computer_utilities",
+                    arguments=dict(
+                        action="clipboard_set", text="fixture", expected_version="12"
+                    ),
+                )
+            ],
+        )
+        self.assertFalse(self.companion.calls)
+
+    def test_windows_process_start_does_not_duplicate_or_mutate_arguments(self):
+        args = dict(
+            action="start",
+            program="fixture.exe",
+            arguments=["one"],
+            cwd="C:\\fixture",
+            timeout_seconds=30,
+        )
+        original = copy.deepcopy(args)
+        self.call("computer_process", **args)
+        self.assertEqual(args, original)
+        self.assertEqual(
+            self.primary.calls,
+            [
+                dict(
+                    name="computer_execute",
+                    arguments={k: v for k, v in args.items() if k != "action"},
+                )
+            ],
+        )
+        self.assertFalse(self.companion.calls)
+
     def test_terminal_send_does_not_read_or_consume_output(self):
         self.call(
             "terminal_interact", session_id="owned", text="hello\n", send_only=True
@@ -216,6 +289,12 @@ class Consolidation(unittest.TestCase):
             ("terminal_read", dict(session_id="x", wait_for_exit="true")),
             ("file_search", dict(context=1)),
             ("file_transfer", dict(action="delete", source="a", destination="b")),
+            ("computer_desktop", dict(action="clipboard_get", window_id="wrong-scope")),
+            (
+                "computer_process",
+                dict(action="start", program="x", arguments=[], cwd="x", job_id="old"),
+            ),
+            ("computer_process", dict(action="stop", program="x", job_id="old")),
         ]
         for name, args in bad:
             with self.subTest(name=name, args=args):
@@ -235,12 +314,22 @@ class Consolidation(unittest.TestCase):
             "file_search_context": dict(text="x"),
             "file_copy": dict(source="a", destination="b"),
             "file_move": dict(source="a", destination="b"),
+            "computer_utilities": dict(action="apps"),
+            "computer_execute": dict(
+                program="fixture.exe", arguments=[], cwd="C:\\fixture"
+            ),
         }
         for name, a in args.items():
             self.call(name, **a)
             target = (
                 self.primary
-                if name in ("read_files", "propose_text_edit")
+                if name
+                in (
+                    "read_files",
+                    "propose_text_edit",
+                    "computer_utilities",
+                    "computer_execute",
+                )
                 else self.companion
             )
             self.assertEqual(target.calls[-1], dict(name=name, arguments=a))

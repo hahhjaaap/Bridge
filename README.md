@@ -1,6 +1,6 @@
 # Universal Desktop Bridge (UDB)
 
-**Windows-first MCP bridge for ChatGPT and other supported MCP clients.** UDB provides one Python package, one `udb` CLI and **61 public tools** for guarded local computer work. Its source of truth is `src/udb/`; the root-level `bridge.py` and `udb_*.py` files are compatibility launchers, not separate implementations.
+**Windows-first MCP bridge for ChatGPT and other supported MCP clients.** UDB provides one Python package, one `udb` CLI and **59 public tools** for guarded local computer work. Its source of truth is `src/udb/`; the root-level `bridge.py` and `udb_*.py` files are compatibility launchers, not separate implementations.
 
 **Tiếng Việt:** UDB kết nối trợ lý AI với máy tính Windows theo quyền do chủ máy cấp. Hỗ trợ thao tác tệp, terminal, ứng dụng, trình duyệt riêng biệt và rà soát hóa đơn Excel. **Không tự cấp quyền, không tự kê khai thuế, không tự sửa dữ liệu kế toán gốc.**
 
@@ -92,7 +92,7 @@ In **Máy tính**, choose **Tôi đăng nhập** to use UDB's own browser window
 
 For native desktop control, UDB yields to recent user input. **Ctrl+Alt+Shift+Backspace** or the manager's pause button latches a local pause; only a local resume clears it. The manager reports when the shortcut could not be registered. This is cooperative yielding, not exclusive input ownership or cancellation of external commands already running.
 
-The new `computer_utilities` tool provides text clipboard read/write with version checks, UDB toast notifications, and Start Menu app discovery/launch by exact name or app ID. Existing `udb --access computer` owner activation is required. See [Windows workflows](docs/windows-workflows.md) for limits and examples.
+The unified `computer_desktop` tool also provides text clipboard read/write with version checks, UDB notifications, and Start Menu app discovery/launch. Its UIA actions can read text, set a checkbox state, select an item, expand/collapse and scroll an item into view. `computer_process(action="start")` launches an owned job; list/read/stop use the same tool. Legacy `computer_utilities` and `computer_execute` calls remain supported. Existing `udb --access computer` activation is required. See [Windows control tools](docs/windows-control-tools.md) for the consolidated interfaces and examples.
 
 ## Visible tab in an existing Chrome window (owner computer access)
 
