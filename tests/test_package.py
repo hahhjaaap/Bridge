@@ -36,7 +36,7 @@ def test_single_version_and_generated_registry(tmp_path):
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
     names = {t["name"] for t in data["tools"]}
-    assert len(names) == data["tool_count"] == 61
+    assert len(names) == data["tool_count"] == 59
     assert data["backend_count"] == data["core_count"] + data["companion_count"] == 67
     assert {
         "virtual_pointer",
@@ -277,7 +277,7 @@ def test_real_source_mcp_without_installed_core_or_owner_access(tmp_path):
         p.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
         p.stdin.flush()
         listing = rpc("tools/list", {})
-        assert len(listing["tools"]) == 61
+        assert len(listing["tools"]) == 59
         status = rpc("tools/call", dict(name="bridge_status", arguments={}))
         assert not status.get("isError"), status
         assert status["_meta"]["udb"]["version"] == __version__

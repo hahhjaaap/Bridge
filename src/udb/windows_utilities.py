@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .core import PolicyError
 from .desktop_control import InputControl
+from .windows_actions import UTILITY_ACTIONS
 from .windows_paths import system_executable
 
 MAX_CLIPBOARD = 32768
@@ -87,13 +88,7 @@ class Utilities:
         self.control = control
 
     def dispatch(self, action, text="", title="UDB", name="", expected_version=""):
-        if action not in {
-            "clipboard_get",
-            "clipboard_set",
-            "notify",
-            "apps",
-            "launch_app",
-        }:
+        if action not in UTILITY_ACTIONS:
             raise PolicyError("Unsupported Windows utility")
         for value, limit in (
             (text, MAX_CLIPBOARD),

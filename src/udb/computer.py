@@ -6,6 +6,7 @@ from .computer_jobs import Jobs
 from .concurrency import MAX_CONCURRENT
 from .core import PolicyError
 from .resources import require_capacity, require_light_capacity
+from .windows_actions import READ_ACTIONS
 
 
 def status_report(agent, processes=None, *, worker_ready=True):
@@ -63,7 +64,7 @@ class Computer:
                 args.get("offset", 0),
             )
         if mode == "files" or (
-            mode == "desktop" and args.get("action") in ("list", "snapshot")
+            mode == "desktop" and args.get("action") in READ_ACTIONS
         ):
             require_light_capacity(resource)
         else:
