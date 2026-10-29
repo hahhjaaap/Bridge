@@ -21,7 +21,7 @@ from udb_unified import UnifiedProxy
 
 def check_atomic_create_and_copy() -> None:
     with tempfile.TemporaryDirectory(prefix="udb-opt-files-") as root:
-        folder = Path(root)
+        folder = Path(root).resolve()
         files = ScopedFiles(root)
         src = folder / "source.txt"
         src.write_text("keep-source", encoding="utf-8")

@@ -83,12 +83,17 @@ class ManagerRefreshMixin:
         is_paused = paused(self.agent)
         sessions = hs.get("sessions", [])
         handed_off = any(x.get("presentation") == "visible" for x in sessions)
+        closing = any(x.get("closing") for x in sessions)
         ready = hs.get("worker_ready") is True
         enabled = hs.get("enabled") is True
         if is_paused:
             tone, state = "paused", "Đã tạm dừng"
             title = "Điều khiển Windows đang tạm dừng"
             hint = "Bạn có thể tiếp tục bất cứ lúc nào. Các phiên nền vẫn làm việc theo quyền đã cấp."
+        elif closing:
+            tone, state = "neutral", "Đang đóng phiên"
+            title = "UDB đang thu dọn phiên riêng"
+            hint = "Phiên đang đóng sẽ không nhận thêm thao tác. Nếu chưa đóng xong, bạn có thể bấm Tắt phiên nền để thử thu dọn lại."
         elif handed_off:
             tone, state = "owner", "Bạn điều khiển"
             title = "Browser đang được nhường cho bạn"
@@ -130,9 +135,11 @@ class ManagerRefreshMixin:
             and not any(x["kind"] == "browser" for x in sessions)
         )
         self.browser_login_button.setEnabled(
-            ready and enabled and capacity and not handed_off
+            ready and enabled and capacity and not handed_off and not closing
         )
-        self.browser_background_button.setEnabled(ready and enabled and handed_off)
+        self.browser_background_button.setEnabled(
+            ready and enabled and capacity and handed_off and not closing
+        )
         self.workspace_start_button.setEnabled(
             ready
             and enabled
@@ -163,6 +170,7 @@ class ManagerRefreshMixin:
                 x.get("presentation"),
                 x.get("tabs"),
                 x.get("task", ""),
+                x.get("closing", False),
             )
             for x in sessions
         )
@@ -174,7 +182,9 @@ class ManagerRefreshMixin:
                 item = QTreeWidgetItem(
                     [
                         "Browser riêng" if browser else "Không gian ghi chú",
-                        "Bạn điều khiển"
+                        "Đang đóng"
+                        if session.get("closing")
+                        else "Bạn điều khiển"
                         if session.get("presentation") == "visible"
                         else "Chạy nền",
                         str(session.get("tabs", 0)) if browser else "—",

@@ -24,6 +24,38 @@ _STARTUP_TIMEOUT = 20
 _ENDPOINT_TIMEOUT = 15
 
 
+def _browser_endpoint(endpoint, process, timeout):
+    """Chrome can publish the file before releasing its Windows write lock."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not process.alive():
+            raise PolicyError("Private browser exited during startup")
+        try:
+            with endpoint.open("rb") as stream:
+                raw = stream.read(4097)
+        except (FileNotFoundError, PermissionError):
+            time.sleep(0.05)
+            continue
+        try:
+            if len(raw) > 4096:
+                raise ValueError("oversized endpoint")
+            lines = raw.decode("ascii").splitlines()
+            if len(lines) < 2 or not lines[1]:
+                time.sleep(0.05)
+                continue
+            port, path = lines[:2]
+            if (
+                not port.isdigit()
+                or not path.startswith("/devtools/browser/")
+                or not 1 <= int(port) <= 65535
+            ):
+                raise ValueError("invalid endpoint")
+        except (ValueError, UnicodeError) as exc:
+            raise PolicyError("Invalid private browser endpoint") from exc
+        return port, path
+    raise PolicyError("Private browser startup timed out")
+
+
 def validate_url(value):
     if value == "about:blank":
         return value
@@ -258,21 +290,7 @@ class Browser:
                 self.folder,
                 LIMITS["browser_memory_mib"],
             )
-            endpoint = self.folder / "DevToolsActivePort"
-            deadline = time.monotonic() + _ENDPOINT_TIMEOUT
-            while not endpoint.exists():
-                if not self.proc.alive():
-                    raise PolicyError("Private browser exited during startup")
-                if time.monotonic() > deadline:
-                    raise PolicyError("Private browser startup timed out")
-                time.sleep(0.05)
-            port, path, *_ = endpoint.read_text("ascii").splitlines()
-            if (
-                not port.isdigit()
-                or not path.startswith("/devtools/browser/")
-                or not 1 <= int(port) <= 65535
-            ):
-                raise PolicyError("Invalid private browser endpoint")
+            port, path = _browser_endpoint(endpoint, self.proc, _ENDPOINT_TIMEOUT)
             from websocket import create_connection
 
             self.ws = create_connection(

@@ -29,14 +29,22 @@ jobs:
       - run: python tools/check_import_boundaries.py
       - name: Run regression tests
         if: runner.os != 'Linux'
-        run: python -m pytest
+        run: python -m pytest --junitxml="${{ runner.temp }}/udb-tests.xml"
       - name: Run Linux regressions with a session bus
         if: runner.os == 'Linux'
         # Chrome needs a live session bus, even with headless rendering.
-        run: dbus-run-session -- python -m pytest
+        run: dbus-run-session -- python -m pytest --junitxml="${{ runner.temp }}/udb-tests.xml"
+      - name: Upload regression scenario report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenarios-${{ matrix.os }}-${{ matrix.python }}
+          path: ${{ runner.temp }}/udb-tests.xml
+          retention-days: 3
       - name: Check native Windows browser and utility APIs
         if: runner.os == 'Windows'
-        run: python tools/check_windows_workflows.py --pointer-preview "${{ runner.temp }}/udb-ui/native-pointer.png"
+        run: python tools/check_windows_workflows.py --visible-browser --host-scenario --pointer-preview "${{ runner.temp }}/udb-ui/native-pointer.png"
       - name: Upload native pointer preview
         if: runner.os == 'Windows'
         continue-on-error: true

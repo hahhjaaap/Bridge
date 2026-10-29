@@ -244,4 +244,9 @@ class ManagerHostMixin:
     def stop_host_local(self):
         # Local revocation is immediate for new commands. The monitor closes
         # only jobs owned by this engine, even if an action is in flight.
-        self.host_enabled.setChecked(False)
+        if self.host_enabled.isChecked():
+            self.host_enabled.setChecked(False)
+        else:
+            from .host_client import command
+
+            self.run_background(lambda: command(self.agent, "stop_all"))

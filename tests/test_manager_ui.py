@@ -230,3 +230,76 @@ def test_pending_payload_updates_preserve_the_selected_request(manager):
     window._refresh_requests()
     assert window.requests.currentItem().data(0, Qt.ItemDataRole.UserRole) == first
     assert window.pending_title.text() == "changed.py"
+
+
+def test_closing_session_is_visible_and_does_not_offer_new_browser_actions(manager):
+    window, host = manager
+    host["sessions"] = [
+        dict(
+            session_id="a" * 32,
+            kind="browser",
+            tabs=1,
+            presentation="visible",
+            task="fixture",
+            closing=True,
+        )
+    ]
+    window._refresh_host()
+    assert "Đang đóng" in window.desktop_state_pill.text()
+    assert window.host_sessions.topLevelItem(0).text(1) == "Đang đóng"
+    assert not window.browser_login_button.isEnabled()
+    assert not window.browser_background_button.isEnabled()
+
+
+def test_return_button_observes_resource_admission_like_the_host_service(manager):
+    window, host = manager
+    host["sessions"] = [
+        dict(
+            session_id="a" * 32,
+            kind="browser",
+            tabs=1,
+            presentation="visible",
+            task="fixture",
+        )
+    ]
+    host["resources"]["admission_ready"] = False
+    window._refresh_host()
+    assert not window.browser_background_button.isEnabled()
+
+
+def test_stop_button_retries_cleanup_when_background_mode_is_already_disabled(
+    manager, monkeypatch
+):
+    window, host = manager
+    host["enabled"] = False
+    host["sessions"] = [
+        dict(session_id="a" * 32, kind="browser", tabs=0, task="fixture", closing=True)
+    ]
+    window._refresh_host()
+    calls = []
+    monkeypatch.setattr(window, "run_background", lambda fn: fn())
+    monkeypatch.setattr("udb.host_client.command", lambda agent, op: calls.append(op))
+    assert window.host_stop_button.isEnabled()
+    window.stop_host_local()
+    assert calls == ["stop_all"]
+
+
+def test_failed_window_close_explains_cleanup_and_allows_retry(manager, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window, _ = manager
+    close = window.controller.close
+    failures, warnings = [1], []
+
+    def flaky():
+        if failures[0]:
+            failures[0] -= 1
+            raise OSError("Simulated cleanup failure")
+        close()
+
+    monkeypatch.setattr(window.controller, "close", flaky)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    assert window.close() is False
+    assert window.isVisible() and not window._closing and window.timer.isActive()
+    assert warnings == ["Simulated cleanup failure"]
+    assert window.close() is True

@@ -174,6 +174,10 @@ class Jobs:
             raise PolicyError("Provide an existing absolute working directory")
         reject_links(folder)
         with self.lock:
+            if self.done.is_set():
+                raise PolicyError(
+                    "Computer job manager is closed; no process was started"
+                )
             if any(r["status"] == "cleanup_failed" for r in self.rows.values()):
                 raise PolicyError(
                     "A previous owned Job could not be closed; stop/restart the agent before new commands"
@@ -231,10 +235,13 @@ class Jobs:
                 active = [r for r in self.rows.values() if r["status"] == "running"]
                 if not active:
                     continue
-                token = self.grant_loader()
+                try:
+                    token = self.grant_loader()
+                except Exception:
+                    token = None
                 for row in active:
                     try:
-                        if token != row["grant"]:
+                        if token is None or token != row["grant"]:
                             self._finish(row, "revoked")
                         elif time.monotonic() > row["until"]:
                             self._finish(row, "timed_out")
@@ -262,7 +269,7 @@ class Jobs:
                 )
             row = self.rows[job_id]
             if action == "stop":
-                if row["status"] == "running":
+                if row["status"] in ("running", "cleanup_failed"):
                     self._finish(row, "stopped")
                 return dict(job_id=job_id, status=row["status"])
             if (
@@ -294,3 +301,12 @@ class Jobs:
             for row in self.rows.values():
                 if row["status"] in ("running", "cleanup_failed"):
                     self._finish(row, "agent_stopped")
+            failed = [
+                jid
+                for jid, row in self.rows.items()
+                if row["status"] == "cleanup_failed"
+            ]
+        if failed:
+            raise PolicyError(
+                "Owned job cleanup incomplete; retry close: " + ", ".join(failed)
+            )

@@ -450,13 +450,33 @@ class DesktopController:
 
     def close(self):
         self.closed.set()
+        failures = []
         if self.host_service is not None:
-            self.host_service.close()
-            self.host_service = None
+            try:
+                self.host_service.close()
+            except Exception:
+                failures.append("host sessions")
+            else:
+                self.host_service = None
         from .desktop_vm import close_owned
 
-        close_owned(self.agent)
+        try:
+            close_owned(self.agent)
+        except Exception:
+            failures.append("Sandbox")
         for name in list(self.children):
-            self.stop_process(name)
-        for handle in self.handles.values():
-            handle.close()
+            try:
+                self.stop_process(name)
+            except Exception:
+                failures.append(name)
+        for name, handle in list(self.handles.items()):
+            try:
+                handle.close()
+            except Exception:
+                failures.append(name + " log")
+            else:
+                self.handles.pop(name, None)
+        if failures:
+            raise PolicyError(
+                "Cleanup incomplete; retry closing: " + ", ".join(failures)
+            )

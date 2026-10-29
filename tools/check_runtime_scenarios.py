@@ -34,7 +34,13 @@ def browser_fixture():
                 deadline = time.monotonic() + 75
                 while not ready.exists():
                     if process.poll() is not None or time.monotonic() > deadline:
-                        raise RuntimeError("Disposable browser fixture did not start")
+                        details = (home / "worker.log").read_text(
+                            encoding="utf-8", errors="replace"
+                        )[-6000:]
+                        raise RuntimeError(
+                            "Disposable browser fixture did not start "
+                            f"(exit={process.poll()}):\n{details}"
+                        )
                     time.sleep(0.1)
                 issued = json.loads(ready.read_text())
                 agent = Agent(home)
