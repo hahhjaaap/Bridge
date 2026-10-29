@@ -9,10 +9,12 @@ from PySide6.QtWidgets import (
     QDialog,
     QHeaderView,
     QMenu,
+    QScrollArea,
     QSystemTrayIcon,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from .activity_presenter import ActivityFeed, describe, event_state, summary
@@ -41,7 +43,7 @@ class QuickControls(QDialog):
         self.setWindowTitle("UDB · Điều khiển nhanh")
         self.setWindowIcon(icon("brand", ACCENT, 32))
         self.resize(480, 670)
-        self.setMinimumSize(430, 620)
+        self.setMinimumSize(430, 520)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(12)
@@ -84,10 +86,20 @@ class QuickControls(QDialog):
         box.addLayout(row(self.handoff_button, self.stop_button))
         lay.addWidget(card)
 
+        activity_scroll = QScrollArea()
+        activity_scroll.setWidgetResizable(True)
+        activity_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        activity_scroll.setMinimumHeight(40)
+        activity_body = QWidget()
+        activity_box = QVBoxLayout(activity_body)
+        activity_box.setContentsMargins(0, 0, 8, 0)
+        activity_box.setSpacing(10)
         self.activity_title = label("Chưa có hoạt động", "H2", True)
         self.activity_detail = label("", "Muted", True)
-        lay.addWidget(self.activity_title)
-        lay.addWidget(self.activity_detail)
+        activity_box.addWidget(self.activity_title)
+        activity_box.addWidget(self.activity_detail)
         self.history = QTreeWidget()
         self.history.setHeaderLabels(["Hoạt động gần đây", "Kết quả"])
         self.history.setRootIsDecorated(False)
@@ -98,21 +110,26 @@ class QuickControls(QDialog):
         )
         self.history.setMinimumHeight(105)
         self.history.setMaximumHeight(170)
-        lay.addWidget(self.history, 1)
+        activity_box.addWidget(self.history, 1)
         self.activity_note = label(
             "Nhật ký lời gọi công cụ; không phải tiến độ toàn bộ công việc.",
             "Fine",
             True,
         )
-        lay.addWidget(self.activity_note)
+        activity_box.addWidget(self.activity_note)
+        activity_box.addStretch()
+        activity_scroll.setWidget(activity_body)
+        lay.addWidget(activity_scroll, 1)
         self.visibility_hint = label(
             "Đóng bảng này để trở về cửa sổ UDB.", "Fine", True
         )
         lay.addWidget(self.visibility_hint)
-        advanced = MotionButton("Mở UDB đầy đủ", "external")
-        advanced.clicked.connect(lambda: self.show_manager(5))
-        lay.addWidget(advanced)
+        self.expand_button = MotionButton("Mở UDB đầy đủ", "external")
+        self.expand_button.clicked.connect(lambda: self.show_manager(5))
+        lay.addWidget(self.expand_button)
         self.sync()
+        available = self.screen().availableGeometry()
+        self.resize(min(480, available.width() - 24), min(670, available.height() - 48))
 
     def install_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():

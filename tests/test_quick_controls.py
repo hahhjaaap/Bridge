@@ -49,7 +49,20 @@ def quick(tmp_path, monkeypatch):
 
 
 def test_quick_pause_is_local_and_remains_available_during_other_work(quick):
+    from PySide6.QtWidgets import QApplication
+
     win, panel, _ = quick
+    panel.resize(480, 560)
+    QApplication.processEvents()
+    assert panel.height() <= 560
+    for button in (
+        panel.pause_button,
+        panel.resume_button,
+        panel.handoff_button,
+        panel.stop_button,
+        panel.expand_button,
+    ):
+        assert panel.rect().contains(button.mapTo(panel, button.rect().center()))
     win.busy = True
     panel.sync()
     assert not panel.handoff_button.isEnabled()

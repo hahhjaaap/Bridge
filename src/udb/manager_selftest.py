@@ -238,6 +238,20 @@ def self_test(preview_dir=None):
         ):
             assert button.isVisible()
             assert quick.rect().contains(button.mapTo(quick, button.rect().center()))
+        quick.resize(480, 560)
+        app.processEvents()
+        assert quick.height() <= 560
+        for button in (
+            quick.pause_button,
+            quick.resume_button,
+            quick.handoff_button,
+            quick.stop_button,
+            quick.expand_button,
+        ):
+            assert quick.rect().contains(button.mapTo(quick, button.rect().center()))
+        if captures:
+            assert quick.grab().save(str(captures / "quick-small.png"))
+        quick.resize(480, 700)
         quick.pause_button.click()
         assert quick.resume_button.isEnabled() and paused(ctl.agent)
         if captures:
