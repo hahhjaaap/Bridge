@@ -157,10 +157,12 @@ class Desktop:
     def open_chrome_tab(self, url):
         """Ask an already-running Chrome to open a visible tab.
 
-        This is explicitly owner-granted computer access, NOT an owned CDP
-        session. No existing tab is inspected, adopted, or controlled.
+        Owner-granted computer access; NOT an owned CDP session. Only tab
+        UIA runtime IDs are compared before/after to identify the new tab.
+        Existing tab names, URLs and content are not read.
         """
         from .chrome_aura import launch_target
+        from .chrome_tab_identity import observe_tabs, register_new_tab
         from .host_browser import validate_url
 
         self.interactive()
@@ -173,6 +175,7 @@ class Desktop:
             )
         foreground = self.gui.GetForegroundWindow()
         chosen = next((row for row in before if row[0] == foreground), before[0])
+        previous_tabs = observe_tabs(chosen[0])
         try:
             result = subprocess.run(
                 [chosen[2], "--new-tab", chrome_target],
@@ -194,6 +197,7 @@ class Desktop:
                 "Chrome rejected the new-tab request; inspect before retrying"
             )
         after = self._chrome_windows()
+        native_marker = register_new_tab(chosen[0], chosen[1], previous_tabs)
         return dict(
             requested=True,
             chrome_pid=chosen[1],
@@ -203,6 +207,7 @@ class Desktop:
             and {row[0] for row in before} == {row[0] for row in after},
             branding_requested=branding_requested,
             branding_verified=False,
+            native_tab_marker_verified=native_marker,
             dom_attached=False,
             user_input_injected=False,
         )

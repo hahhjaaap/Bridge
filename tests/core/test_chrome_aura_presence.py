@@ -94,7 +94,7 @@ def test_virtual_pointer_presence_uses_virtual_screen_not_system_cursor(monkeypa
         setattr(pointer, "position", [x, y]),
     )
     assert pointer.show_idle() == {
-        "visible": True,
+        "visibility": "selected_udb_chrome_tab_only",
         "position": [1776, 934],
         "independent": True,
     }

@@ -10,6 +10,15 @@ from udb.core import PolicyError
 CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 
 
+@pytest.fixture(autouse=True)
+def no_live_uia_in_unit_tests(monkeypatch):
+    monkeypatch.setattr("udb.chrome_tab_identity.observe_tabs", lambda hwnd: [])
+    monkeypatch.setattr(
+        "udb.chrome_tab_identity.register_new_tab",
+        lambda hwnd, pid, previous: False,
+    )
+
+
 def desktop(windows=None, foreground=101):
     d = Desktop.__new__(Desktop)
     d.interactive = lambda: None

@@ -57,3 +57,24 @@ computer access. Windows CI also runs that self-test from the frozen executable
 and uploads preview images. Tray registration is checked when the test desktop
 provides a tray; manual review is still needed for the user's Explorer layout,
 notification-area overflow and display scaling.
+
+## Native Chrome tab identity
+
+`computer_desktop(action="open_chrome_tab")` compares Windows UI Automation tab
+runtime IDs before and after requesting a tab in existing Chrome. Only one
+unambiguous new tab is registered; `native_tab_marker_verified` reports whether
+registration succeeded. It does not inspect tab titles, URLs, page content or
+browser profiles, and needs no extension or CDP attachment.
+
+The compact mint AI badge appears on registered tabs in the foreground window.
+The independent AI pointer appears only when exactly one tab is selected and
+that tab is registered. It hides on ordinary tabs, other applications and
+ambiguous split views. The overlay is click-through and does not activate a
+window or move the system mouse. The normal Windows control tools remain
+available regardless of overlay visibility.
+
+At most eight runtime identities are retained locally. Restarting Chrome,
+transferring a tab, unavailable UIA or unsupported tab layouts can prevent
+identification; reopen the tab through UDB to register it again. The badge is an
+OS overlay, not a favicon. Native CI tests use an isolated synthetic tab strip;
+Chrome-version-specific appearance still needs review on the user's machine.

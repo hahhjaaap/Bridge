@@ -105,7 +105,9 @@ def main():
                     target=lambda: painted.put(pointer.overlay.stdout.readline(512)),
                     daemon=True,
                 ).start()
-                assert painted.get(timeout=10).strip() == b"painted"
+                # No registered foreground Chrome tab exists in this synthetic check.
+                assert painted.get(timeout=10).strip() == b"hidden"
+                report["native_pointer_unregistered_window_hidden"] = "PASS"
                 assert pointer.cursor() == cursor
                 assert pointer.u.GetForegroundWindow() == foreground
                 report["native_pointer_no_focus_or_mouse_takeover"] = "PASS"
