@@ -1,6 +1,5 @@
 """Regression tests for the desktop manager refresh extraction."""
 
-
 import pytest
 
 

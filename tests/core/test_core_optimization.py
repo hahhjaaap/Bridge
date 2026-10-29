@@ -37,9 +37,7 @@ def test_queue_indexes_exist_on_existing_schema(tmp_path):
     with agent.connect() as db:
         indexes = {
             row["name"]
-            for row in db.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-            )
+            for row in db.execute("SELECT name FROM sqlite_master WHERE type='index'")
         }
         assert "idx_requests_status_created" in indexes
         assert "idx_jobs_status" in indexes
@@ -93,7 +91,9 @@ def test_approval_diff_truncation_is_explicit(tmp_path):
     previous = "".join(f"before-{i:04d} abcdefghijklmnop\n" for i in range(900))
     new = "".join(f"after-{i:04d} abcdefghijklmnop\n" for i in range(900))
     (root / "invoice.py").write_text(previous, encoding="utf-8")
-    response = agent.propose_write("demo", "invoice.py", new, digest((root / "invoice.py").read_bytes()))
+    response = agent.propose_write(
+        "demo", "invoice.py", new, digest((root / "invoice.py").read_bytes())
+    )
     assert "Diff preview truncated" in response["diff"]
     assert len(response["diff"]) <= 16000
 

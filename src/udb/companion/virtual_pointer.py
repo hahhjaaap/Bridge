@@ -242,9 +242,18 @@ class VirtualPointer:
         height = self.u.GetSystemMetrics(79)  # SM_CYVIRTUALSCREEN
         if width <= 0 or height <= 0:
             raise RuntimeError("Virtual screen dimensions unavailable")
-        x = left + max(0, min(width - 1, round(width * 0.68)))
-        y = top + max(0, min(height - 1, round(height * 0.68)))
+        try:
+            import win32api
+
+            left, top, right, bottom = win32api.GetMonitorInfo(
+                win32api.MonitorFromPoint((0, 0), 1)
+            )["Work"]
+        except ImportError:
+            right, bottom = left + width, top + height
+        x, y = max(left, right - 144), max(top, bottom - 66)
         self.show(x, y)
+        if getattr(self, "overlay", None):
+            self.overlay.stdin.write(b"ready\n")
         return dict(
             visibility="selected_udb_chrome_tab_only",
             position=self.position,

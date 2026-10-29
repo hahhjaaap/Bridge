@@ -108,11 +108,15 @@ def test_open_tab_failed_launch_requires_inspection_before_retry(monkeypatch):
 def test_open_tab_is_not_allowed_inside_desktop_batch():
     d = desktop()
     with pytest.raises(PolicyError, match="Invalid/nested batch step"):
-        d.batch("some-window", [{"action": "open_chrome_tab", "text": "https://example.org"}])
+        d.batch(
+            "some-window",
+            [{"action": "open_chrome_tab", "text": "https://example.org"}],
+        )
 
 
 def test_open_tab_is_a_recognized_desktop_action():
     Desktop.validate_options("open_chrome_tab")
+
 
 def test_open_tab_uses_opted_in_chrome_aura_launcher(monkeypatch, tmp_path):
     from udb.chrome_aura import EXTENSION_ID
@@ -134,7 +138,5 @@ def test_open_tab_uses_opted_in_chrome_aura_launcher(monkeypatch, tmp_path):
     assert result["branding_verified"] is False
     assert calls[0][0] == CHROME
     assert calls[0][1] == "--new-tab"
-    assert calls[0][2].startswith(
-        f"chrome-extension://{EXTENSION_ID}/launch.html#"
-    )
+    assert calls[0][2].startswith(f"chrome-extension://{EXTENSION_ID}/launch.html#")
     assert "https%3A%2F%2Fexample.org%2Fai%3Ftest%3D1" in calls[0][2]

@@ -7,6 +7,7 @@ import hashlib
 import heapq
 import os
 import re
+import stat
 import tempfile
 import time
 from pathlib import Path
@@ -34,7 +35,9 @@ def is_reparse(path: Path) -> bool:
         info = path.lstat()
     except FileNotFoundError:
         return False
-    return path.is_symlink() or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & 0x400
+    )
 
 
 class ScopedFiles:
@@ -88,6 +91,7 @@ class ScopedFiles:
         if not base.is_dir():
             raise NotADirectoryError("Target is not a directory")
         count = max(1, min(int(limit), 500))
+
         # Stream directory entries and keep only the first 'count' safe names.
         # Sorting all entries can allocate unbounded memory in a large folder.
         def allowed_entries():
@@ -283,9 +287,12 @@ class ScopedFiles:
                         if "\n" in text or "\r" in text:
                             # Multiline queries still need the original whole-text
                             # semantics (including matches across line breaks).
-                            found = folded_text in p.read_text(
-                                encoding="utf-8", errors="replace"
-                            ).casefold()
+                            found = (
+                                folded_text
+                                in p.read_text(
+                                    encoding="utf-8", errors="replace"
+                                ).casefold()
+                            )
                         else:
                             # For ordinary literal searches, stop at the first
                             # matching line instead of copying every file.

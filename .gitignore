@@ -50,3 +50,6 @@ secrets*.json
 *.safetensors
 *.pth
 *.pt
+
+# Generated Qt/native UI previews
+ui-previews/

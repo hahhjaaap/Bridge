@@ -98,5 +98,33 @@ async function send(message, sender) {
   assert(calls.some(c => c[0] === "ungroup"));
   await mark(7);
   assert.equal(state.get("udb:aura:7"), true);
+  // A slow decoration must finish before unmark removes it, otherwise its
+  // late injection can leave an AI badge on an already unmarked page.
+  const execute = chrome.scripting.executeScript;
+  let releaseInjection;
+  let injectionStarted;
+  const started = new Promise(resolve => {injectionStarted = resolve;});
+  chrome.scripting.executeScript = async options => {
+    calls.push(["inject", options]);
+    if (options.files) {
+      injectionStarted();
+      await new Promise(resolve => {releaseInjection = resolve;});
+    }
+  };
+  const marking = mark(7);
+  await started;
+  const unmarking = unmark(7);
+  releaseInjection();
+  await Promise.all([marking, unmarking]);
+  assert.equal(state.has("udb:aura:7"), false);
+  assert.equal(typeof calls.filter(c => c[0] === "inject").at(-1)[1].func, "function");
+  chrome.scripting.executeScript = execute;
+  const get = chrome.tabs.get;
+  chrome.tabs.get = async () => {throw new Error("Tab closed");};
+  await assert.rejects(mark(7), /Tab closed/);
+  chrome.tabs.get = get;
+  await mark(7);
+  await unmark(7);
+  assert.equal(state.has("udb:aura:7"), false);
   console.log("Chrome Aura background behavior: PASS");
 })().catch(error => {console.error(error); process.exitCode = 1;});

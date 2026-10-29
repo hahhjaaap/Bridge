@@ -235,7 +235,15 @@ TOOLS.extend(
             dict(
                 COMMON,
                 action=dict(
-                    type="string", enum=["inspect", "read", "write", "edit_cells", "audit_invoices", "export_audit"]
+                    type="string",
+                    enum=[
+                        "inspect",
+                        "read",
+                        "write",
+                        "edit_cells",
+                        "audit_invoices",
+                        "export_audit",
+                    ],
                 ),
                 sheet=S,
                 range=S,

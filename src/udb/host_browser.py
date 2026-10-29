@@ -10,23 +10,50 @@ import ipaddress
 import json
 import os
 import shutil
-import subprocess
-import threading
 import time
-import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .browser_dom import CLICK_POINT_SCRIPT, LOCATOR_SCRIPT, SELECT_OPTION_SCRIPT
+from .browser_identity import identity_script
 from .core import PolicyError, reject_links
+from .owned_process import OwnedProcess as OwnedProcess
 from .resources import LIMITS
 
+_STARTUP_TIMEOUT = 20
+_ENDPOINT_TIMEOUT = 15
 
-def _job_locked(method):
-    def wrapped(self, *args, **kwargs):
-        with self._job_lock:
-            return method(self, *args, **kwargs)
 
-    return wrapped
+def _browser_endpoint(endpoint, process, timeout):
+    """Chrome can publish the file before releasing its Windows write lock."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not process.alive():
+            raise PolicyError("Private browser exited during startup")
+        try:
+            with endpoint.open("rb") as stream:
+                raw = stream.read(4097)
+        except (FileNotFoundError, PermissionError):
+            time.sleep(0.05)
+            continue
+        try:
+            if len(raw) > 4096:
+                raise ValueError("oversized endpoint")
+            lines = raw.decode("ascii").splitlines()
+            if len(lines) < 2 or not lines[1]:
+                time.sleep(0.05)
+                continue
+            port, path = lines[:2]
+            if (
+                not port.isdigit()
+                or not path.startswith("/devtools/browser/")
+                or not 1 <= int(port) <= 65535
+            ):
+                raise ValueError("invalid endpoint")
+        except (ValueError, UnicodeError) as exc:
+            raise PolicyError("Invalid private browser endpoint") from exc
+        return port, path
+    raise PolicyError("Private browser startup timed out")
 
 
 def validate_url(value):
@@ -47,9 +74,7 @@ def validate_url(value):
         raise PolicyError("Invalid URL") from exc
     if u.scheme not in ("https", "http") or not host or u.username or u.password:
         raise PolicyError("Only HTTP(S) pages without embedded credentials")
-    if host == "localhost" or host.endswith(
-        (".localhost", ".local", ".internal")
-    ):
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
         raise PolicyError("Local browser endpoints are private")
     try:
         address = ipaddress.ip_address(host)
@@ -60,13 +85,24 @@ def validate_url(value):
     return value
 
 
-
-
 _BROWSER_ROLES = frozenset(
     {
-        "button", "link", "textbox", "searchbox", "checkbox", "radio",
-        "combobox", "listbox", "option", "heading", "tab", "menuitem",
-        "switch", "slider", "spinbutton", "treeitem",
+        "button",
+        "link",
+        "textbox",
+        "searchbox",
+        "checkbox",
+        "radio",
+        "combobox",
+        "listbox",
+        "option",
+        "heading",
+        "tab",
+        "menuitem",
+        "switch",
+        "slider",
+        "spinbutton",
+        "treeitem",
     }
 )
 # Defense in depth for redirects and subresources. Direct navigation is also
@@ -90,21 +126,41 @@ _BLOCKED_URL_PATTERNS = tuple(
     + [f"*://172.{octet}.*/*" for octet in range(16, 32)]
 )
 _KEY_SPECIAL = {
-    "enter": ("Enter", "Enter", 13), "tab": ("Tab", "Tab", 9),
-    "escape": ("Escape", "Escape", 27), "esc": ("Escape", "Escape", 27),
-    "space": (" ", "Space", 32), "arrowdown": ("ArrowDown", "ArrowDown", 40),
-    "arrowup": ("ArrowUp", "ArrowUp", 38), "arrowleft": ("ArrowLeft", "ArrowLeft", 37),
-    "arrowright": ("ArrowRight", "ArrowRight", 39), "home": ("Home", "Home", 36),
-    "end": ("End", "End", 35), "pageup": ("PageUp", "PageUp", 33),
-    "pagedown": ("PageDown", "PageDown", 34), "backspace": ("Backspace", "Backspace", 8),
+    "enter": ("Enter", "Enter", 13),
+    "tab": ("Tab", "Tab", 9),
+    "escape": ("Escape", "Escape", 27),
+    "esc": ("Escape", "Escape", 27),
+    "space": (" ", "Space", 32),
+    "arrowdown": ("ArrowDown", "ArrowDown", 40),
+    "arrowup": ("ArrowUp", "ArrowUp", 38),
+    "arrowleft": ("ArrowLeft", "ArrowLeft", 37),
+    "arrowright": ("ArrowRight", "ArrowRight", 39),
+    "home": ("Home", "Home", 36),
+    "end": ("End", "End", 35),
+    "pageup": ("PageUp", "PageUp", 33),
+    "pagedown": ("PageDown", "PageDown", 34),
+    "backspace": ("Backspace", "Backspace", 8),
     "delete": ("Delete", "Delete", 46),
 }
-_KEY_COMBOS = frozenset({
-    "CTRL+A", "CONTROL+A", "CTRL+ENTER", "CONTROL+ENTER", "SHIFT+TAB",
-    "CTRL+BACKSPACE", "CONTROL+BACKSPACE", "CTRL+ARROWLEFT", "CONTROL+ARROWLEFT",
-    "CTRL+ARROWRIGHT", "CONTROL+ARROWRIGHT", "CTRL+HOME", "CONTROL+HOME",
-    "CTRL+END", "CONTROL+END",
-})
+_KEY_COMBOS = frozenset(
+    {
+        "CTRL+A",
+        "CONTROL+A",
+        "CTRL+ENTER",
+        "CONTROL+ENTER",
+        "SHIFT+TAB",
+        "CTRL+BACKSPACE",
+        "CONTROL+BACKSPACE",
+        "CTRL+ARROWLEFT",
+        "CONTROL+ARROWLEFT",
+        "CTRL+ARROWRIGHT",
+        "CONTROL+ARROWRIGHT",
+        "CTRL+HOME",
+        "CONTROL+HOME",
+        "CTRL+END",
+        "CONTROL+END",
+    }
+)
 
 
 def validate_locator(selector="", role="", name="", exact=True):
@@ -132,7 +188,13 @@ def parse_key(value):
     if not isinstance(value, str) or not 1 <= len(value) <= 40:
         raise PolicyError("Provide a supported browser key")
     parts = value.split("+")
-    aliases = {"ctrl": "CTRL", "control": "CONTROL", "shift": "SHIFT", "alt": "ALT", "meta": "META"}
+    aliases = {
+        "ctrl": "CTRL",
+        "control": "CONTROL",
+        "shift": "SHIFT",
+        "alt": "ALT",
+        "meta": "META",
+    }
     modifiers = []
     for part in parts[:-1]:
         token = aliases.get(part.lower())
@@ -153,166 +215,10 @@ def parse_key(value):
     for modifier in modifiers:
         mask |= {"ALT": 1, "CTRL": 2, "CONTROL": 2, "META": 4, "SHIFT": 8}[modifier]
     key, code, vk = info
-    text = key if not modifiers and (len(final) == 1 or final.lower() == "space") else ""
+    text = (
+        key if not modifiers and (len(final) == 1 or final.lower() == "space") else ""
+    )
     return dict(key=key, code=code, vk=vk, modifiers=mask, text=text)
-
-
-class OwnedProcess:
-    """Windows Job Object: membership is captured at spawn, never trusted PIDs."""
-
-    def __init__(self, argv, cwd, memory_mib=0):
-        self._job_lock = threading.RLock()
-        import win32api
-        import win32con
-        import win32job
-        import win32process
-
-        self.job = win32job.CreateJobObject(None, "Local\\UDB-" + uuid.uuid4().hex)
-        self.handle = None
-        try:
-            info = win32job.QueryInformationJobObject(
-                self.job, win32job.JobObjectExtendedLimitInformation
-            )
-            info["BasicLimitInformation"]["LimitFlags"] = (
-                win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-                | win32job.JOB_OBJECT_LIMIT_ACTIVE_PROCESS
-            )
-            info["BasicLimitInformation"]["ActiveProcessLimit"] = (
-                LIMITS["max_browser_processes"] if memory_mib else 2
-            )
-            if memory_mib:
-                info["BasicLimitInformation"]["LimitFlags"] |= (
-                    win32job.JOB_OBJECT_LIMIT_JOB_MEMORY
-                )
-                info["JobMemoryLimit"] = memory_mib * 1048576
-            win32job.SetInformationJobObject(
-                self.job, win32job.JobObjectExtendedLimitInformation, info
-            )
-            if memory_mib:
-                # CPU hard cap applies to the entire owned browser process tree.
-                import ctypes
-                from ctypes import wintypes as w
-
-                class CpuRate(ctypes.Structure):
-                    _fields_ = [("flags", w.DWORD), ("rate", w.DWORD)]
-
-                cpu = CpuRate(1 | 4, 2500)  # ENABLE | HARD_CAP, 25% of machine CPU
-                k = ctypes.WinDLL("kernel32", use_last_error=True)
-                k.SetInformationJobObject.argtypes = [
-                    w.HANDLE,
-                    ctypes.c_int,
-                    ctypes.c_void_p,
-                    w.DWORD,
-                ]
-                if not k.SetInformationJobObject(
-                    int(self.job), 15, ctypes.byref(cpu), ctypes.sizeof(cpu)
-                ):
-                    raise OSError(
-                        ctypes.get_last_error(), "Browser CPU cap unavailable"
-                    )
-            flags = (
-                win32con.CREATE_SUSPENDED | win32con.CREATE_NO_WINDOW | 0x00004000
-            )  # BELOW_NORMAL_PRIORITY_CLASS
-            self.handle, thread, self.pid, _ = win32process.CreateProcess(
-                str(argv[0]),
-                subprocess.list2cmdline(list(map(str, argv))),
-                None,
-                None,
-                False,
-                flags,
-                None,
-                str(cwd),
-                win32process.STARTUPINFO(),
-            )
-            try:
-                win32job.AssignProcessToJobObject(self.job, self.handle)
-                win32process.ResumeThread(thread)
-            except BaseException:
-                win32api.TerminateProcess(self.handle, 1)
-                raise
-            finally:
-                thread.Close()
-        except BaseException:
-            self.close()
-            raise
-
-    @_job_locked
-    def alive(self):
-        if not self.handle:
-            return False
-        import win32process
-
-        return win32process.GetExitCodeProcess(self.handle) == 259
-
-    @_job_locked
-    def usage(self):
-        import win32job
-
-        if not self.job:
-            return dict(processes=0, peak_commit_mib=0)
-        data = win32job.QueryInformationJobObject(
-            self.job, win32job.JobObjectBasicAccountingInformation
-        )
-        memory = win32job.QueryInformationJobObject(
-            self.job, win32job.JobObjectExtendedLimitInformation
-        )
-        cpu_cap = None
-        if memory["JobMemoryLimit"]:
-            import ctypes
-            from ctypes import wintypes as w
-
-            class CpuRate(ctypes.Structure):
-                _fields_ = [("flags", w.DWORD), ("rate", w.DWORD)]
-
-            value = CpuRate()
-            k = ctypes.WinDLL("kernel32", use_last_error=True)
-            k.QueryInformationJobObject.argtypes = [
-                w.HANDLE,
-                ctypes.c_int,
-                ctypes.c_void_p,
-                w.DWORD,
-                ctypes.c_void_p,
-            ]
-            if (
-                k.QueryInformationJobObject(
-                    int(self.job), 15, ctypes.byref(value), ctypes.sizeof(value), None
-                )
-                and value.flags & 4
-            ):
-                cpu_cap = value.rate / 100
-        return dict(
-            processes=data["ActiveProcesses"],
-            peak_commit_mib=round(memory["PeakJobMemoryUsed"] / 1048576, 1),
-            memory_limit_mib=round(memory["JobMemoryLimit"] / 1048576),
-            cpu_cap_percent=cpu_cap,
-        )
-
-    @_job_locked
-    def owns_pid(self, pid):
-        import win32api
-        import win32job
-
-        try:
-            handle = win32api.OpenProcess(0x1000, False, pid)
-            try:
-                return bool(self.job and win32job.IsProcessInJob(handle, self.job))
-            finally:
-                handle.Close()
-        except Exception:
-            return False
-
-    @_job_locked
-    def close(self):
-        # Closing this private job terminates only members created by us.
-        if getattr(self, "job", None):
-            self.job.Close()
-            self.job = None
-        if getattr(self, "handle", None):
-            import win32event
-
-            win32event.WaitForSingleObject(self.handle, 3000)
-            self.handle.Close()
-            self.handle = None
 
 
 def find_browser():
@@ -338,23 +244,31 @@ def find_browser():
 
 
 class Browser:
-    def __init__(self, folder):
+    def __init__(self, folder, *, persistent=False, visible=False, reuse_profile=False):
+        self.persistent = persistent
+        self.visible = visible
         self.folder = Path(folder)
         reject_links(self.folder)
-        self.folder.mkdir(parents=True, exist_ok=False)
+        self.folder.mkdir(parents=True, exist_ok=persistent or reuse_profile)
+        for staged in self.folder.glob("udb-upload-*"):
+            reject_links(staged)
+            shutil.rmtree(staged)
         self.proc = None
         self.ws = None
         self.seq = 0
         self.tabs = {}
         self.frozen = False
         self.freeze_errors = 0
-        self.deadline = time.monotonic() + 20
+        self.deadline = time.monotonic() + _STARTUP_TIMEOUT
         try:
+            endpoint = self.folder / "DevToolsActivePort"
+            reject_links(endpoint)
+            endpoint.unlink(missing_ok=True)
             exe = find_browser()
             self.proc = OwnedProcess(
                 [
                     exe,
-                    "--headless=new",
+                    *([] if visible else ["--headless=new"]),
                     "--remote-debugging-port=0",
                     "--remote-debugging-address=127.0.0.1",
                     "--user-data-dir=" + str(self.folder),
@@ -376,21 +290,7 @@ class Browser:
                 self.folder,
                 LIMITS["browser_memory_mib"],
             )
-            endpoint = self.folder / "DevToolsActivePort"
-            deadline = time.monotonic() + 15
-            while not endpoint.exists():
-                if not self.proc.alive():
-                    raise PolicyError("Private browser exited during startup")
-                if time.monotonic() > deadline:
-                    raise PolicyError("Private browser startup timed out")
-                time.sleep(0.05)
-            port, path, *_ = endpoint.read_text("ascii").splitlines()
-            if (
-                not port.isdigit()
-                or not path.startswith("/devtools/browser/")
-                or not 1 <= int(port) <= 65535
-            ):
-                raise PolicyError("Invalid private browser endpoint")
+            port, path = _browser_endpoint(endpoint, self.proc, _ENDPOINT_TIMEOUT)
             from websocket import create_connection
 
             self.ws = create_connection(
@@ -459,6 +359,11 @@ class Browser:
         self.tabs[target] = sid
         try:
             self.call("Page.enable", session=sid)
+            self.call(
+                "Page.addScriptToEvaluateOnNewDocument",
+                dict(source=self.identity_script(), worldName="UDBIdentity"),
+                session=sid,
+            )
             self.call("Network.enable", session=sid)
             self.call(
                 "Network.setBlockedURLs",
@@ -518,7 +423,11 @@ class Browser:
         require_transition=False,
         expected_loader_id=None,
     ):
-        if not isinstance(timeout_ms, int) or isinstance(timeout_ms, bool) or not 100 <= timeout_ms <= 15000:
+        if (
+            not isinstance(timeout_ms, int)
+            or isinstance(timeout_ms, bool)
+            or not 100 <= timeout_ms <= 15000
+        ):
             raise PolicyError("Navigation timeout_ms must be 100..15000")
         deadline = time.monotonic() + timeout_ms / 1000
         transition_seen = not require_transition
@@ -556,8 +465,13 @@ class Browser:
                     tab, expression, timeout=max(0.2, min(1.0, remaining))
                 )
             except PolicyError as exc:
-                if self._is_transient_context_error(exc):
-                    transition_seen = True
+                if (
+                    self._is_transient_context_error(exc)
+                    or "browser operation timed out" in str(exc).lower()
+                ):
+                    transition_seen = (
+                        transition_seen or self._is_transient_context_error(exc)
+                    )
                     time.sleep(min(0.1, max(0, deadline - time.monotonic())))
                     continue
                 raise
@@ -601,7 +515,12 @@ class Browser:
             time.sleep(min(0.1, max(0, deadline - time.monotonic())))
 
     def _wait_for_click_navigation(
-        self, tab, previous_url, observe_ms=1000, timeout_ms=10000
+        self,
+        tab,
+        previous_url,
+        observe_ms=1000,
+        timeout_ms=10000,
+        previous_loader_id=None,
     ):
         if not isinstance(previous_url, str) or not previous_url:
             return dict(navigation_completed=False)
@@ -610,6 +529,7 @@ class Browser:
         # Runtime.evaluate may lose its reply while a click destroys the old
         # execution context. Observe navigation from the browser target instead.
         transitioned = False
+        next_loader_id = None
         while time.monotonic() < deadline:
             remaining = deadline - time.monotonic()
             try:
@@ -621,15 +541,36 @@ class Browser:
                 if "timed out" not in str(exc).lower():
                     raise
                 continue
-            target = next(
-                (t for t in targets if t.get("targetId") == tab), None
-            )
+            target = next((t for t in targets if t.get("targetId") == tab), None)
             if target is None:
                 raise PolicyError("Owned browser tab closed during click")
             current_url = str(target.get("url", ""))
             if current_url and current_url != previous_url:
                 transitioned = True
                 break
+            if previous_loader_id:
+                try:
+                    frame = (
+                        self.call(
+                            "Page.getFrameTree",
+                            session=self.sid(tab),
+                            timeout=max(0.2, min(0.5, deadline - time.monotonic())),
+                        )
+                        .get("frameTree", {})
+                        .get("frame", {})
+                    )
+                except PolicyError as exc:
+                    if (
+                        self._is_transient_context_error(exc)
+                        or "timed out" in str(exc).lower()
+                    ):
+                        continue
+                    raise
+                loader = frame.get("loaderId")
+                if loader and loader != previous_loader_id:
+                    next_loader_id = loader
+                    transitioned = True
+                    break
             time.sleep(min(0.05, max(0, deadline - time.monotonic())))
         if not transitioned:
             return dict(navigation_completed=False)
@@ -639,6 +580,7 @@ class Browser:
                 timeout_ms=timeout_ms,
                 previous_url=previous_url,
                 require_transition=True,
+                expected_loader_id=next_loader_id,
             )
         except PolicyError as exc:
             # The click already happened. Report an observed navigation timeout
@@ -707,6 +649,8 @@ class Browser:
                 tab_id=t["targetId"],
                 title=t.get("title", "")[:500],
                 url=self._safe_page_url(t.get("url", "")),
+                owner="UDB",
+                background=True,
             )
             for t in page_targets
             if t["targetId"] in self.tabs and self._safe_page_url(t.get("url", ""))
@@ -720,9 +664,8 @@ class Browser:
             "Target.createTarget", dict(url="about:blank", background=True)
         )["targetId"]
         self.attach(target)
-        if url != "about:blank":
-            self.navigate(target, url)
-        return dict(tab_id=target)
+        ready = self.navigate(target, url) if url != "about:blank" else {}
+        return dict(ready, tab_id=target, owner="UDB", background=True)
 
     def navigate(self, tab, url, timeout_ms=10000):
         validate_url(url)
@@ -762,7 +705,9 @@ class Browser:
                     const secret=type==='password'||type==='file'||/password|secret|token|otp|one-time-code/i.test([e.autocomplete,e.name,e.id].join(' '));
                     return {tag:e.tagName,id:String(e.id||'').slice(0,120),name:e.getAttribute('name'),type,
                       role:e.getAttribute('role')||'',placeholder:String(e.getAttribute('placeholder')||'').slice(0,160),
-                      text:textOf(e).slice(0,200),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true',
+                      text:textOf(e).slice(0,200),disabled:e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||!!e.closest('[inert]'),readonly:!!e.readOnly,
+                      options:e.tagName==='SELECT'&&!secret?Array.from(e.options).slice(0,20).map(o=>({value:String(o.value).slice(0,80),label:String(o.label).slice(0,120),disabled:o.matches(':disabled'),selected:o.selected})):undefined,
+                      options_truncated:e.tagName==='SELECT'?e.options.length>20:undefined,
                       value:secret?'[redacted]':String(e.value||'').slice(0,300)};
                   })};
             })()""",
@@ -770,43 +715,12 @@ class Browser:
         )
 
     @staticmethod
-    def _locator_expression(selector, role, name, exact, body, visible_only=True, unique=True):
+    def _locator_expression(
+        selector, role, name, exact, body, visible_only=True, unique=True
+    ):
         validate_locator(selector, role, name, exact)
-        template = """(() => {
-          const selector = __SELECTOR__, wantedRole = __ROLE__, wantedName = __NAME__, exact = __EXACT__;
-          const isVisible = e => { const s=getComputedStyle(e),r=e.getBoundingClientRect();
-            return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)>0&&r.width>0&&r.height>0; };
-          const textOf = e => String(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim();
-          const roleOf = e => {
-            const explicit=(e.getAttribute('role')||'').trim().split(/\\s+/)[0]; if(explicit)return explicit;
-            const tag=e.tagName.toLowerCase(),type=(e.getAttribute('type')||'').toLowerCase();
-            if(tag==='a'&&e.hasAttribute('href'))return 'link';
-            if(tag==='button'||tag==='summary'||['button','submit','reset','image'].includes(type))return 'button';
-            if(tag==='textarea'||e.isContentEditable)return 'textbox';
-            if(tag==='select')return e.multiple?'listbox':'combobox';
-            if(tag==='input'){if(type==='checkbox')return 'checkbox';if(type==='radio')return 'radio';
-              if(type==='range')return 'slider';if(type==='number')return 'spinbutton';if(type==='search')return 'searchbox';
-              if(type==='hidden')return 'none';if(type==='file')return 'button';return 'textbox';}
-            if(tag==='option')return 'option';if(/^h[1-6]$/.test(tag))return 'heading';return '';
-          };
-          const nameOf = e => {
-            const ids=(e.getAttribute('aria-labelledby')||'').trim().split(/\\s+/).filter(Boolean);
-            const labelled=ids.map(id=>document.getElementById(id)).filter(Boolean).map(textOf).join(' ').trim();
-            const labels=e.labels?Array.from(e.labels).map(textOf).filter(Boolean).join(' '):'';
-            return String(labelled||e.getAttribute('aria-label')||labels||e.getAttribute('alt')||e.getAttribute('title')
-              ||e.getAttribute('placeholder')||textOf(e)||e.getAttribute('name')||e.id||'').trim().slice(0,500);
-          };
-          let matches=[];
-          if(selector){try{matches=Array.from(document.querySelectorAll(selector));}catch(_){return {ok:false,error:'invalid_selector'};}}
-          else matches=Array.from(document.querySelectorAll('a[href],button,input:not([type="hidden"]),textarea,select,summary,[role],[contenteditable="true"],[tabindex],h1,h2,h3,h4,h5,h6'))
-            .filter(e=>roleOf(e)===wantedRole&&(!wantedName||(exact?nameOf(e)===wantedName:nameOf(e).includes(wantedName))));
-          if(__VISIBLE_ONLY__)matches=matches.filter(isVisible);
-          if(__UNIQUE__&&matches.length!==1)return {ok:false,error:'locator_not_unique',matches:matches.length};
-          const e=matches[0]||null;
-          __BODY__
-        })()"""
         return (
-            template.replace("__SELECTOR__", json.dumps(selector))
+            LOCATOR_SCRIPT.replace("__SELECTOR__", json.dumps(selector))
             .replace("__ROLE__", json.dumps(role))
             .replace("__NAME__", json.dumps(name))
             .replace("__EXACT__", "true" if exact else "false")
@@ -837,7 +751,9 @@ class Browser:
                 let href='';try{const u=new URL(e.href,location.href);if(['http:','https:'].includes(u.protocol))href=u.origin+u.pathname;}catch(_){}
                 return {index:i+1,role:roleOf(e),name:nameOf(e),tag:e.tagName.toLowerCase(),type,
                   id:String(e.id||'').slice(0,120),name_attr:String(e.getAttribute('name')||'').slice(0,120),
-                  placeholder:String(e.getAttribute('placeholder')||'').slice(0,160),disabled:!!e.disabled||e.getAttribute('aria-disabled')==='true',
+                  placeholder:String(e.getAttribute('placeholder')||'').slice(0,160),disabled:e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||!!e.closest('[inert]'),readonly:!!e.readOnly,
+                  options:e.tagName==='SELECT'&&!secret?Array.from(e.options).slice(0,20).map(o=>({value:String(o.value).slice(0,80),label:String(o.label).slice(0,120),disabled:o.matches(':disabled'),selected:o.selected})):undefined,
+                  options_truncated:e.tagName==='SELECT'?e.options.length>20:undefined,
                   checked:typeof e.checked==='boolean'?e.checked:null,selected:typeof e.selected==='boolean'?e.selected:null,
                   value:secret?'[redacted]':String(e.value||'').slice(0,160),href};});
               return {url:location.origin==='null'?'about:blank':location.origin+location.pathname,title:String(document.title||'').slice(0,500),
@@ -862,7 +778,7 @@ class Browser:
         return result if isinstance(result, bool) else None
 
     def _wait_for_element_action(
-        self, tab, expression, timeout_ms=5000, selector=""
+        self, tab, expression, timeout_ms=5000, selector="", retry_context=True
     ):
         deadline = time.monotonic() + timeout_ms / 1000
         while True:
@@ -875,6 +791,10 @@ class Browser:
                 )
             except PolicyError as exc:
                 if self._is_transient_context_error(exc):
+                    if not retry_context:
+                        raise PolicyError(
+                            "Browser action outcome unknown; inspect before retrying"
+                        ) from exc
                     time.sleep(min(0.1, max(0, deadline - time.monotonic())))
                     continue
                 if selector and self._css_selector_valid(tab, selector) is False:
@@ -890,10 +810,11 @@ class Browser:
                 return result
             if error == "invalid_selector":
                 return result
+            if error == "state_mismatch" and not retry_context:
+                return result  # An input/change handler already ran; never replay it.
             if error in {
                 "locator_not_unique",
                 "not_actionable",
-                "disabled",
                 "state_mismatch",
             }:
                 remaining = deadline - time.monotonic()
@@ -908,7 +829,42 @@ class Browser:
                 continue
             return result
 
+    def identity_script(self):
+        return identity_script(getattr(self, "visible", False))
+
+    def _show_identity(self, tab, x=None, y=None):
+        """Decorate only our page in an isolated JS world; never use OS input.
+
+        Presentation failure must not replay or block an application action.
+        No privileged API is exposed to page scripts.
+        """
+        session = self.sid(tab)
+        try:
+            frame = self.call("Page.getFrameTree", session=session)["frameTree"][
+                "frame"
+            ]["id"]
+            world = self.call(
+                "Page.createIsolatedWorld",
+                dict(frameId=frame, worldName="UDBIdentity"),
+                session,
+            )["executionContextId"]
+            expression = self.identity_script()
+            if x is not None and y is not None:
+                expression += (
+                    f";globalThis.__udbMovePointer({float(x)!r},{float(y)!r});"
+                )
+            self.call(
+                "Runtime.evaluate",
+                dict(expression=expression, contextId=world, returnByValue=True),
+                session,
+                timeout=2,
+            )
+        except (PolicyError, KeyError):
+            return False
+        return True
+
     def _mouse_click(self, tab, x, y):
+        self._show_identity(tab, x, y)
         session = self.sid(tab)
         point = dict(x=float(x), y=float(y))
         self.call(
@@ -941,12 +897,14 @@ class Browser:
         if press_error is not None:
             raise press_error
 
-    def element(self, tab, operation, selector="", value="", role="", name="", exact=True):
+    def element(
+        self, tab, operation, selector="", value="", role="", name="", exact=True
+    ):
         if operation not in ("click", "fill", "select_option", "check", "uncheck"):
             raise PolicyError("Unsupported browser element action")
         if not isinstance(value, str) or len(value) > 16000:
             raise PolicyError("Text exceeds limit")
-        if operation == "select_option" and (not value or len(value) > 500):
+        if operation == "select_option" and len(value) > 500:
             raise PolicyError("select_option requires an option value or label")
 
         if operation == "click":
@@ -956,63 +914,66 @@ class Browser:
                 previous_url = None
             if not isinstance(previous_url, str):
                 previous_url = None
-            body = """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
-              e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
-              const s=getComputedStyle(e);if(s.pointerEvents==='none')return {ok:false,error:'not_actionable',reason:'pointer_events'};
-              const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return {ok:false,error:'not_actionable',reason:'not_visible'};
-              const cx=r.left+r.width/2,cy=r.top+r.height/2;
-              const points=[[cx,cy],[r.left+Math.min(4,r.width/2),cy],[r.right-Math.min(4,r.width/2),cy],[cx,r.top+Math.min(4,r.height/2)],[cx,r.bottom-Math.min(4,r.height/2)]];
-              const point=points.find(([x,y])=>x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&(()=>{const top=document.elementFromPoint(x,y);return !!top&&(top===e||e.contains(top));})());
-              if(!point)return {ok:false,error:'not_actionable',reason:'obscured'};
-              return {ok:true,x:point[0],y:point[1]};"""
-            expression = self._locator_expression(
-                selector, role, name, exact, body
+            body = (
+                """if(e.tagName==='OPTION')return {ok:false,error:'use_select_option',action:'select_option'};
+                if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+"""
+                + CLICK_POINT_SCRIPT
+                + """              return {ok:true,x:point[0],y:point[1]};"""
             )
+            expression = self._locator_expression(selector, role, name, exact, body)
             result = self._wait_for_element_action(tab, expression, selector=selector)
             if not result.get("ok"):
                 return result
+            previous_loader_id = None
+            try:
+                previous_loader_id = (
+                    self.call("Page.getFrameTree", session=self.sid(tab), timeout=1)
+                    .get("frameTree", {})
+                    .get("frame", {})
+                    .get("loaderId")
+                )
+            except PolicyError:
+                pass  # URL observation is still available if a frame is transitioning.
             self._mouse_click(tab, result["x"], result["y"])
-            navigation = self._wait_for_click_navigation(tab, previous_url)
-            return dict(ok=True, clicked=True, **navigation)
+            navigation = self._wait_for_click_navigation(
+                tab, previous_url, previous_loader_id=previous_loader_id
+            )
+            return dict(ok=True, clicked=True, replay_safe=False, **navigation)
 
+        select_body = SELECT_OPTION_SCRIPT.replace("__VALUE__", json.dumps(value))
         if operation == "fill":
-            body = """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};
+            body = (
+                "if(e.tagName==='SELECT'){"
+                + select_body
+                + "}\n"
+                + """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
               if(e.readOnly)return {ok:false,error:'readonly'};
               if(e.isContentEditable){e.focus();e.textContent=__VALUE__;}else{
                 if(!['INPUT','TEXTAREA'].includes(e.tagName)||e.type==='file'||['button','submit','reset','checkbox','radio','hidden','image'].includes((e.type||'').toLowerCase()))return {ok:false,error:'unsupported_control'};
                 e.focus();const p=e.tagName==='INPUT'?HTMLInputElement.prototype:HTMLTextAreaElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e,__VALUE__);}
               e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return {ok:true};""".replace(
-                "__VALUE__", json.dumps(value)
+                    "__VALUE__", json.dumps(value)
+                )
             )
         elif operation == "select_option":
-            body = """if(e.tagName!=='SELECT'||e.matches(':disabled')||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'unsupported_control'};
-              const wanted=__VALUE__;const option=Array.from(e.options).find(o=>o.value===wanted||o.label===wanted||String(o.textContent||'').trim()===wanted);
-              if(!option||option.disabled)return {ok:false,error:'option_not_found'};e.value=option.value;
-              e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));
-              return {ok:e.value===option.value,value:e.value,label:option.label||String(option.textContent||'').trim()};""".replace(
-                "__VALUE__", json.dumps(value)
-            )
+            body = select_body
         else:
             desired = operation == "check"
-            body = """const native=e.tagName==='INPUT'&&['checkbox','radio'].includes((e.type||'').toLowerCase());const role=(e.getAttribute('role')||'').toLowerCase();
+            body = (
+                """const native=e.tagName==='INPUT'&&['checkbox','radio'].includes((e.type||'').toLowerCase());const role=(e.getAttribute('role')||'').toLowerCase();
               if(!native&&!['checkbox','radio'].includes(role))return {ok:false,error:'unsupported_control'};
               if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
               const current=native?!!e.checked:e.getAttribute('aria-checked')==='true';
               if(current===__DESIRED__)return {ok:true,checked:current,already_set:true};
               if((native&&e.type==='radio'||role==='radio')&&__DESIRED__===false)return {ok:false,error:'radio_cannot_be_unchecked'};
-              e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
-              const s=getComputedStyle(e);if(s.pointerEvents==='none')return {ok:false,error:'not_actionable',reason:'pointer_events'};
-              const r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)return {ok:false,error:'not_actionable',reason:'not_visible'};
-              const cx=r.left+r.width/2,cy=r.top+r.height/2;
-              const points=[[cx,cy],[r.left+Math.min(4,r.width/2),cy],[r.right-Math.min(4,r.width/2),cy],[cx,r.top+Math.min(4,r.height/2)],[cx,r.bottom-Math.min(4,r.height/2)]];
-              const point=points.find(([x,y])=>x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&(()=>{const top=document.elementFromPoint(x,y);return !!top&&(top===e||e.contains(top));})());
-              if(!point)return {ok:false,error:'not_actionable',reason:'obscured'};
-              return {ok:true,x:point[0],y:point[1],needs_click:true};""".replace(
-                "__DESIRED__", "true" if desired else "false"
+"""
+                + CLICK_POINT_SCRIPT
+                + """              return {ok:true,x:point[0],y:point[1],needs_click:true};""".replace(
+                    "__DESIRED__", "true" if desired else "false"
+                )
             )
-            expression = self._locator_expression(
-                selector, role, name, exact, body
-            )
+            expression = self._locator_expression(selector, role, name, exact, body)
             result = self._wait_for_element_action(tab, expression, selector=selector)
             if not result.get("ok") or not result.get("needs_click"):
                 return result
@@ -1024,9 +985,7 @@ class Browser:
             )
             verified = self._wait_for_element_action(
                 tab,
-                self._locator_expression(
-                    selector, role, name, exact, verify_body
-                ),
+                self._locator_expression(selector, role, name, exact, verify_body),
                 timeout_ms=1000,
                 selector=selector,
             )
@@ -1034,37 +993,55 @@ class Browser:
                 return verified
             return dict(ok=True, checked=verified["checked"])
 
-        expression = self._locator_expression(
-            selector, role, name, exact, body
+        expression = self._locator_expression(selector, role, name, exact, body)
+        return self._wait_for_element_action(
+            tab, expression, selector=selector, retry_context=False
         )
-        return self._wait_for_element_action(tab, expression, selector=selector)
 
-    def wait_for(self, tab, selector="", role="", name="", exact=True, state="visible", value="", timeout_ms=5000):
-        if state not in {"attached","visible","hidden","enabled","text"}:
-            raise PolicyError("wait_for state must be attached, visible, hidden, enabled or text")
+    def wait_for(
+        self,
+        tab,
+        selector="",
+        role="",
+        name="",
+        exact=True,
+        state="visible",
+        value="",
+        timeout_ms=5000,
+    ):
+        if state not in {"attached", "visible", "hidden", "enabled", "text"}:
+            raise PolicyError(
+                "wait_for state must be attached, visible, hidden, enabled or text"
+            )
         if type(timeout_ms) is not int or not 100 <= timeout_ms <= 10000:
             raise PolicyError("wait_for timeout_ms must be 100..10000")
-        if state=="text":
-            if not isinstance(value,str) or not 1 <= len(value) <= 2000:
+        if state == "text":
+            if not isinstance(value, str) or not 1 <= len(value) <= 2000:
                 raise PolicyError("wait_for state=text requires value")
             if not selector and not role:
-                selector="body"
+                selector = "body"
         elif value:
             raise PolicyError("value is only used with wait_for state=text")
-        validate_locator(selector,role,name,exact)
-        body="""const visibleMatches=matches.filter(isVisible);const enabledMatches=visibleMatches.filter(e=>!e.disabled&&e.getAttribute('aria-disabled')!=='true');
+        validate_locator(selector, role, name, exact)
+        body = """const visibleMatches=matches.filter(isVisible);const enabledMatches=visibleMatches.filter(e=>!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!e.closest('[inert]'));
           const textMatches=matches.filter(e=>String(e.innerText||e.textContent||'').includes(__VALUE__));const state=__STATE__;
           const ok=state==='attached'?matches.length>0:state==='visible'?visibleMatches.length>0:state==='hidden'?(matches.length===0||visibleMatches.length===0):state==='enabled'?enabledMatches.length>0:state==='text'?textMatches.length>0:false;
           return {ok,state,matches:matches.length,visible:visibleMatches.length,enabled:enabledMatches.length};"""
-        body=body.replace("__VALUE__",json.dumps(value)).replace("__STATE__",json.dumps(state))
-        expression=self._locator_expression(selector,role,name,exact,body,visible_only=False,unique=False)
-        deadline=time.monotonic()+timeout_ms/1000
+        body = body.replace("__VALUE__", json.dumps(value)).replace(
+            "__STATE__", json.dumps(state)
+        )
+        expression = self._locator_expression(
+            selector, role, name, exact, body, visible_only=False, unique=False
+        )
+        deadline = time.monotonic() + timeout_ms / 1000
         while True:
-            remaining=deadline-time.monotonic()
-            if remaining<=0:
-                return dict(ok=False,timed_out=True,state=state)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return dict(ok=False, timed_out=True, state=state)
             try:
-                result=self.evaluate(tab,expression,timeout=max(0.2,min(1.5,remaining)))
+                result = self.evaluate(
+                    tab, expression, timeout=max(0.2, min(1.5, remaining))
+                )
             except PolicyError as exc:
                 if self._is_transient_context_error(exc):
                     if time.monotonic() >= deadline:
@@ -1076,51 +1053,77 @@ class Browser:
                 if time.monotonic() >= deadline:
                     return dict(ok=False, timed_out=True, state=state)
                 raise
-            if result.get("error")=="invalid_selector":
-                return dict(ok=False,error="invalid_selector",state=state)
+            if result.get("error") == "invalid_selector":
+                return dict(ok=False, error="invalid_selector", state=state)
             if result.get("ok"):
                 return result
-            if time.monotonic()>=deadline:
-                return dict(ok=False,timed_out=True,state=state,matches=result.get("matches",0))
-            time.sleep(min(0.1,max(0,deadline-time.monotonic())))
+            if time.monotonic() >= deadline:
+                return dict(
+                    ok=False,
+                    timed_out=True,
+                    state=state,
+                    matches=result.get("matches", 0),
+                )
+            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
 
     def press(self, tab, key, selector="", role="", name="", exact=True):
-        info=parse_key(key)
-        body="""if(e.disabled||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};
+        info = parse_key(key)
+        body = """if(e.disabled||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};
           if(typeof e.focus!=='function')return {ok:false,error:'not_focusable'};e.focus();
           return {ok:document.activeElement===e||e.contains(document.activeElement),error:'not_focusable'};"""
-        focused=self.evaluate(tab,self._locator_expression(selector,role,name,exact,body))
+        focused = self.evaluate(
+            tab, self._locator_expression(selector, role, name, exact, body)
+        )
         if not focused.get("ok"):
             return focused
-        session=self.sid(tab)
-        params=dict(key=info["key"],code=info["code"],windowsVirtualKeyCode=info["vk"],modifiers=info["modifiers"])
-        down_params=dict(params)
+        session = self.sid(tab)
+        params = dict(
+            key=info["key"],
+            code=info["code"],
+            windowsVirtualKeyCode=info["vk"],
+            modifiers=info["modifiers"],
+        )
+        down_params = dict(params)
         if info["text"]:
-            down_params["text"]=info["text"]
-            down_params["unmodifiedText"]=info["text"]
-        self.call("Input.dispatchKeyEvent",dict(type="keyDown",**down_params),session,timeout=2)
-        self.call("Input.dispatchKeyEvent",dict(type="keyUp",**params),session,timeout=2)
-        return dict(ok=True,key=key,focused=True)
+            down_params["text"] = info["text"]
+            down_params["unmodifiedText"] = info["text"]
+        self.call(
+            "Input.dispatchKeyEvent",
+            dict(type="keyDown", **down_params),
+            session,
+            timeout=2,
+        )
+        self.call(
+            "Input.dispatchKeyEvent", dict(type="keyUp", **params), session, timeout=2
+        )
+        return dict(ok=True, key=key, focused=True)
 
     def history(self, tab, action):
-        session=self.sid(tab)
-        if action=="reload":
-            self.call("Page.reload",dict(ignoreCache=False),session,timeout=5)
-            return dict(ok=True,action=action)
-        if action not in ("back","forward"):
+        session = self.sid(tab)
+        if action == "reload":
+            self.call("Page.reload", dict(ignoreCache=False), session, timeout=5)
+            return dict(ok=True, action=action)
+        if action not in ("back", "forward"):
             raise PolicyError("Unsupported history action")
-        history=self.call("Page.getNavigationHistory",session=session,timeout=5)
-        entries=history.get("entries",[])
-        index=history.get("currentIndex",0)+(-1 if action=="back" else 1)
-        if not 0<=index<len(entries):
-            return dict(ok=False,reason="no_history",action=action)
-        entry=entries[index]
-        self.call("Page.navigateToHistoryEntry",dict(entryId=entry["id"]),session,timeout=5)
-        safe=urlsplit(str(entry.get("url","")))
-        safe_url=(safe.scheme+"://"+safe.netloc+safe.path) if safe.scheme in ("http","https") else ""
-        return dict(ok=True,action=action,url=safe_url)
+        history = self.call("Page.getNavigationHistory", session=session, timeout=5)
+        entries = history.get("entries", [])
+        index = history.get("currentIndex", 0) + (-1 if action == "back" else 1)
+        if not 0 <= index < len(entries):
+            return dict(ok=False, reason="no_history", action=action)
+        entry = entries[index]
+        self.call(
+            "Page.navigateToHistoryEntry", dict(entryId=entry["id"]), session, timeout=5
+        )
+        safe = urlsplit(str(entry.get("url", "")))
+        safe_url = (
+            (safe.scheme + "://" + safe.netloc + safe.path)
+            if safe.scheme in ("http", "https")
+            else ""
+        )
+        return dict(ok=True, action=action, url=safe_url)
 
     def screenshot(self, tab):
+        self._show_identity(tab)
         result = self.call(
             "Page.captureScreenshot",
             dict(format="png", captureBeyondViewport=False),
@@ -1158,7 +1161,100 @@ class Browser:
             self.tabs.pop(tab)
         return result
 
-    def close(self):
+    def switch_presentation(self, visible):
+        """Local-owner handoff; restart our browser and invalidate old tab IDs."""
+        if type(visible) is not bool:
+            raise PolicyError("Invalid browser presentation")
+        if self.visible == visible:
+            return dict(visible=visible, changed=False)
+        deadline = time.monotonic() + _STARTUP_TIMEOUT
+        urls = []
+        for target in self.call("Target.getTargets")["targetInfos"]:
+            if target.get("type") == "page":
+                url = target.get("url", "about:blank")
+                try:
+                    validate_url(url)
+                except PolicyError:
+                    continue
+                urls.append(url)
+        cookies = self.call("Storage.getCookies").get("cookies", [])
+        # Keep session cookies in memory across local handoff; never return or
+        # log them. Persistent login remains opt-in in the local manager.
+        allowed = {
+            "name",
+            "value",
+            "domain",
+            "path",
+            "secure",
+            "httpOnly",
+            "sameSite",
+            "expires",
+            "partitionKey",
+        }
+        cookies = [
+            {
+                key: value
+                for key, value in cookie.items()
+                if key in allowed and not (key == "expires" and value <= 0)
+            }
+            for cookie in cookies
+            if not cookie.get("partitionKeyOpaque", False)
+        ]
+        folder, persistent = self.folder, self.persistent
+        self.close(remove_profile=False)
+        self.__init__(
+            folder, persistent=persistent, visible=visible, reuse_profile=True
+        )
+        self.deadline = deadline
+        if cookies:
+            self.call("Storage.setCookies", {"cookies": cookies})
+        # Chrome may restore profile tabs itself. Normalize that inventory
+        # before reopening URLs, otherwise each handoff duplicates tabs.
+        targets = list(self.tabs)
+        if not targets:
+            raise PolicyError(
+                "Browser restarted without a page; inspect its local window"
+            )
+        first = targets[0]
+        for tab in targets[1:]:
+            self.close_tab(tab)
+        urls = [url for url in urls if url != "about:blank"][: LIMITS["max_tabs"]] or [
+            "about:blank"
+        ]
+        self.navigate(first, urls[0])
+        for url in urls[1:]:
+            self.new(url)
+        return dict(visible=visible, changed=True, tab_ids_invalidated=True)
+
+    def scroll(self, tab, x=0, y=500):
+        if (
+            type(x) is not int
+            or type(y) is not int
+            or not -2000 <= x <= 2000
+            or not -2000 <= y <= 2000
+        ):
+            raise PolicyError("Browser scroll deltas must be integers in -2000..2000")
+        self.call(
+            "Input.dispatchMouseEvent",
+            dict(type="mouseWheel", x=400, y=300, deltaX=x, deltaY=y),
+            self.sid(tab),
+        )
+        return dict(scrolled=True, delta_x=x, delta_y=y)
+
+    def close(self, remove_profile=True):
+        if (
+            getattr(self, "ws", None)
+            and getattr(self, "proc", None)
+            and self.proc.alive()
+        ):
+            try:
+                self.deadline = None
+                self.call("Browser.close", timeout=2)
+            except Exception:
+                pass  # Expected websocket closure; the owned job is still closed below.
+            until = time.monotonic() + 2
+            while self.proc.alive() and time.monotonic() < until:
+                time.sleep(0.05)
         if self.ws:
             try:
                 self.ws.close(timeout=1)
@@ -1168,7 +1264,14 @@ class Browser:
         if self.proc:
             self.proc.close()
             self.proc = None
-        if self.folder.exists():
+        for staged in self.folder.glob("udb-upload-*"):
+            reject_links(staged)
+            shutil.rmtree(staged)
+        if (
+            remove_profile
+            and not getattr(self, "persistent", False)
+            and self.folder.exists()
+        ):
             for _ in range(6):
                 try:
                     shutil.rmtree(self.folder)

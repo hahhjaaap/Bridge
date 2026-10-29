@@ -59,6 +59,8 @@ Keep this separate from file permissions and owner approvals.
 ## Desktop and isolation
 
 - `udb.manager`: Qt MainWindow composition, event/lifecycle handling.
+- `udb.manager_host`: assistant page composition and local owner-only browser,
+  pause and background-session controls.
 - `udb.manager_dialogs`: local source browser, connection settings, and
   owner-only approval dialogs; no remote approval API.
 - `udb.manager_refresh`: status polling and project list refresh.
@@ -75,6 +77,45 @@ Keep this separate from file permissions and owner approvals.
   into an isolated Sandbox. Do not split it into imports without changing
   the guest deployment protocol and testing the resulting boundary.
 
+## Browser and host lifecycle
+
+- `udb.host_service` owns admission, session expiry and the serial mailbox. Session
+  creation, resolution and browser opening have separate helpers; all remote
+  operations still pass the same owner and resource checks in `dispatch`.
+- `udb.browser_actions` is the explicit browser action router and shared public
+  action catalog. It never dispatches arbitrary caller-supplied method names.
+- `udb.host_browser` owns CDP transport, tab ownership and bounded DOM operations.
+  Fixed DOM programs live in `udb.browser_dom`; page identity artwork lives in
+  `udb.browser_identity`. Callers can pass validated locators and data, not code.
+- `udb.owned_process` owns Windows Job Object containment independently of browser
+  and workspace code. `host_browser.OwnedProcess` remains a compatibility export.
+- `udb.activity.EventReader` skips unchanged idle polls using database/WAL metadata,
+  with a two-second forced rescan for deferred filesystem updates. It validates
+  paths on every poll and holds no database handle between reads, allowing log
+  replacement on Windows. One-shot callers retain `read_events`.
+- CLI commands share an exception-safe settings scope. GUI refresh is divided
+  into projects, host status, approvals, jobs and connection updates while
+  keeping failures isolated between sections. Tree refreshes preserve selection
+  and include visible grant/payload changes in their signatures.
+- `udb.computer_files`: bounded streaming hashes, range reads and staged copies;
+  internal binary writes and public encoded writes share the same atomic commit,
+  expected-hash, recovery and path checks. No-replace copy publication precedes
+  the final source recheck for moves.
+- Idle approval polling takes no SQLite writer lock when there is nothing to
+  expire. Job-log tail reads seek within one open file and keep normal offset
+  reads compatible.
+- The host mailbox backs off to a 250 ms idle polling interval and prunes stale
+  replies every five seconds; stop events interrupt the wait immediately.
+- Mailbox commands are claimed and handled independently. JSON reads are bounded,
+  malformed envelopes are rejected before dispatch, and RPC waits use a monotonic
+  deadline while command expiry remains tied to wall time.
+- Failed session cleanup retains a closing record for maintenance/retry and
+  rejects new actions for that session. Host/controller shutdown attempts all
+  owned resources before reporting incomplete cleanup. Browser handoff state is
+  reconciled against the surviving owned window after a transition failure.
+- `computer_status` can report the local grant without a running host worker;
+  process availability is explicitly unknown in that fallback. It issues no grant.
+
 ## Where new code belongs
 
 1. Define the public schema in the appropriate companion schema/feature/
@@ -88,6 +129,8 @@ Keep this separate from file permissions and owner approvals.
    `python tools/audit_repository.py --strict`,
    `python tools/check_import_boundaries.py`, and the Windows wheel/EXE
    smoke tests. CI now gates the entire source/tools/tests tree on Ruff.
+   `python -m ruff format --check .` also runs in CI. Use `python -m ruff format .`
+   before submitting formatting changes.
    The import check guards all canonical modules against eager import cycles;
    it intentionally does not treat deferred function-local imports as cycles.
 

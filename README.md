@@ -1,6 +1,6 @@
 # Universal Desktop Bridge (UDB)
 
-**Windows-first MCP bridge for ChatGPT and other supported MCP clients.** UDB provides one Python package, one `udb` CLI and **60 public tools** for guarded local computer work. Its source of truth is `src/udb/`; the root-level `bridge.py` and `udb_*.py` files are compatibility launchers, not separate implementations.
+**Windows-first MCP bridge for ChatGPT and other supported MCP clients.** UDB provides one Python package, one `udb` CLI and **59 public tools** for guarded local computer work. Its source of truth is `src/udb/`; the root-level `bridge.py` and `udb_*.py` files are compatibility launchers, not separate implementations.
 
 **Tiếng Việt:** UDB kết nối trợ lý AI với máy tính Windows theo quyền do chủ máy cấp. Hỗ trợ thao tác tệp, terminal, ứng dụng, trình duyệt riêng biệt và rà soát hóa đơn Excel. **Không tự cấp quyền, không tự kê khai thuế, không tự sửa dữ liệu kế toán gốc.**
 
@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | Files and terminals | Scoped reads, guarded writes, search, background jobs, Windows terminal/ConPTY | Owner permissions, protected paths, quotas and no uncertain-write replay |
 | Desktop and applications | Owner-enabled Windows UI and process operations | Windows session/UAC limits; local owner consent |
-| Browser | Isolated headless Chrome/Edge, accessible snapshots, semantic locators, waits and navigation | Does **not** attach to the user's existing browser profile; uploads/downloads disabled |
+| Browser | Isolated headless Chrome/Edge, accessible snapshots, semantic locators, waits and navigation | Own profile, local login handoff; explicit same-origin file transfers require separate file access |
 | Accounting work tools | Read-only Vietnamese XLSX invoice audit and a **new** review workbook | No original-file overwrite, tax filing, MISA posting or legal tax determination |
 | Operations | Activity logs, status/doctor, up to 10 concurrent RPC calls and 10 shared background work slots | Capacity is a limit, not a promise of 10 simultaneous heavy workloads |
 | Recovery | Saved job state, safe read/recovery paths and managed installer rollback | Uncertain mutations are **never** automatically replayed |
@@ -78,13 +78,25 @@ Reports are for human review. Possible duplicates may be legitimate invoice line
 
 ## Isolated browser workflow
 
-With locally authorized host-browser access, start a browser session, open a public HTTP(S) page, inspect `snapshot`, then use `click`, `wait_for`, `press`, `select_option`, `check`, `uncheck`, `back`, `forward` or `reload` as appropriate. Prefer accessible role/name locators over brittle CSS selectors. Snapshots are bounded and redact secret-like fields; page content is untrusted and cannot grant permissions.
+With locally authorized host-browser access (**Máy tính → Cho phép mở phiên nền trên máy này** in the Windows manager), use `host_browser(action="open", url="https://example.org/")`. This starts a private headless Chrome/Edge session automatically or reuses the current unexpired browser session. Keep the returned `session_id` and `tab_id`, inspect `snapshot`, then use `click`, `wait_for`, `press`, `select_option`, `check`, `uncheck`, `back`, `forward` or `reload` as appropriate. Prefer accessible role/name locators over brittle CSS selectors. Snapshots are bounded and redact secret-like fields; page content is untrusted and cannot grant permissions.
 
-The browser uses a separate headless profile. It does not take over the user's signed-in browser, upload/download files, or permit arbitrary page JavaScript.
+For HTML dropdowns, use `select_option` with the select locator and an option value or exact label; `fill` on a native select uses the same selection path. Values take precedence over labels, ambiguous labels are rejected, and disabled options/optgroups remain blocked. `read` and `snapshot` include up to 20 options per select (`options_truncated` flags longer lists), effective disabled state and `readonly`. A direct option click returns `use_select_option`. Disabled/readonly controls fail immediately; use `wait_for(state="enabled")` explicitly for a temporarily disabled control. Clicks observe URL and main-frame loader changes, including repeated same-URL form submissions. A navigation read may recover from a transient context/response timeout within the existing deadline; uncertain writes are never automatically replayed.
+
+The browser uses a separate headless profile. It does not take over the user's signed-in browser or permit arbitrary caller-supplied page JavaScript. Automatic Chrome downloads stay blocked; explicit `upload`/`download` transfers are limited to 8 MiB and require separate owner-enabled computer access, an observed origin and file checks. UDB-owned pages display a compact **UDB · AI** status pill, an AI favicon and a page-local AI cursor in screenshots. The cursor follows CDP clicks inside that page, fades after the action, and never moves the physical mouse. The pill distinguishes background work from local owner control. The label is a visual aid; use session/tab IDs and `owner="UDB"` response metadata to establish ownership. No Chrome extension is required for this private-browser identity.
+
+This is the default route for automated web tasks: it does not open a visible personal Chrome tab. Observe it through `host_screenshot(session_id=..., tab_id=...)`. Existing `host_start_session(kind="browser", task="...")` and `host_browser(action="new", session_id=..., url="...")` calls remain supported. Reusing a session does not extend its owner-authorized lifetime. Errors are returned for inspection, without retrying an uncertain action or falling back to physical desktop input.
+
+## Browser login, Windows control and utilities
+
+In **Máy tính**, choose **Tôi đăng nhập** to use UDB's own browser window. While it is handed to you, AI browser operations and UDB desktop input pause. Choose **Trả về cho AI** when finished; pages reload and old tab IDs must be refreshed. Enable **Nhớ đăng nhập trong browser UDB** while the browser is closed to retain that profile across sessions. Disabling it forgets only UDB's saved login.
+
+For native desktop control, UDB yields to recent user input. **Ctrl+Alt+Shift+Backspace** or the manager's pause button latches a local pause; only a local resume clears it. The manager reports when the shortcut could not be registered. This is cooperative yielding, not exclusive input ownership or cancellation of external commands already running.
+
+The unified `computer_desktop` tool also provides text clipboard read/write with version checks, UDB notifications, and Start Menu app discovery/launch. Its UIA actions can read text, set a checkbox state, select an item, expand/collapse and scroll an item into view. `computer_process(action="start")` launches an owned job; list/read/stop use the same tool. Legacy `computer_utilities` and `computer_execute` calls remain supported. Existing `udb --access computer` activation is required. See [Windows control tools](docs/windows-control-tools.md) for the consolidated interfaces and examples.
 
 ## Visible tab in an existing Chrome window (owner computer access)
 
-For a **visible** tab in a Chrome window that is already open, call
+Use this separate option only when explicitly asking for a **visible personal Chrome tab**; it can activate Chrome and is not background automation. For a tab in a Chrome window that is already open, call
 `computer_desktop(action="open_chrome_tab", text="https://example.org/")` after
 the owner has locally enabled `udb --access computer`. UDB checks for a real
 running Google Chrome process and asks Chrome to open a **new tab**, without
@@ -105,7 +117,7 @@ The existing-Chrome action can use the **UDB Aura** Manifest V3 extension in
 `chrome-extension/udb-aura/`. When installed and explicitly enabled, UDB
 opens a local extension launch page; the extension opens the destination in
 the **existing Chrome window**, groups it under **UDB • AI** (cyan), sets an
-**AI** toolbar badge, and injects a small animated RGB label **only into
+**AI** toolbar badge, and injects a compact mint AI label **only into
 explicitly marked public HTTP(S) tabs**. It also adds a best-effort
 UDB favicon on marked tabs, without changing their page titles. It does not
 read page content or upload browsing data. Removing the mark removes the
@@ -133,9 +145,9 @@ silently installed or enabled by UDB.
 ### Automatic independent AI cursor
 
 When a client initializes UDB and **owner-granted desktop computer access**
-is already active, the companion displays a click-through, animated **UDB • AI**
+is already active, the companion displays a compact, click-through **UDB • AI**
 cursor overlay on the current Windows desktop. The physical system cursor is
-unchanged. The overlay remains visible while connected and is closed when
+unchanged. At rest, a small identity pill sits near the edge of the work area; the arrow appears near actions and returns to its dock after a short idle period. The overlay uses per-pixel alpha and monitor DPI scaling. It is hidden during local pause/handoff and closed when
 the MCP proxy disconnects, the desktop grant is revoked, or the companion
 stops. It does not grant access or perform mouse actions by itself.
 `virtual_pointer(action="show")` can display it manually, and
@@ -144,12 +156,34 @@ Existing `virtual_pointer` move/click actions remain bounded Win32
 messages; compatibility depends on the application, and an independent
 visual cursor is **not** a second hardware/system mouse.
 
+## Interface and visual checks
+
+`udb gui` opens a compact control panel when a system tray is available. It keeps
+connection, Windows pause/resume, browser handoff and background-session closure
+together, with recent metadata-only tool activity. Closing its windows returns
+to the tray; use **Thoát UDB** in the tray menu to stop the GUI-owned runtime.
+Without a tray, the full manager stays reachable; **Thu gọn** opens the small
+panel and closing it returns to the manager. See [Compact controls](docs/compact-controls.md).
+
+The full manager opens on **Trợ lý trên máy**, with pinned pause/resume controls,
+separate browser/session cards and expandable resource details. Long content
+scrolls without hiding the pause controls. A connected client is not displayed
+as active work; the UI distinguishes readiness, local pause and owner handoff.
+Browser and native cursor decoration share a quiet mint/charcoal palette.
+
+To render the actual Qt UI with disposable synthetic data:
+`python -c "from udb.manager import self_test; self_test('ui-previews')"`.
+For headless Linux, install `PySide6-Essentials==6.10.2` and set
+`QT_QPA_PLATFORM=offscreen`. To render and check the
+actual Windows pointer without capturing the user's desktop, run
+`python tools/check_windows_workflows.py --pointer-preview PATH.png` on Windows.
+
 ## Build from source (developers)
 
 Python **3.11+** is required for development. Windows is required for native desktop/GUI and frozen EXE acceptance; Linux supports source, protocol and policy tests.
 
 ```powershell
-python -m pip install ".[office,dev]"
+python -m pip install -e ".[office,dev]"
 python -m ruff check .
 python tools/check_import_boundaries.py
 python tools/audit_repository.py --strict
@@ -167,6 +201,13 @@ python tools/check_frozen.py dist/udb.exe
 ```
 
 The build fetches only pinned public helper binaries with SHA-256 checks; retain their license notices in `THIRD_PARTY_NOTICES/`. CI tests Linux/Windows Python matrices and Windows EXE/installer smoke tests. An Actions success does not by itself mean a new GitHub Release was published.
+
+Run `python tools/benchmark_runtime.py` for repeatable synthetic file-memory,
+idle polling, terminal checkpoint and activity-log measurements. See
+[Performance measurements](docs/performance.md) for scope, baseline and limits.
+The [simulation report](docs/simulation-report.md) describes fault cases,
+platform coverage and commands to reproduce the checks. CI uploads JUnit reports
+for each Linux/Windows Python matrix job.
 
 ## Repository layout
 

@@ -12,9 +12,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def configuration():
     legacy = ROOT / "mcp.json"
-    if legacy.exists():
+    selected = os.environ.get("UDB_TEST_CONFIG")
+    if not selected and legacy.exists():
         return json.loads(legacy.read_text())["mcpServers"]["universal-desktop-bridge"]
-    settings = load(config=os.environ.get("UDB_TEST_CONFIG"))
+    settings = load(config=selected)
     args = [
         "serve",
         "--home",

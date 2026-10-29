@@ -164,7 +164,9 @@ def diff_preview(before: bytes | None, text: str, relative: str) -> str:
     )
     parts = []
     size = 0
-    notice = "\n[UDB] Diff preview truncated; review the complete change before approving.\n"
+    notice = (
+        "\n[UDB] Diff preview truncated; review the complete change before approving.\n"
+    )
     for chunk in chunks:
         if size + len(chunk) > _DIFF_PREVIEW_LIMIT - len(notice):
             parts.append(notice)
@@ -242,17 +244,18 @@ class Agent(AutonomyMixin):
 
     def check_protected(self, p: Path):
         # Internal agent files must never be exposed as a registered project.
-        if is_under(p.resolve(), self.state.resolve()):
+        resolved = p.resolve()
+        if is_under(resolved, self.state.resolve()):
             raise PolicyError("Agent state is private")
-        if is_under(p.resolve(), self.home.resolve()) and not is_under(
-            p.resolve(), (self.home / "projects").resolve()
+        if is_under(resolved, self.home.resolve()) and not is_under(
+            resolved, (self.home / "projects").resolve()
         ):
             raise PolicyError(
                 "Bridge installation is private; use the projects subfolder"
             )
         with self.connect() as c:
             roots = [Path(r[0]) for r in c.execute("SELECT root FROM protected")]
-        protected = [q for q in roots if is_under(p.resolve(), q)]
+        protected = [q for q in roots if is_under(resolved, q)]
         if protected:
             from .source_access import allows
 
@@ -519,10 +522,18 @@ class Agent(AutonomyMixin):
 
     def pending_local(self):
         with self.connect() as c:
-            c.execute(
-                "UPDATE requests SET status='expired' WHERE status IN ('pending','queued_sandbox','queued_media') AND created<?",
-                (time.time() - 600,),
-            )
+            cutoff = time.time() - 600
+            # Idle GUI polls must not acquire a SQLite writer lock. Expiry is
+            # still rechecked in SQL when work actually needs to be expired.
+            expired = c.execute(
+                "SELECT 1 FROM requests WHERE status IN ('pending','queued_sandbox','queued_media') AND created<? LIMIT 1",
+                (cutoff,),
+            ).fetchone()
+            if expired:
+                c.execute(
+                    "UPDATE requests SET status='expired' WHERE status IN ('pending','queued_sandbox','queued_media') AND created<?",
+                    (cutoff,),
+                )
             return [
                 dict(r)
                 for r in c.execute(
@@ -651,7 +662,7 @@ class Agent(AutonomyMixin):
                 "executes_code": False,
             }
 
-    def job_status(self, jid, offset=0, limit=8000):
+    def job_status(self, jid, offset=0, limit=8000, *, tail=False):
         if not re.fullmatch("[a-f0-9]{32}", jid):
             raise PolicyError("Invalid job ID")
         with self.connect() as c:
@@ -666,6 +677,8 @@ class Agent(AutonomyMixin):
         offset, limit = max(0, int(offset)), max(1, min(int(limit), 32000))
         if log.exists():
             with log.open("rb") as f:
+                if tail:
+                    offset = max(0, os.fstat(f.fileno()).st_size - limit)
                 f.seek(offset)
                 data = f.read(limit)
             r.update(

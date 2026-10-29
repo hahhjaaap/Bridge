@@ -20,9 +20,7 @@ def test_eager_import_cycle_detected_but_deferred_import_ignored(tmp_path):
     (package / "__init__.py").write_text("")
     (package / "alpha.py").write_text("from . import beta\n")
     (package / "beta.py").write_text("from . import alpha\n")
-    (package / "deferred.py").write_text(
-        "def work():\n    from . import alpha\n"
-    )
+    (package / "deferred.py").write_text("def work():\n    from . import alpha\n")
     graph = import_graph(package)
     assert graph["udb.alpha"] == {"udb", "udb.beta"}
     assert graph["udb.beta"] == {"udb", "udb.alpha"}
@@ -39,7 +37,6 @@ def test_type_checking_only_import_does_not_create_runtime_cycle(tmp_path):
         "if TYPE_CHECKING:\n    from . import second\n"
     )
     (package / "second.py").write_text(
-        "import typing\n"
-        "if typing.TYPE_CHECKING:\n    from . import first\n"
+        "import typing\nif typing.TYPE_CHECKING:\n    from . import first\n"
     )
     assert import_cycles(import_graph(package)) == []

@@ -193,52 +193,111 @@ class Activity:
             pass
 
 
-def read_events(home, *, after=None, limit=30):
-    if not 0 <= limit <= 2000:
-        raise ValueError("Log tail must be between 0 and 2000")
-    path = activity_path(home)
-    if not path.exists() or limit == 0:
-        return []
-    with closing(
-        sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1)
-    ) as db:
-        db.row_factory = sqlite3.Row
-        try:
-            if after is None:
-                rows = list(
-                    db.execute(
-                        "SELECT * FROM activity ORDER BY seq DESC LIMIT ?", (limit,)
+class EventReader:
+    """Skip unchanged idle polls without holding a database handle or read lock.
+
+    Database/WAL metadata detects ordinary writes and rotation. A periodic
+    query bounds delays on filesystems whose metadata updates are deferred.
+    Paths are validated even when a poll can use the cached high-water mark.
+    """
+
+    RESCAN_SECONDS = 2.0
+
+    def __init__(self, home):
+        self.home = home
+        self.close()
+
+    def close(self):
+        self.signature = None
+        self.caught_up_after = None
+        self.next_scan = 0.0
+
+    @staticmethod
+    def _signature(path):
+        result = []
+        for file in (path, path.with_name(path.name + "-wal")):
+            try:
+                info = file.stat()
+            except FileNotFoundError:
+                result.append(None)
+            else:
+                result.append(
+                    (
+                        info.st_dev,
+                        info.st_ino,
+                        info.st_size,
+                        info.st_mtime_ns,
+                        info.st_ctime_ns,
                     )
                 )
-                rows.reverse()
-            else:
-                rows = list(
-                    db.execute(
+        return tuple(result)
+
+    def read(self, *, after=None, limit=30):
+        if not 0 <= limit <= 2000:
+            raise ValueError("Log tail must be between 0 and 2000")
+        path = activity_path(self.home)
+        signature = self._signature(path)
+        if signature[0] is None:
+            self.close()
+            return []
+        if limit == 0:
+            return []
+        now = time.monotonic()
+        if (
+            after is not None
+            and after == self.caught_up_after
+            and signature == self.signature
+            and now < self.next_scan
+        ):
+            return []
+        with closing(
+            sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1)
+        ) as db:
+            db.row_factory = sqlite3.Row
+            try:
+                if after is None:
+                    rows = db.execute(
+                        "SELECT * FROM activity ORDER BY seq DESC LIMIT ?", (limit,)
+                    ).fetchall()
+                    rows.reverse()
+                else:
+                    rows = db.execute(
                         "SELECT * FROM activity WHERE seq > ? ORDER BY seq LIMIT ?",
                         (after, limit),
-                    )
-                )
-                # A recreated log can restart its sequence. Check through this
-                # same read-only connection rather than opening a second DB
-                # on every idle poll.
-                if not rows:
-                    newest = db.execute("SELECT MAX(seq) FROM activity").fetchone()[0]
-                    if newest is not None and newest < after:
-                        rows = list(
-                            db.execute(
+                    ).fetchall()
+                    if not rows:
+                        newest = db.execute("SELECT MAX(seq) FROM activity").fetchone()[
+                            0
+                        ]
+                        if newest is not None and newest < after:
+                            rows = db.execute(
                                 "SELECT * FROM activity ORDER BY seq LIMIT ?", (limit,)
-                            )
-                        )
-        except sqlite3.OperationalError as exc:
-            if "no such table" in str(exc):
-                return []
-            raise
-    result = []
-    for row in rows:
-        value = dict(row)
-        value["details"] = json.loads(value["details"])
-        result.append(value)
-    return result
+                            ).fetchall()
+            except sqlite3.OperationalError as exc:
+                if "no such table" in str(exc):
+                    return []
+                raise
+        # Retain the pre-query signature: a concurrent write must invalidate
+        # the next poll, even when it happened just after this SELECT finished.
+        self.signature = signature
+        self.next_scan = now + self.RESCAN_SECONDS
+        self.caught_up_after = (
+            (rows[-1]["seq"] if rows else after or 0)
+            if after is None or len(rows) < limit
+            else None
+        )
+        result = []
+        for row in rows:
+            value = dict(row)
+            value["details"] = json.loads(value["details"])
+            result.append(value)
+        return result
+
+
+def read_events(home, *, after=None, limit=30):
+    """One-shot query; live viewers should retain an EventReader instead."""
+    with closing(EventReader(home)) as reader:
+        return reader.read(after=after, limit=limit)
 
 
 def console_color(output):
@@ -313,25 +372,28 @@ def watch(home, *, tail=30, once=False, details=False, as_json=False, output=Non
         )
     last = 0
     try:
-        rows = read_events(home, limit=tail)
-        # --tail 0 follows only newly arriving rows, not retained history.
-        if tail == 0:
-            newest = read_events(home, limit=1)
-            last = newest[0]["seq"] if newest else 0
-        while True:
-            for row in rows:
-                print(
-                    json.dumps(row, ensure_ascii=True)
-                    if as_json
-                    else render_event(row, details=details, color=color, emoji=emoji),
-                    file=output,
-                    flush=True,
-                )
-                last = row["seq"]
-            if once:
-                return 0
-            time.sleep(0.3)
-            rows = read_events(home, after=last, limit=200)
+        with closing(EventReader(home)) as reader:
+            rows = reader.read(limit=tail)
+            # --tail 0 follows only newly arriving rows, not retained history.
+            if tail == 0:
+                newest = reader.read(limit=1)
+                last = newest[0]["seq"] if newest else 0
+            while True:
+                for row in rows:
+                    print(
+                        json.dumps(row, ensure_ascii=True)
+                        if as_json
+                        else render_event(
+                            row, details=details, color=color, emoji=emoji
+                        ),
+                        file=output,
+                        flush=True,
+                    )
+                    last = row["seq"]
+                if once:
+                    return 0
+                time.sleep(0.3)
+                rows = reader.read(after=last, limit=200)
     except KeyboardInterrupt:
         return 0
     except (OSError, ValueError, PolicyError, sqlite3.Error):

@@ -1,4 +1,4 @@
-"""Obsidian Studio: native Qt UI. Host approvals and Sandbox autonomy grants stay local."""
+"""UDB native Qt UI. Host approvals and Sandbox autonomy grants stay local."""
 
 from __future__ import annotations
 
@@ -45,6 +45,7 @@ from . import __version__
 from .core import reject_links
 from .desktop import DesktopController
 from .manager_dialogs import ApprovalDialog, ConnectionDialog, SourceDialog
+from .manager_host import ManagerHostMixin
 from .manager_refresh import ManagerRefreshMixin
 from .manager_widgets import (
     ACCENT,
@@ -68,7 +69,7 @@ PLUGIN_URL = (
 )
 
 
-class MainWindow(ManagerRefreshMixin, QMainWindow):
+class MainWindow(ManagerHostMixin, ManagerRefreshMixin, QMainWindow):
     def __init__(self, home, controller=None):
         super().__init__()
         self.controller = controller or DesktopController(Path(home))
@@ -84,12 +85,10 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         self.connection_signature = None
         self._closing = False
         self._last_project_auth_check = 0.0
-        self.setWindowTitle(
-            "Universal Desktop Bridge " + __version__ + " · Obsidian Studio"
-        )
+        self.setWindowTitle("Universal Desktop Bridge · " + __version__)
         self.resize(1220, 820)
         self.setMinimumSize(940, 640)
-        self.setWindowIcon(icon("shield", ACCENT, 32))
+        self.setWindowIcon(icon("brand", ACCENT, 32))
         root = QWidget()
         root.setObjectName("Root")
         self.setCentralWidget(root)
@@ -102,12 +101,12 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         outer.addLayout(body, 1)
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(192)
+        sidebar.setFixedWidth(200)
         nav = QVBoxLayout(sidebar)
         nav.setContentsMargins(16, 26, 16, 20)
         nav.setSpacing(9)
-        nav.addWidget(label("bridge /", "Brand"))
-        nav.addWidget(label("UNIVERSAL DESKTOP", "Eyebrow"))
+        nav.addWidget(label("UDB", "Brand"))
+        nav.addWidget(label("TRỢ LÝ TRÊN MÁY", "Eyebrow"))
         nav.addSpacing(26)
         self.nav_buttons = []
         for i, (text, glyph) in enumerate(
@@ -117,7 +116,7 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
                 ("Tiến trình", "activity"),
                 ("Bảo vệ", "shield"),
                 ("Kết nối", "settings"),
-                ("Máy tính", "activity"),
+                ("Máy tính", "cursor"),
             )
         ):
             btn = MotionButton(text, glyph, "nav")
@@ -126,10 +125,10 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
             nav.addWidget(btn)
             self.nav_buttons.append(btn)
         nav.addStretch()
-        protected = label("Checkpoint & dữ liệu\nđược bảo vệ", "Muted", True)
+        protected = label("Bạn quyết định\nAI được làm gì", "Muted", True)
         nav.addWidget(protected)
         nav.addSpacing(12)
-        nav.addWidget(label("OBSIDIAN STUDIO", "Eyebrow"))
+        nav.addWidget(label("DESKTOP BRIDGE", "Eyebrow"))
         nav.addWidget(label("Agent " + __version__, "Fine"))
         body.addWidget(sidebar)
         self.stack = QStackedWidget()
@@ -148,6 +147,10 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         self.footer_status = label("MCP riêng tư · Quyền tự động theo dự án", "Fine")
         fl.addWidget(self.footer_status)
         fl.addStretch()
+        quick = MotionButton("Thu gọn", "cursor")
+        quick.setFixedHeight(30)
+        quick.clicked.connect(self.open_quick_controls)
+        fl.addWidget(quick)
         self.footer_project = label("Chưa chọn dự án", "Fine")
         fl.addWidget(self.footer_project)
         outer.addWidget(foot)
@@ -156,7 +159,7 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(1500)
-        self.navigate(0)
+        self.navigate(5)
         self.refresh()
 
     def page(self, title, subtitle):
@@ -450,77 +453,20 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         lay.addStretch()
         return p
 
-    def build_host(self):
-        p, lay = self.page(
-            "Máy tính · chạy nền",
-            "Phiên trình duyệt riêng và cửa sổ soạn thảo riêng trên Windows. Không dùng chuột/phím hệ thống hoặc tab hiện có.",
-        )
-        self.host_enabled = QCheckBox("Cho phép UDB mở phiên nền riêng trên máy này")
-        self.host_enabled.toggled.connect(self.set_host_enabled)
-        lay.addWidget(self.host_enabled)
-        self.host_resource = label("Đang lấy số liệu CPU/RAM…", "H2", True)
-        lay.addWidget(self.host_resource)
-        self.host_pressure = label("", "Muted", True)
-        lay.addWidget(self.host_pressure)
-        lay.addWidget(
-            label(
-                "Tối đa 2 phiên (1 trình duyệt + 1 cửa sổ), 4 tab; một thao tác tại một thời điểm. CPU ≥85%, RAM ≥85% hoặc RAM trống <1,5 GB: chặn mở thêm và tạm đóng băng các trang UDB.",
-                "Muted",
-                True,
-            )
-        )
-        self.host_sessions = QPlainTextEdit()
-        self.host_sessions.setReadOnly(True)
-        lay.addWidget(self.host_sessions, 1)
-        browser = MotionButton("Mở trình duyệt nền", "plus")
-        browser.clicked.connect(lambda: self.start_host_local("browser"))
-        workspace = MotionButton("Mở cửa sổ riêng", "plus")
-        workspace.clicked.connect(lambda: self.start_host_local("workspace"))
-        stop = MotionButton("Dừng toàn bộ phiên UDB", "power", "danger")
-        stop.clicked.connect(self.stop_host_local)
-        lay.addLayout(row(browser, workspace, None, stop))
-        lay.addWidget(
-            label(
-                "Trình duyệt nền không hiện thành tab trên Chrome bạn đang dùng; có thể đọc/chụp trang qua công cụ host. Không dùng tài khoản đăng nhập sẵn của bạn. Cửa sổ riêng hiện tại hỗ trợ văn bản; chưa điều khiển ứng dụng bất kỳ.",
-                "Fine",
-                True,
-            )
-        )
-        return p
-
-    def set_host_enabled(self, value):
-        from .host_client import atomic_json
-
-        self.guarded(
-            lambda: atomic_json(
-                self.agent.state / "host-settings.json", {"enabled": bool(value)}
-            )
-        )
-
-    def start_host_local(self, kind):
-        from .host_client import command
-
-        self.run_background(
-            lambda: command(
-                self.agent,
-                "start",
-                kind=kind,
-                task="Phiên riêng do chủ máy mở trong UDB",
-                duration_seconds=900,
-            )
-        )
-
-    def stop_host_local(self):
-        # Local revocation is immediate for new commands. The monitor closes
-        # only jobs owned by this engine, even if an action is in flight.
-        self.host_enabled.setChecked(False)
-
     def navigate(self, index):
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.selected(i == index)
         self.stack.currentWidget().updateGeometry()
         self.stack.currentWidget().update()
+
+    def open_quick_controls(self):
+        from .manager_quick import QuickControls
+
+        if not getattr(self, "quick_controls", None):
+            self.quick_controls = QuickControls(self)
+        self.quick_controls.show_panel()
+        self.hide()
 
     def guarded(self, fn):
         try:
@@ -536,6 +482,15 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
         self.local_button.setEnabled(False)
         self.configure_button.setEnabled(False)
         self.status_label.setText("●  Đang xử lý…")
+        for button in (
+            self.browser_start_button,
+            self.browser_login_button,
+            self.browser_background_button,
+            self.workspace_start_button,
+        ):
+            button.setEnabled(False)
+        if getattr(self, "quick_controls", None):
+            self.quick_controls.sync()
         self.band.flash()
         worker = Worker(fn)
         self.workers.append(worker)
@@ -551,7 +506,7 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
 
         def failed(message):
             complete(None)
-            QMessageBox.warning(self, "Không kết nối được", message)
+            QMessageBox.warning(self, "Không thực hiện được", message)
 
         worker.signals.done.connect(complete, Qt.ConnectionType.QueuedConnection)
         worker.signals.error.connect(failed, Qt.ConnectionType.QueuedConnection)
@@ -767,7 +722,7 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
             return
         jid = selected[0].data(0, Qt.ItemDataRole.UserRole)
         try:
-            result = self.agent.job_status(jid, 0, 32000)
+            result = self.agent.job_status(jid, 0, 32000, tail=True)
             is_desktop = result["info"].get("kind") == "desktop"
             self.stop_desktop.setEnabled(
                 is_desktop and result["status"] in ("running", "reviewing", "stopping")
@@ -792,12 +747,6 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
                 if script_text != self.job_script.toPlainText():
                     self.job_script.setPlainText(script_text)
                 return
-            log = self.agent.state / "jobs" / jid / "output" / "output.log"
-            reject_links(log)
-            if log.is_file() and log.stat().st_size > 32000:
-                result = self.agent.job_status(
-                    jid, max(0, log.stat().st_size - 32000), 32000
-                )
             header = json.dumps(
                 {k: v for k, v in result.items() if k not in ("output",)},
                 ensure_ascii=False,
@@ -898,13 +847,30 @@ class MainWindow(ManagerRefreshMixin, QMainWindow):
                 pass  # DWM styling is cosmetic and may be unsupported.
 
     def closeEvent(self, event):
+        if getattr(self, "_keep_in_tray", False) and not getattr(
+            self, "_quit_requested", False
+        ):
+            self.hide()
+            event.ignore()
+            return
         if self.busy:
             event.ignore()
             return
         if not self._closing:
             self._closing = True
             self.timer.stop()
-            self.controller.close()
+            try:
+                self.controller.close()
+            except Exception as exc:
+                self._closing = False
+                self.timer.start(1500)
+                event.ignore()
+                QMessageBox.warning(self, "Chưa thể đóng UDB", str(exc))
+                return
+        if getattr(self, "quick_controls", None):
+            self.quick_controls.hide()
+            if self.quick_controls.tray:
+                self.quick_controls.tray.hide()
         event.accept()
 
 
@@ -923,7 +889,7 @@ def make_app():
     palette.setColor(QPalette.ColorRole.WindowText, QColor(TEXT))
     palette.setColor(QPalette.ColorRole.Button, QColor(PANEL))
     palette.setColor(QPalette.ColorRole.ButtonText, QColor(TEXT))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor("#345040"))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#28483f"))
     app.setPalette(palette)
     return app
 
@@ -934,21 +900,37 @@ def run(home: Path, start_tunnel=False, screenshot=None):
 
         ctypes.windll.kernel32.FreeConsole()
     app = make_app()
-    controller = DesktopController(home)
-    settings = controller.settings()
-    app.setProperty("motion", settings.get("motion", True))
-    lock = QLockFile(str(controller.agent.state / "manager.lock"))
+    from .core import Agent
+
+    agent = Agent(home)
+    lock = QLockFile(str(agent.state / "manager.lock"))
     lock.setStaleLockTime(30000)
     if not lock.tryLock(50):
+        from .headless import manager_status
+
+        headless = manager_status(agent.state)["mode"] == "headless"
         QMessageBox.information(
             None,
             "Bridge đang mở",
-            "Ứng dụng đã được mở. Kiểm tra cửa sổ hoặc thanh tác vụ Windows.",
+            "UDB đang chạy ẩn, không có cửa sổ hoặc biểu tượng khay. Để chuyển sang GUI, dùng udb stop rồi udb gui. Dừng tác nhân sẽ đóng các phiên UDB đang chạy."
+            if headless
+            else "Ứng dụng đã được mở. Kiểm tra biểu tượng UDB ở khay hệ thống hoặc thanh tác vụ Windows.",
         )
         return
+    controller = DesktopController(home)
+    settings = controller.settings()
+    app.setProperty("motion", settings.get("motion", True))
     controller.start_host()
     window = MainWindow(home, controller)
-    window.show()
+    # The full manager remains the fallback when a tray cannot be reached.
+    # Screenshots retain the full-page capture contract.
+    from .manager_quick import QuickControls
+
+    window.quick_controls = QuickControls(window)
+    if not screenshot and window.quick_controls.install_tray():
+        window.quick_controls.show_panel()
+    else:
+        window.show()
     if start_tunnel or settings.get("autoconnect", False):
         QTimer.singleShot(350, window.toggle_tunnel)
     if screenshot:

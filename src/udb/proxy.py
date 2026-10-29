@@ -48,21 +48,31 @@ def normalized_output(tool: str, result: dict[str, Any]) -> dict[str, Any]:
     first = text_blocks[0].strip() if text_blocks else ""
     first_line = first.splitlines()[0] if first else ""
     native = native_status(first_line)
+    if native == "ERROR":
+        value["isError"] = True
+        return value
+    report = value.get("structuredContent")
+    if not isinstance(report, dict):
+        report = None
+        for text in text_blocks:
+            candidate = report_from_text(text)
+            if isinstance(candidate, dict):
+                report = candidate
+                break
     if native:
-        if value.get("isError") is True and native != "ERROR":
+        if (
+            value.get("isError") is True
+            or report_outcome(report or {}).status == "ERROR"
+        ):
+            value["isError"] = True
             value["content"] = [
                 {
                     "type": "text",
                     "text": f"ERROR | Backend reported a tool error ({tool})",
                 }
             ] + content
-        if native == "ERROR":
-            value["isError"] = True
         return value
 
-    report = value.get("structuredContent")
-    if not isinstance(report, dict):
-        report = report_from_text(first)
     state, label = report_outcome(report or {})
     if value.get("isError") is True:
         state, label = "ERROR", "Backend reported a tool error"
@@ -187,6 +197,11 @@ class UnifiedProxy:
                 elif "desktop" not in grant.get("capabilities", []):
                     self.companion.request("udb/close-desktop", timeout=10)
                     self._pointer_presence_started = False
+                elif grant.get("desktop_paused"):
+                    if self._pointer_presence_started:
+                        self.companion.request("udb/close-desktop", timeout=10)
+                    self._pointer_presence_started = False
+                    self._pointer_retry_after = 0.0
                 elif (
                     not self._pointer_presence_started
                     and time.monotonic() >= self._pointer_retry_after
@@ -297,6 +312,14 @@ class UnifiedProxy:
                 "capabilities", []
             ):
                 raise RuntimeError("Existing desktop capability is required")
+            if (
+                name == "virtual_pointer"
+                and grant.get("desktop_paused")
+                and arguments.get("action") not in {"status", "hide", "stop"}
+            ):
+                raise RuntimeError(
+                    "Desktop control is paused locally; only the owner can resume in UDB"
+                )
             if (
                 name == "terminal_start"
                 and arguments.get("mode") == "conpty"

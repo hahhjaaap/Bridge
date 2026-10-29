@@ -294,9 +294,13 @@ def test_task_terminal_state_changes_mark_checkpoint_dirty():
 @pytest.mark.parametrize(
     "selector,role,name",
     [
-        ("#save", "", ""), ("", "button", "Save"), ("", "textbox", "Email"),
-        ("", "link", "Continue"), ("", "checkbox", "Agree"),
-        ("", "combobox", "Country"), ("", "heading", "Results"),
+        ("#save", "", ""),
+        ("", "button", "Save"),
+        ("", "textbox", "Email"),
+        ("", "link", "Continue"),
+        ("", "checkbox", "Agree"),
+        ("", "combobox", "Country"),
+        ("", "heading", "Results"),
     ],
 )
 def test_browser_locator_accepts_css_or_semantic_role(selector, role, name):
@@ -306,11 +310,16 @@ def test_browser_locator_accepts_css_or_semantic_role(selector, role, name):
 @pytest.mark.parametrize(
     "selector,role,name",
     [
-        ("#save", "button", "Save"), ("", "", ""), ("", "", "Save"),
-        ("", "document", "Page"), ("x" * 501, "", ""),
+        ("#save", "button", "Save"),
+        ("", "", ""),
+        ("", "", "Save"),
+        ("", "document", "Page"),
+        ("x" * 501, "", ""),
     ],
 )
-def test_browser_locator_rejects_ambiguous_or_unsupported_locators(selector, role, name):
+def test_browser_locator_rejects_ambiguous_or_unsupported_locators(
+    selector, role, name
+):
     with pytest.raises(PolicyError):
         validate_locator(selector, role, name)
 
@@ -319,9 +328,10 @@ def test_browser_semantic_click_uses_accessible_role_and_name():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
     captured = {}
-    browser.evaluate = lambda tab, expression, timeout=10: captured.update(
-        tab=tab, expression=expression, timeout=timeout
-    ) or {"ok": True, "x": 12, "y": 34}
+    browser.evaluate = lambda tab, expression, timeout=10: (
+        captured.update(tab=tab, expression=expression, timeout=timeout)
+        or {"ok": True, "x": 12, "y": 34}
+    )
     calls = []
     browser.call = lambda method, params=None, session=None, timeout=10: (
         calls.append((method, params, session)) or {}
@@ -334,18 +344,19 @@ def test_browser_semantic_click_uses_accessible_role_and_name():
     assert "locator_not_unique" in captured["expression"]
     assert "scrollIntoView" in captured["expression"]
     assert "elementFromPoint" in captured["expression"]
-    assert [call[1]["type"] for call in calls] == [
-        "mouseMoved", "mousePressed", "mouseReleased"
-    ]
+    assert [
+        call[1]["type"] for call in calls if call[0] == "Input.dispatchMouseEvent"
+    ] == ["mouseMoved", "mousePressed", "mouseReleased"]
     assert all(call[2] == "owned-session" for call in calls)
 
 
 def test_browser_snapshot_is_bounded_and_redacts_secret_controls():
     browser = Browser.__new__(Browser)
     captured = {}
-    browser.evaluate = lambda tab, expression, timeout=10: captured.update(
-        tab=tab, expression=expression, timeout=timeout
-    ) or {"count": 0, "elements": [], "truncated": False}
+    browser.evaluate = lambda tab, expression, timeout=10: (
+        captured.update(tab=tab, expression=expression, timeout=timeout)
+        or {"count": 0, "elements": [], "truncated": False}
+    )
     result = browser.snapshot("owned-tab")
     assert result["count"] == 0
     assert "slice(0,160)" in captured["expression"]
@@ -355,23 +366,37 @@ def test_browser_snapshot_is_bounded_and_redacts_secret_controls():
 
 def test_browser_wait_for_polls_until_visible():
     browser = Browser.__new__(Browser)
-    results = iter([{"ok": False, "state": "visible", "matches": 0},
-                    {"ok": True, "state": "visible", "matches": 1, "visible": 1}])
+    results = iter(
+        [
+            {"ok": False, "state": "visible", "matches": 0},
+            {"ok": True, "state": "visible", "matches": 1, "visible": 1},
+        ]
+    )
     captured = []
-    browser.evaluate = lambda tab, expression, timeout=10: captured.append(expression) or next(results)
-    result = browser.wait_for("owned-tab", role="button", name="Continue", timeout_ms=1000)
+    browser.evaluate = lambda tab, expression, timeout=10: (
+        captured.append(expression) or next(results)
+    )
+    result = browser.wait_for(
+        "owned-tab", role="button", name="Continue", timeout_ms=1000
+    )
     assert result["ok"] and len(captured) == 2
     assert all("wantedName" in expression for expression in captured)
 
 
 def test_browser_wait_for_timeout_is_explicit():
     browser = Browser.__new__(Browser)
-    browser.evaluate = lambda *args, **kwargs: {"ok": False, "state": "visible", "matches": 0}
+    browser.evaluate = lambda *args, **kwargs: {
+        "ok": False,
+        "state": "visible",
+        "matches": 0,
+    }
     result = browser.wait_for("owned-tab", selector="#late", timeout_ms=100)
     assert result["ok"] is False and result["timed_out"] is True
 
 
-@pytest.mark.parametrize("key", ["Enter", "Tab", "Escape", "ArrowDown", "Ctrl+A", "Shift+Tab"])
+@pytest.mark.parametrize(
+    "key", ["Enter", "Tab", "Escape", "ArrowDown", "Ctrl+A", "Shift+Tab"]
+)
 def test_browser_key_allowlist_accepts_common_keys(key):
     assert parse_key(key)["code"]
 
@@ -387,10 +412,15 @@ def test_browser_press_focuses_owned_element_then_dispatches_cdp_key():
     browser.tabs = {"owned-tab": "owned-session"}
     browser.evaluate = lambda *args, **kwargs: {"ok": True, "focused": True}
     calls = []
-    browser.call = lambda method, params=None, session=None, timeout=10: calls.append((method, params, session)) or {}
+    browser.call = lambda method, params=None, session=None, timeout=10: (
+        calls.append((method, params, session)) or {}
+    )
     result = browser.press("owned-tab", "Enter", role="button", name="Continue")
     assert result["ok"]
-    assert [item[0] for item in calls] == ["Input.dispatchKeyEvent", "Input.dispatchKeyEvent"]
+    assert [item[0] for item in calls] == [
+        "Input.dispatchKeyEvent",
+        "Input.dispatchKeyEvent",
+    ]
     assert calls[0][1]["type"] == "keyDown" and calls[1][1]["type"] == "keyUp"
     assert all(item[2] == "owned-session" for item in calls)
     calls.clear()
@@ -403,8 +433,13 @@ def test_browser_press_focuses_owned_element_then_dispatches_cdp_key():
 def test_browser_select_option_requires_native_select_and_verifies_selection():
     browser = Browser.__new__(Browser)
     captured = {}
-    browser.evaluate = lambda tab, expression, timeout=10: captured.update(expression=expression) or {"ok": True, "value": "VN", "label": "Vietnam"}
-    result = browser.element("owned-tab", "select_option", selector="#country", value="VN")
+    browser.evaluate = lambda tab, expression, timeout=10: (
+        captured.update(expression=expression)
+        or {"ok": True, "value": "VN", "label": "Vietnam"}
+    )
+    result = browser.element(
+        "owned-tab", "select_option", selector="#country", value="VN"
+    )
     assert result["ok"] and result["value"] == "VN"
     assert "e.tagName!=='SELECT'" in captured["expression"]
     assert "option_not_found" in captured["expression"]
@@ -413,7 +448,9 @@ def test_browser_select_option_requires_native_select_and_verifies_selection():
 def test_browser_read_redacts_token_like_fields():
     browser = Browser.__new__(Browser)
     captured = {}
-    browser.evaluate = lambda tab, expression, timeout=10: captured.update(expression=expression) or {"elements": []}
+    browser.evaluate = lambda tab, expression, timeout=10: (
+        captured.update(expression=expression) or {"elements": []}
+    )
     browser.read("owned-tab")
     assert "password|secret|token|otp|one-time-code" in captured["expression"]
     assert "value:secret?'[redacted]'" in captured["expression"]
@@ -423,16 +460,39 @@ def test_host_dispatch_routes_new_browser_actions(engine):
     class FakeBrowser:
         deadline = None
         tabs = {"owned-tab": "session"}
-        def snapshot(self, tab): return {"ok": True, "tab": tab}
-        def wait_for(self, *args): return {"ok": True, "args": args}
-        def press(self, *args): return {"ok": True, "args": args}
-        def history(self, tab, action): return {"ok": True, "tab": tab, "action": action}
-        def element(self, *args): return {"ok": True, "args": args}
+
+        def snapshot(self, tab):
+            return {"ok": True, "tab": tab}
+
+        def wait_for(self, *args):
+            return {"ok": True, "args": args}
+
+        def press(self, *args):
+            return {"ok": True, "args": args}
+
+        def history(self, tab, action):
+            return {"ok": True, "tab": tab, "action": action}
+
+        def element(self, *args):
+            return {"ok": True, "args": args}
+
     fake = FakeBrowser()
     sid = "c" * 32
-    engine.sessions[sid] = {"kind": "browser", "expires": time.time() + 60, "object": fake}
-    assert engine.dispatch("browser", {"session_id": sid, "action": "snapshot", "tab_id": "owned-tab"}) == {"ok": True, "tab": "owned-tab"}
-    assert engine.dispatch("browser", {"session_id": sid, "action": "reload", "tab_id": "owned-tab"})["action"] == "reload"
+    engine.sessions[sid] = {
+        "kind": "browser",
+        "expires": time.time() + 60,
+        "object": fake,
+    }
+    assert engine.dispatch(
+        "browser", {"session_id": sid, "action": "snapshot", "tab_id": "owned-tab"}
+    ) == {"ok": True, "tab": "owned-tab"}
+    assert (
+        engine.dispatch(
+            "browser", {"session_id": sid, "action": "reload", "tab_id": "owned-tab"}
+        )["action"]
+        == "reload"
+    )
+
 
 def test_browser_attach_installs_network_blocklist_for_each_owned_tab():
     browser = Browser.__new__(Browser)
@@ -457,13 +517,19 @@ def test_browser_attach_installs_network_blocklist_for_each_owned_tab():
 
 def test_browser_listing_adopts_owned_popups_and_closes_excess_tabs():
     browser = Browser.__new__(Browser)
-    browser.tabs = {"one": "session-one", "two": "session-two", "three": "session-three"}
+    browser.tabs = {
+        "one": "session-one",
+        "two": "session-two",
+        "three": "session-three",
+    }
     targets = [
         {
             "type": "page",
             "targetId": tab,
             "title": tab,
-            "url": "chrome://settings" if tab == "internal" else "https://example.com/?token=secret",
+            "url": "chrome://settings"
+            if tab == "internal"
+            else "https://example.com/?token=secret",
         }
         for tab in ("one", "two", "three", "internal", "popup", "excess")
     ]
@@ -490,10 +556,12 @@ def test_browser_listing_adopts_owned_popups_and_closes_excess_tabs():
 def test_browser_navigation_waits_for_complete_document_and_redacts_query():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
-    states = iter([
-        {"readyState": "loading", "href": "https://example.com/path?secret=1"},
-        {"readyState": "complete", "href": "https://example.com/path?secret=1"},
-    ])
+    states = iter(
+        [
+            {"readyState": "loading", "href": "https://example.com/path?secret=1"},
+            {"readyState": "complete", "href": "https://example.com/path?secret=1"},
+        ]
+    )
     browser.evaluate = lambda tab, expression, timeout=10: (
         "https://old.example/" if expression == "location.href" else next(states)
     )
@@ -514,7 +582,8 @@ def test_browser_navigation_times_out_if_document_stays_loading():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
     browser.evaluate = lambda tab, expression, timeout=10: (
-        "https://old.example/" if expression == "location.href"
+        "https://old.example/"
+        if expression == "location.href"
         else {"readyState": "loading", "href": "https://example.com/"}
     )
     browser.call = lambda method, params=None, session=None, timeout=10: (
@@ -524,17 +593,54 @@ def test_browser_navigation_times_out_if_document_stays_loading():
         browser.navigate("owned-tab", "https://example.com/", timeout_ms=100)
 
 
+def test_navigation_retries_read_only_timeouts_during_context_swap():
+    browser = Browser.__new__(Browser)
+    results = iter(
+        [
+            PolicyError("Browser operation timed out; outcome may be unknown"),
+            {"readyState": "complete", "href": "https://next.example/"},
+        ]
+    )
+
+    def evaluate(*args, **kwargs):
+        result = next(results)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    browser.evaluate = evaluate
+    ready = browser._wait_for_document_ready("owned-tab", timeout_ms=1000)
+    assert ready["navigation_completed"] and ready["url"] == "https://next.example/"
+
+
+def test_fill_is_not_replayed_when_change_handler_destroys_context():
+    browser = Browser.__new__(Browser)
+    calls = []
+
+    def evaluate(*args, **kwargs):
+        calls.append(args)
+        raise PolicyError("Browser operation failed: Execution context was destroyed")
+
+    browser.evaluate = evaluate
+    with pytest.raises(PolicyError, match="outcome unknown; inspect before retrying"):
+        browser.element("owned-tab", "fill", selector="#name", value="once")
+    assert len(calls) == 1
+
+
 def test_browser_click_waits_for_actionability_then_dispatches_pointer_events():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
-    results = iter([
-        {"ok": False, "error": "locator_not_unique", "matches": 0},
-        {"ok": False, "error": "not_actionable", "reason": "obscured"},
-        {"ok": True, "x": 50, "y": 80},
-    ])
+    results = iter(
+        [
+            {"ok": False, "error": "locator_not_unique", "matches": 0},
+            {"ok": False, "error": "not_actionable", "reason": "obscured"},
+            {"ok": True, "x": 50, "y": 80},
+        ]
+    )
     expressions = []
     browser.evaluate = lambda tab, expression, timeout=10: (
-        "https://example.com/" if expression == "location.href"
+        "https://example.com/"
+        if expression == "location.href"
         else expressions.append(expression) or next(results)
     )
     calls = []
@@ -547,20 +653,25 @@ def test_browser_click_waits_for_actionability_then_dispatches_pointer_events():
     result = browser.element("owned-tab", "click", selector="#continue")
     assert result["ok"]
     assert len(expressions) == 3
-    assert [call[1]["type"] for call in calls] == [
-        "mouseMoved", "mousePressed", "mouseReleased"
-    ]
+    assert [
+        call[1]["type"] for call in calls if call[0] == "Input.dispatchMouseEvent"
+    ] == ["mouseMoved", "mousePressed", "mouseReleased"]
 
 
 def test_browser_ambiguous_click_does_not_dispatch_mouse_events():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
     browser.evaluate = lambda *args, **kwargs: {
-        "ok": False, "error": "locator_not_unique", "matches": 2
+        "ok": False,
+        "error": "locator_not_unique",
+        "matches": 2,
     }
-    browser.call = lambda *args, **kwargs: pytest.fail("ambiguous locator must not click")
+    browser.call = lambda *args, **kwargs: pytest.fail(
+        "ambiguous locator must not click"
+    )
     result = browser.element("owned-tab", "click", selector=".save")
     assert not result["ok"] and result["matches"] == 2
+
 
 def test_browser_click_waits_for_navigation_and_redacts_query_string():
     browser = Browser.__new__(Browser)
@@ -578,9 +689,14 @@ def test_browser_click_waits_for_navigation_and_redacts_query_string():
 
     browser.evaluate = evaluate
     browser.call = lambda method, params=None, session=None, timeout=10: (
-        {"targetInfos": [
-            {"targetId": "owned-tab", "url": "https://new.example/result?session=secret"}
-        ]}
+        {
+            "targetInfos": [
+                {
+                    "targetId": "owned-tab",
+                    "url": "https://new.example/result?session=secret",
+                }
+            ]
+        }
         if method == "Target.getTargets"
         else {}
     )
@@ -588,6 +704,7 @@ def test_browser_click_waits_for_navigation_and_redacts_query_string():
     assert result["ok"] and result["clicked"]
     assert result["navigation_completed"]
     assert result["url"] == "https://new.example/result"
+
 
 def test_click_navigation_does_not_evaluate_during_context_destruction():
     browser = Browser.__new__(Browser)
@@ -600,13 +717,14 @@ def test_click_navigation_does_not_evaluate_during_context_destruction():
     def fake_call(method, params=None, session=None, timeout=10):
         calls.append(method)
         assert method == "Target.getTargets"
-        return {"targetInfos": [
-            {"targetId": "owned-tab", "url": "https://next.example/"}
-        ]}
+        return {
+            "targetInfos": [{"targetId": "owned-tab", "url": "https://next.example/"}]
+        }
 
     browser.call = fake_call
     browser._wait_for_document_ready = lambda *args, **kwargs: {
-        "navigation_completed": True, "url": "https://next.example/"
+        "navigation_completed": True,
+        "url": "https://next.example/",
     }
     result = browser._wait_for_click_navigation(
         "owned-tab", "https://old.example/", observe_ms=100
@@ -637,7 +755,8 @@ def test_browser_same_url_navigation_waits_for_new_loader():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
     browser.evaluate = lambda tab, expression, timeout=10: (
-        "https://example.com/" if expression == "location.href"
+        "https://example.com/"
+        if expression == "location.href"
         else {"readyState": "complete", "href": "https://example.com/"}
     )
     loaders = iter(["old-loader", "new-loader"])
@@ -661,11 +780,13 @@ def test_browser_same_url_navigation_rejects_stale_loader():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
     browser.evaluate = lambda tab, expression, timeout=10: (
-        "https://example.com/" if expression == "location.href"
+        "https://example.com/"
+        if expression == "location.href"
         else pytest.fail("Old page must not be mistaken for new navigation")
     )
     browser.call = lambda method, params=None, session=None, timeout=10: (
-        {"loaderId": "new-loader"} if method == "Page.navigate"
+        {"loaderId": "new-loader"}
+        if method == "Page.navigate"
         else {"frameTree": {"frame": {"loaderId": "old-loader"}}}
     )
     with pytest.raises(PolicyError, match="Navigation timed out"):
@@ -728,3 +849,121 @@ def test_browser_wait_for_invalid_css_selector_returns_structured_error():
     )
     assert result == {"ok": False, "error": "invalid_selector", "state": "visible"}
     assert len(calls) == 2
+
+
+class BackgroundBrowser:
+    def __init__(self, folder):
+        self.urls = []
+        self.deadline = None
+        self.closed = False
+
+    def listing(self):
+        return []
+
+    def new(self, url):
+        self.urls.append(url)
+        return {"tab_id": str(len(self.urls)), "background": True}
+
+    def close(self):
+        self.closed = True
+
+
+def test_browser_open_starts_and_reuses_one_background_session(engine, monkeypatch):
+    monkeypatch.setattr("udb.host_browser.Browser", BackgroundBrowser)
+    first = engine.dispatch(
+        "browser", {"action": "open", "url": "https://example.org/"}
+    )
+    sid = first["session_id"]
+    assert first["no_user_input"] and first["owner"] == "UDB"
+    assert first["browser_mode"] == "separate_headless_profile"
+    browser = engine.sessions[sid]["object"]
+    browser.deadline = time.monotonic() - 60
+    second = engine.dispatch(
+        "browser", {"action": "open", "url": "https://example.org/two"}
+    )
+    assert second["session_id"] == sid and second["tab_id"] != first["tab_id"]
+    assert len(engine.sessions) == 1
+    assert browser.deadline > time.monotonic()
+    assert browser.urls == ["https://example.org/", "https://example.org/two"]
+
+
+@pytest.mark.parametrize(
+    "disabled,pressure,url",
+    [
+        (True, False, "https://example.org/"),
+        (False, True, "https://example.org/"),
+        (False, False, "file:///secret"),
+    ],
+)
+def test_browser_auto_open_keeps_permission_resource_and_url_guards(
+    engine, monkeypatch, disabled, pressure, url
+):
+    monkeypatch.setattr(
+        "udb.host_browser.Browser", lambda *a: pytest.fail("must not launch")
+    )
+    if disabled:
+        atomic_json(engine.agent.state / "host-settings.json", {"enabled": False})
+    if pressure:
+        engine.resource["admission_ready"] = False
+    with pytest.raises(PolicyError):
+        engine.dispatch("browser", {"action": "open", "url": url})
+    assert engine.sessions == {}
+
+
+def test_browser_auto_open_does_not_replace_explicit_expired_session(
+    engine, monkeypatch
+):
+    monkeypatch.setattr("udb.host_browser.Browser", BackgroundBrowser)
+    first = engine.dispatch(
+        "browser", {"action": "open", "url": "https://example.org/"}
+    )
+    sid = first["session_id"]
+    obj = engine.sessions[sid]["object"]
+    engine.sessions[sid]["expires"] = time.time() - 1
+    with pytest.raises(PolicyError, match="expired"):
+        engine.dispatch("browser", {"session_id": sid, "action": "open"})
+    assert obj.closed and not engine.sessions
+
+
+def test_browser_open_failure_is_never_replayed(engine, monkeypatch):
+    monkeypatch.setattr("udb.host_browser.Browser", BackgroundBrowser)
+    first = engine.dispatch("browser", {"action": "open"})
+    calls = []
+
+    def uncertain(url):
+        calls.append(url)
+        raise PolicyError("outcome may be unknown")
+
+    engine.sessions[first["session_id"]]["object"].new = uncertain
+    with pytest.raises(PolicyError, match="unknown"):
+        engine.dispatch("browser", {"action": "open", "url": "https://example.org/"})
+    assert calls == ["https://example.org/"]
+
+
+def test_browser_open_mcp_schema_and_rpc_allow_omitted_session(tmp_path, monkeypatch):
+    import asyncio
+
+    from udb.server import make_server
+
+    calls = []
+
+    def command(agent, operation, **args):
+        calls.append((operation, args))
+        return {"session_id": "a" * 32, "tab_id": "owned", "owner": "UDB"}
+
+    monkeypatch.setattr("udb.host_client.command", command)
+    mcp = make_server(Agent(tmp_path / "home"))
+
+    async def check():
+        tools = await mcp.list_tools()
+        tool = next(t for t in tools if t.name == "host_browser")
+        assert "session_id" not in tool.inputSchema.get("required", [])
+        result = await mcp.call_tool(
+            "host_browser", {"action": "open", "url": "https://example.org/"}
+        )
+        assert result
+
+    asyncio.run(check())
+    assert calls[0][0] == "browser"
+    assert calls[0][1]["session_id"] == ""
+    assert calls[0][1]["action"] == "open"

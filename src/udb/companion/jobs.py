@@ -110,4 +110,3 @@ class Task:
             if self.worker:
                 self.worker.terminate()
         return self.read()
-

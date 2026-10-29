@@ -340,6 +340,9 @@ def test_computer_denies_all_real_operations_without_grant(fixture):
             ("files", dict(action="list", path=str(work))),
             ("execute", {}),
             ("desktop", dict(action="list")),
+            ("desktop", dict(action="read_text")),
+            ("desktop", dict(action="set_checked", checked=True)),
+            ("utilities", dict(action="apps")),
             ("process", dict(action="list")),
         ]:
             with pytest.raises(PolicyError, match="owner must run"):

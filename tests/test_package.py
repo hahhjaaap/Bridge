@@ -36,8 +36,8 @@ def test_single_version_and_generated_registry(tmp_path):
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
     names = {t["name"] for t in data["tools"]}
-    assert len(names) == data["tool_count"] == 60
-    assert data["backend_count"] == data["core_count"] + data["companion_count"] == 66
+    assert len(names) == data["tool_count"] == 59
+    assert data["backend_count"] == data["core_count"] + data["companion_count"] == 67
     assert {
         "virtual_pointer",
         "work_recovery",
@@ -45,6 +45,40 @@ def test_single_version_and_generated_registry(tmp_path):
         "computer_desktop",
         "spreadsheet",
     } <= names
+
+
+def test_frozen_spec_bundles_guest_source_as_a_byte_readable_payload(monkeypatch):
+    import types
+
+    for name in ("PyInstaller", "PyInstaller.utils", "PyInstaller.utils.hooks"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    hooks = sys.modules["PyInstaller.utils.hooks"]
+    # Normal data collection intentionally supplies no Python source files.
+    hooks.collect_data_files = lambda *args, **kwargs: []
+    hooks.collect_submodules = lambda *args, **kwargs: []
+    hooks.copy_metadata = lambda *args, **kwargs: []
+    monkeypatch.setattr("udb.components.verified_assets", lambda root: [])
+
+    def analyze(*args, **kwargs):
+        return types.SimpleNamespace(
+            pure=[], scripts=[], binaries=[], datas=kwargs["datas"]
+        )
+
+    namespace = dict(
+        SPECPATH=str(ROOT / "tools"),
+        Analysis=analyze,
+        PYZ=lambda *args: None,
+        EXE=lambda *args, **kwargs: None,
+    )
+    spec = ROOT / "tools/udb.spec"
+    exec(compile(spec.read_text(), str(spec), "exec"), namespace)
+    payloads = [
+        (Path(source), target)
+        for source, target in namespace["a"].datas
+        if Path(source).name == "desktop_guest.py"
+    ]
+    assert payloads == [(ROOT / "src/udb/desktop_guest.py", "udb")]
+    compile(payloads[0][0].read_bytes(), "desktop_guest.py", "exec")
 
 
 def test_mcp_config_generates_current_stdio_command(tmp_path):
@@ -243,7 +277,7 @@ def test_real_source_mcp_without_installed_core_or_owner_access(tmp_path):
         p.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
         p.stdin.flush()
         listing = rpc("tools/list", {})
-        assert len(listing["tools"]) == 60
+        assert len(listing["tools"]) == 59
         status = rpc("tools/call", dict(name="bridge_status", arguments={}))
         assert not status.get("isError"), status
         assert status["_meta"]["udb"]["version"] == __version__
@@ -397,3 +431,23 @@ def test_owner_options_work_with_default_start_and_either_argument_order(
             "--json",
         ]
     ]
+
+
+def test_cli_settings_scope_restores_configuration_after_nested_failure(tmp_path):
+    from udb import cli, config
+
+    outer = config.Settings(tmp_path, tmp_path / "outer")
+    inner = config.Settings(tmp_path, tmp_path / "inner")
+    baseline = config.Settings(tmp_path, tmp_path / "baseline")
+    previous = config.activate(baseline)
+    try:
+        with pytest.raises(RuntimeError, match="canceled operation"):
+            with cli._settings_scope(outer):
+                assert config.effective(tmp_path) is outer
+                with cli._settings_scope(inner):
+                    assert config.effective(tmp_path) is inner
+                assert config.effective(tmp_path) is outer
+                raise RuntimeError("canceled operation")
+        assert config.effective(tmp_path) is baseline
+    finally:
+        config.activate(previous)

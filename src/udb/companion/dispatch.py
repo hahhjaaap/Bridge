@@ -87,9 +87,7 @@ def _file_list(runtime, args):
 
 
 def _file_read(runtime, args):
-    r = runtime.files.read(
-        args["path"], args.get("offset", 0), args.get("limit", 8192)
-    )
+    r = runtime.files.read(args["path"], args.get("offset", 0), args.get("limit", 8192))
     response = respond_text("PASS", f"Đã đọc {r['path']} ({r['size']} bytes)")
     response["content"][0]["text"] += (
         f"\nSHA256: {r['sha256']} | Next offset: {r['next_offset']} | Remaining: {r['remaining']}\n{r['content']}"

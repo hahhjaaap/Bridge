@@ -16,8 +16,10 @@ from pathlib import Path
 
 def module_name(root: Path, file: Path) -> str:
     parts = file.relative_to(root).with_suffix("").parts
-    return ".".join(("udb", *parts[:-1])) if parts[-1] == "__init__" else ".".join(
-        ("udb", *parts)
+    return (
+        ".".join(("udb", *parts[:-1]))
+        if parts[-1] == "__init__"
+        else ".".join(("udb", *parts))
     )
 
 
@@ -40,8 +42,7 @@ class EagerImports(ast.NodeVisitor):
     def visit_If(self, node):
         # TYPE_CHECKING imports are not executed at runtime.
         type_checking = (
-            isinstance(node.test, ast.Name)
-            and node.test.id == "TYPE_CHECKING"
+            isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
         ) or (
             isinstance(node.test, ast.Attribute)
             and isinstance(node.test.value, ast.Name)

@@ -4,6 +4,7 @@ Only UI Automation runtime IDs, tab geometry and selection are observed.
 No tab names, URLs, cookies, DOM or browser profile are read or persisted.
 A tab is registered only when a new UIA TabItem appears after UDB opens it.
 """
+
 from __future__ import annotations
 
 import json
@@ -15,7 +16,9 @@ from pathlib import Path
 
 def marker_path() -> Path | None:
     base = os.environ.get("LOCALAPPDATA")
-    return Path(base) / "UniversalDesktopBridge" / "ai-chrome-tabs.json" if base else None
+    return (
+        Path(base) / "UniversalDesktopBridge" / "ai-chrome-tabs.json" if base else None
+    )
 
 
 def observe_tabs(hwnd: int) -> list[dict] | None:
@@ -29,9 +32,15 @@ def observe_tabs(hwnd: int) -> list[dict] | None:
     try:
         completed = subprocess.run(
             [
-                str(powershell), "-NoProfile", "-NonInteractive",
-                "-ExecutionPolicy", "Bypass", "-File", str(script),
-                "-Hwnd", str(hwnd),
+                str(powershell),
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+                "-Hwnd",
+                str(hwnd),
             ],
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -39,10 +48,14 @@ def observe_tabs(hwnd: int) -> list[dict] | None:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             check=False,
         )
-        if completed.returncode:
+        if completed.returncode or len(completed.stdout) > 65536:
             return None
         data = json.loads(completed.stdout.decode("utf-8-sig"))
-        if data.get("ok") is not True or not isinstance(data.get("tabs"), list):
+        if (
+            not isinstance(data, dict)
+            or data.get("ok") is not True
+            or not isinstance(data.get("tabs"), list)
+        ):
             return None
         rows = []
         for tab in data["tabs"][:100]:
@@ -87,16 +100,18 @@ def register_new_tab(hwnd: int, pid: int, previous: list[dict] | None) -> bool:
         records = []
         if path.is_file() and path.stat().st_size < 4096:
             existing = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(existing.get("tabs"), list):
+            if isinstance(existing, dict) and isinstance(existing.get("tabs"), list):
                 records = [
-                    row for row in existing["tabs"]
+                    row
+                    for row in existing["tabs"]
                     if isinstance(row, dict)
                     and type(row.get("hwnd")) is int
                     and type(row.get("pid")) is int
                     and isinstance(row.get("id"), str)
                 ][-7:]
         records = [
-            row for row in records
+            row
+            for row in records
             if not (row["hwnd"] == hwnd and row["id"] == candidate["id"])
         ]
         records.append({"hwnd": hwnd, "pid": pid, "id": candidate["id"]})

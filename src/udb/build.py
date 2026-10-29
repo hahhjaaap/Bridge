@@ -180,11 +180,17 @@ def standalone_package(base, destination, asset_root, components):
             if not source.is_file():
                 continue
             if source.is_symlink() or source.suffix.lower() not in {
-                ".json", ".html", ".js", ".css", ".png"
+                ".json",
+                ".html",
+                ".js",
+                ".css",
+                ".png",
             }:
                 raise ValueError("Unsafe Chrome Aura package resource")
             target = (
-                destination / "chrome-extension" / "udb-aura"
+                destination
+                / "chrome-extension"
+                / "udb-aura"
                 / source.relative_to(aura_root)
             )
             target.parent.mkdir(parents=True, exist_ok=True)

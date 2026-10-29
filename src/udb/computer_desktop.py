@@ -20,10 +20,11 @@ from pathlib import Path
 
 from .core import PolicyError
 from .desktop_guest import BitmapHeader, InputEvent, KeyInput, MouseInput
+from .windows_actions import DESKTOP_ACTIONS, UIA_ACTIONS
 
 
 class Desktop:
-    def __init__(self, guard=None):
+    def __init__(self, guard=None, control=None):
         import win32gui
         import win32process
 
@@ -31,6 +32,7 @@ class Desktop:
         self.process = win32process
         self.windows = {}
         self.guard = guard
+        self.control = control
         self.u = ctypes.WinDLL("user32", use_last_error=True)
         self.u.SendInput.argtypes = [w.UINT, ctypes.POINTER(InputEvent), ctypes.c_int]
         self.u.SendInput.restype = w.UINT
@@ -103,7 +105,10 @@ class Desktop:
         kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
         kernel.OpenProcess.restype = w.HANDLE
         kernel.QueryFullProcessImageNameW.argtypes = [
-            w.HANDLE, w.DWORD, w.LPWSTR, ctypes.POINTER(w.DWORD)
+            w.HANDLE,
+            w.DWORD,
+            w.LPWSTR,
+            ctypes.POINTER(w.DWORD),
         ]
         kernel.QueryFullProcessImageNameW.restype = w.BOOL
         kernel.CloseHandle.argtypes = [w.HANDLE]
@@ -119,8 +124,10 @@ class Desktop:
             ):
                 return None
             path = image.value
-            if path.lower().replace("/", "\\").endswith(
-                "\\google\\chrome\\application\\chrome.exe"
+            if (
+                path.lower()
+                .replace("/", "\\")
+                .endswith("\\google\\chrome\\application\\chrome.exe")
             ):
                 return path
             return None
@@ -232,6 +239,9 @@ class Desktop:
         return hwnd
 
     def send(self, hwnd, events):
+        control = getattr(self, "control", None)
+        if control:
+            control.check()
         if self.guard is not None and not self.guard():
             raise PolicyError("Computer access was revoked; input stopped")
         if self.gui.GetForegroundWindow() != hwnd:
@@ -245,6 +255,9 @@ class Desktop:
             raise PolicyError(
                 "Windows blocked or partially accepted input; inspect before retrying. No elevation/UAC bypass"
             )
+
+        if control:
+            control.note_injected()
 
     def key(self, vk=0, scan=0, flags=0):
         event = InputEvent()
@@ -262,6 +275,8 @@ class Desktop:
         control_type="",
         wait_ms=0,
         condition="exists",
+        checked=None,
+        limit=5000,
     ):
         self.interactive()
         pid = self.process.GetWindowThreadProcessId(hwnd)[1]
@@ -275,6 +290,8 @@ class Desktop:
             control_type=control_type,
             wait_ms=wait_ms,
             condition=condition,
+            checked=checked,
+            limit=limit,
         )
         exe = (
             Path(os.environ["SystemRoot"])
@@ -302,13 +319,15 @@ class Desktop:
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 shell=False,
             )
+            if len(result.stdout) > 262144:
+                raise ValueError("UIA response exceeds limit")
             data = json.loads(result.stdout.strip())
-            if result.returncode or not data.get("ok"):
+            if result.returncode or not isinstance(data, dict) or not data.get("ok"):
                 raise ValueError("UIA declined")
             return data
         except (OSError, ValueError, subprocess.TimeoutExpired):
             raise PolicyError(
-                "UI Automation was refused or timed out; inspect the target before retrying. No input/elevation fallback was used."
+                "UI Automation was refused or timed out; outcome may be unknown, inspect the target before retrying. No input/elevation fallback was used."
             ) from None
 
     def dispatch(
@@ -373,10 +392,35 @@ class Desktop:
         steps=None,
         display_index=-1,
         region=None,
+        checked=None,
+        limit=5000,
     ):
         self.validate_options(
             action, button, clicks, duration_ms, horizontal, wait_ms, condition
         )
+        if action == "set_checked" and type(checked) is not bool:
+            raise PolicyError("set_checked requires checked=true or false")
+        if action == "read_text" and (type(limit) is not int or not 1 <= limit <= 5000):
+            raise PolicyError("read_text limit must be 1..5000")
+        if action == "select" and (not isinstance(text, str) or len(text) > 500):
+            raise PolicyError("Selection label must be a string up to 500 characters")
+        control = getattr(self, "control", None)
+        if action == "control_status":
+            return (
+                control.status()
+                if control
+                else {"state": "unavailable", "exclusive": False}
+            )
+        if control and action not in {
+            "list",
+            "displays",
+            "snapshot",
+            "screenshot",
+            "wait_for",
+            "batch",
+            "read_text",
+        }:
+            control.check()
         if action == "list":
             return self.listing()
         if action == "displays":
@@ -402,9 +446,16 @@ class Desktop:
                 "move_window",
                 "resize_window",
                 "window_state",
+                "close_window",
+                "read_text",
+                "set_checked",
+                "select",
+                "expand",
+                "collapse",
+                "scroll_into_view",
             ),
         )
-        if action in ("snapshot", "set_value", "invoke", "uia_focus", "wait_for"):
+        if action in UIA_ACTIONS:
             return self.uia(
                 hwnd,
                 action,
@@ -414,6 +465,19 @@ class Desktop:
                 control_type,
                 wait_ms,
                 condition,
+                checked,
+                limit,
+            )
+        if action == "close_window":
+            self.gui.PostMessage(hwnd, 0x0010, 0, 0)
+            deadline = time.monotonic() + min(wait_ms, 1000) / 1000
+            while self.gui.IsWindow(hwnd) and time.monotonic() < deadline:
+                time.sleep(0.04)
+            return dict(
+                requested=True,
+                closed_observed=not self.gui.IsWindow(hwnd),
+                replay_safe=False,
+                forced=False,
             )
         if action in ("move_window", "resize_window", "window_state"):
             return self.window_action(hwnd, action, x, y, width, height, window_state)
@@ -473,7 +537,11 @@ class Desktop:
             parts = key.upper().split("+")
             if not 1 <= len(parts) <= 4 or any(k not in names for k in parts):
                 raise PolicyError("Unsupported key chord")
-            if set(parts) in ({"WIN", "L"}, {"CTRL", "ALT", "DELETE"}):
+            if set(parts) in (
+                {"WIN", "L"},
+                {"CTRL", "ALT", "DELETE"},
+                {"CTRL", "ALT", "SHIFT", "BACKSPACE"},
+            ):
                 raise PolicyError("Secure/lock key combinations are refused")
             pressed = []
             try:
@@ -517,6 +585,8 @@ class Desktop:
             import win32api
 
             win32api.SetCursorPos((x, y))
+            if control:
+                control.note_injected()
             down, up = {"left": (2, 4), "right": (8, 16), "middle": (32, 64)}[button]
             if action == "click":
                 flags = [(down, 0), (up, 0)] * clicks
@@ -551,28 +621,7 @@ class Desktop:
         wait_ms=1000,
         condition="exists",
     ):
-        if action not in {
-            "list",
-            "focus",
-            "screenshot",
-            "type",
-            "key",
-            "click",
-            "scroll",
-            "snapshot",
-            "set_value",
-            "invoke",
-            "uia_focus",
-            "mouse_move",
-            "drag",
-            "move_window",
-            "resize_window",
-            "window_state",
-            "wait_for",
-            "batch",
-            "displays",
-            "open_chrome_tab",
-        }:
+        if action not in DESKTOP_ACTIONS:
             raise PolicyError("Unsupported desktop action")
         if (
             button not in ("left", "right", "middle")
@@ -603,9 +652,8 @@ class Desktop:
             if (
                 not isinstance(row, dict)
                 or set(row) - fields
-                or row.get("action") in (
-                    "list", "batch", "screenshot", "displays", "open_chrome_tab"
-                )
+                or row.get("action")
+                in ("list", "batch", "screenshot", "displays", "open_chrome_tab")
                 or "action" not in row
             ):
                 raise PolicyError("Invalid/nested batch step; capture/list separately")
@@ -705,6 +753,8 @@ class Desktop:
         if action == "drag":
             self.checked_point(hwnd, from_x, from_y)
             win32api.SetCursorPos((from_x, from_y))
+            if getattr(self, "control", None):
+                self.control.note_injected()
             event = InputEvent()
             event.type = 0
             event.data.mi = MouseInput(0, 0, 0, down, 0, 0)
@@ -731,7 +781,11 @@ class Desktop:
                 )
                 if action == "drag":
                     self.checked_point(hwnd, *point)
+                if getattr(self, "control", None):
+                    self.control.check()
                 win32api.SetCursorPos(point)
+                if getattr(self, "control", None):
+                    self.control.note_injected()
                 last = point
                 if duration_ms:
                     time.sleep(duration_ms / count / 1000)
