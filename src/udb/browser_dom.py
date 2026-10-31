@@ -66,7 +66,7 @@ const isInert = element => {
 """
 
 SELECT_OPTION_SCRIPT = """if(e.tagName!=='SELECT')return {ok:false,error:'unsupported_control'};
-              if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+              if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||isInert(e))return {ok:false,error:'disabled'};
               const wanted=__VALUE__,options=Array.from(e.options);
               let choices=options.filter(o=>o.value===wanted);
               if(!choices.length)choices=options.filter(o=>o.label===wanted||String(o.textContent||'').trim()===wanted);
