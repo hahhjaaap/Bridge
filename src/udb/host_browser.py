@@ -14,8 +14,13 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .browser_cdp import CDPChannel
 from .browser_dom import CLICK_POINT_SCRIPT, LOCATOR_SCRIPT, SELECT_OPTION_SCRIPT
 from .browser_identity import identity_script
+from .browser_input import BrowserInputMixin
+from .browser_input import parse_key as parse_key
+from .browser_observation import read as read_browser
+from .browser_observation import snapshot as snapshot_browser
 from .core import PolicyError, reject_links
 from .owned_process import OwnedProcess as OwnedProcess
 from .resources import LIMITS
@@ -125,42 +130,6 @@ _BLOCKED_URL_PATTERNS = tuple(
     ]
     + [f"*://172.{octet}.*/*" for octet in range(16, 32)]
 )
-_KEY_SPECIAL = {
-    "enter": ("Enter", "Enter", 13),
-    "tab": ("Tab", "Tab", 9),
-    "escape": ("Escape", "Escape", 27),
-    "esc": ("Escape", "Escape", 27),
-    "space": (" ", "Space", 32),
-    "arrowdown": ("ArrowDown", "ArrowDown", 40),
-    "arrowup": ("ArrowUp", "ArrowUp", 38),
-    "arrowleft": ("ArrowLeft", "ArrowLeft", 37),
-    "arrowright": ("ArrowRight", "ArrowRight", 39),
-    "home": ("Home", "Home", 36),
-    "end": ("End", "End", 35),
-    "pageup": ("PageUp", "PageUp", 33),
-    "pagedown": ("PageDown", "PageDown", 34),
-    "backspace": ("Backspace", "Backspace", 8),
-    "delete": ("Delete", "Delete", 46),
-}
-_KEY_COMBOS = frozenset(
-    {
-        "CTRL+A",
-        "CONTROL+A",
-        "CTRL+ENTER",
-        "CONTROL+ENTER",
-        "SHIFT+TAB",
-        "CTRL+BACKSPACE",
-        "CONTROL+BACKSPACE",
-        "CTRL+ARROWLEFT",
-        "CONTROL+ARROWLEFT",
-        "CTRL+ARROWRIGHT",
-        "CONTROL+ARROWRIGHT",
-        "CTRL+HOME",
-        "CONTROL+HOME",
-        "CTRL+END",
-        "CONTROL+END",
-    }
-)
 
 
 def validate_locator(selector="", role="", name="", exact=True):
@@ -182,43 +151,6 @@ def validate_locator(selector="", role="", name="", exact=True):
         raise PolicyError("Unsupported browser role")
     if not role:
         raise PolicyError("Provide a CSS selector or an accessible role")
-
-
-def parse_key(value):
-    if not isinstance(value, str) or not 1 <= len(value) <= 40:
-        raise PolicyError("Provide a supported browser key")
-    parts = value.split("+")
-    aliases = {
-        "ctrl": "CTRL",
-        "control": "CONTROL",
-        "shift": "SHIFT",
-        "alt": "ALT",
-        "meta": "META",
-    }
-    modifiers = []
-    for part in parts[:-1]:
-        token = aliases.get(part.lower())
-        if token is None or token in modifiers:
-            raise PolicyError("Unsupported browser key modifier")
-        modifiers.append(token)
-    final = parts[-1]
-    info = _KEY_SPECIAL.get(final.lower())
-    if info is None and len(final) == 1 and final.isalpha():
-        info = (final.lower(), "Key" + final.upper(), ord(final.upper()))
-    elif info is None and len(final) == 1 and final.isdigit():
-        info = (final, "Digit" + final, ord(final))
-    if info is None:
-        raise PolicyError("Unsupported browser key")
-    if modifiers and "+".join(modifiers + [final.upper()]) not in _KEY_COMBOS:
-        raise PolicyError("That browser key combination is not allowed")
-    mask = 0
-    for modifier in modifiers:
-        mask |= {"ALT": 1, "CTRL": 2, "CONTROL": 2, "META": 4, "SHIFT": 8}[modifier]
-    key, code, vk = info
-    text = (
-        key if not modifiers and (len(final) == 1 or final.lower() == "space") else ""
-    )
-    return dict(key=key, code=code, vk=vk, modifiers=mask, text=text)
 
 
 def find_browser():
@@ -243,7 +175,7 @@ def find_browser():
     raise PolicyError("Install Chrome or Edge before opening a background browser")
 
 
-class Browser:
+class Browser(BrowserInputMixin):
     def __init__(self, folder, *, persistent=False, visible=False, reuse_profile=False):
         self.persistent = persistent
         self.visible = visible
@@ -255,7 +187,7 @@ class Browser:
             shutil.rmtree(staged)
         self.proc = None
         self.ws = None
-        self.seq = 0
+        self._cdp = None
         self.tabs = {}
         self.frozen = False
         self.freeze_errors = 0
@@ -299,6 +231,7 @@ class Browser:
                 suppress_origin=True,
                 http_no_proxy=["127.0.0.1"],
             )
+            self._cdp = CDPChannel(self.ws, self.proc)
             self.call("Browser.setDownloadBehavior", dict(behavior="deny"))
             # Adopt only initial targets in THIS newly created browser/profile.
             for target in self.call("Target.getTargets")["targetInfos"]:
@@ -318,39 +251,7 @@ class Browser:
                 raise PolicyError(
                     "Browser action budget exceeded; inspect before retrying"
                 )
-        self.seq += 1
-        number = self.seq
-        msg = dict(id=number, method=method, params=params or {})
-        if session:
-            msg["sessionId"] = session
-        self.ws.send(json.dumps(msg))
-        deadline = time.monotonic() + timeout
-        self.ws.settimeout(min(1, timeout))
-        from websocket import WebSocketTimeoutException
-
-        while time.monotonic() < deadline:
-            if not self.proc or not self.proc.alive():
-                raise PolicyError("Owned browser was stopped")
-            try:
-                raw = self.ws.recv()
-            except WebSocketTimeoutException:
-                continue
-            if not raw:
-                raise PolicyError("Private browser connection closed")
-            if len(raw) > 12 * 1048576:
-                raise PolicyError("Browser reply exceeds limit")
-            reply = json.loads(raw)
-            if reply.get("id") != number:
-                continue
-            if "error" in reply:
-                raise PolicyError(
-                    "Browser operation failed: "
-                    + str(reply["error"].get("message", "unknown"))[:300]
-                )
-            return reply.get("result", {})
-        raise PolicyError(
-            "Browser operation timed out; outcome may be unknown, inspect before retrying"
-        )
+        return self._cdp.call(method, params, session, timeout)
 
     def attach(self, target):
         sid = self.call("Target.attachToTarget", dict(targetId=target, flatten=True))[
@@ -690,29 +591,7 @@ class Browser:
         return dict(tab_id=tab, navigation_started=True, **ready)
 
     def read(self, tab):
-        return self.evaluate(
-            tab,
-            """(() => {
-              const textOf=e=>String(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim();
-              const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();
-                return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)>0&&r.width>0&&r.height>0;};
-              return {url:location.origin==='null'?'about:blank':location.origin+location.pathname,
-                title:String(document.title||'').slice(0,500),
-                text:(document.body?.innerText||'').slice(0,20000),
-                elements:Array.from(document.querySelectorAll('a[href],button,input:not([type="hidden"]),textarea,select,[role]'))
-                  .filter(visible).slice(0,120).map(e=>{
-                    const type=(e.getAttribute('type')||'').toLowerCase();
-                    const secret=type==='password'||type==='file'||/password|secret|token|otp|one-time-code/i.test([e.autocomplete,e.name,e.id].join(' '));
-                    return {tag:e.tagName,id:String(e.id||'').slice(0,120),name:e.getAttribute('name'),type,
-                      role:e.getAttribute('role')||'',placeholder:String(e.getAttribute('placeholder')||'').slice(0,160),
-                      text:textOf(e).slice(0,200),disabled:e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||!!e.closest('[inert]'),readonly:!!e.readOnly,
-                      options:e.tagName==='SELECT'&&!secret?Array.from(e.options).slice(0,20).map(o=>({value:String(o.value).slice(0,80),label:String(o.label).slice(0,120),disabled:o.matches(':disabled'),selected:o.selected})):undefined,
-                      options_truncated:e.tagName==='SELECT'?e.options.length>20:undefined,
-                      value:secret?'[redacted]':String(e.value||'').slice(0,300)};
-                  })};
-            })()""",
-            timeout=5,
-        )
+        return read_browser(self, tab)
 
     @staticmethod
     def _locator_expression(
@@ -730,37 +609,7 @@ class Browser:
         )
 
     def snapshot(self, tab):
-        return self.evaluate(
-            tab,
-            """(() => {
-              const textOf=e=>String(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim();
-              const roleOf=e=>{const x=(e.getAttribute('role')||'').trim().split(/\\s+/)[0];if(x)return x;
-                const t=e.tagName.toLowerCase(),y=(e.getAttribute('type')||'').toLowerCase();
-                if(t==='a'&&e.hasAttribute('href'))return 'link';if(t==='button'||t==='summary'||['button','submit','reset','image'].includes(y))return 'button';
-                if(t==='textarea'||e.isContentEditable)return 'textbox';if(t==='select')return e.multiple?'listbox':'combobox';
-                if(t==='input'){if(y==='checkbox')return 'checkbox';if(y==='radio')return 'radio';if(y==='range')return 'slider';if(y==='number')return 'spinbutton';if(y==='search')return 'searchbox';if(y==='hidden')return 'none';if(y==='file')return 'button';return 'textbox';}
-                if(t==='option')return 'option';if(/^h[1-6]$/.test(t))return 'heading';return '';};
-              const nameOf=e=>{const ids=(e.getAttribute('aria-labelledby')||'').trim().split(/\\s+/).filter(Boolean);
-                const labelled=ids.map(id=>document.getElementById(id)).filter(Boolean).map(textOf).join(' ').trim();
-                const labels=e.labels?Array.from(e.labels).map(textOf).filter(Boolean).join(' '):'';
-                return String(labelled||e.getAttribute('aria-label')||labels||e.getAttribute('alt')||e.getAttribute('title')||e.getAttribute('placeholder')||textOf(e)||e.getAttribute('name')||e.id||'').trim().slice(0,240);};
-              const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)>0&&r.width>0&&r.height>0;};
-              const all=Array.from(document.querySelectorAll('a[href],button,input:not([type="hidden"]),textarea,select,summary,[role],[contenteditable="true"],[tabindex],h1,h2,h3,h4,h5,h6')).filter(visible);
-              const elements=all.slice(0,160).map((e,i)=>{const type=(e.getAttribute('type')||'').toLowerCase();
-                const secret=type==='password'||type==='file'||/password|secret|token|otp|one-time-code/i.test([e.autocomplete,e.name,e.id].join(' '));
-                let href='';try{const u=new URL(e.href,location.href);if(['http:','https:'].includes(u.protocol))href=u.origin+u.pathname;}catch(_){}
-                return {index:i+1,role:roleOf(e),name:nameOf(e),tag:e.tagName.toLowerCase(),type,
-                  id:String(e.id||'').slice(0,120),name_attr:String(e.getAttribute('name')||'').slice(0,120),
-                  placeholder:String(e.getAttribute('placeholder')||'').slice(0,160),disabled:e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||!!e.closest('[inert]'),readonly:!!e.readOnly,
-                  options:e.tagName==='SELECT'&&!secret?Array.from(e.options).slice(0,20).map(o=>({value:String(o.value).slice(0,80),label:String(o.label).slice(0,120),disabled:o.matches(':disabled'),selected:o.selected})):undefined,
-                  options_truncated:e.tagName==='SELECT'?e.options.length>20:undefined,
-                  checked:typeof e.checked==='boolean'?e.checked:null,selected:typeof e.selected==='boolean'?e.selected:null,
-                  value:secret?'[redacted]':String(e.value||'').slice(0,160),href};});
-              return {url:location.origin==='null'?'about:blank':location.origin+location.pathname,title:String(document.title||'').slice(0,500),
-                count:all.length,truncated:all.length>160,elements};
-            })()""",
-            timeout=5,
-        )
+        return snapshot_browser(self, tab)
 
     def _css_selector_valid(self, tab, selector):
         """Return True/False for a CSS selector, or None if the page cannot be inspected."""
@@ -862,40 +711,6 @@ class Browser:
         except (PolicyError, KeyError):
             return False
         return True
-
-    def _mouse_click(self, tab, x, y):
-        self._show_identity(tab, x, y)
-        session = self.sid(tab)
-        point = dict(x=float(x), y=float(y))
-        self.call(
-            "Input.dispatchMouseEvent",
-            dict(type="mouseMoved", **point),
-            session,
-            timeout=2,
-        )
-        press_error = None
-        try:
-            self.call(
-                "Input.dispatchMouseEvent",
-                dict(type="mousePressed", button="left", clickCount=1, **point),
-                session,
-                timeout=2,
-            )
-        except Exception as exc:
-            press_error = exc
-        finally:
-            try:
-                self.call(
-                    "Input.dispatchMouseEvent",
-                    dict(type="mouseReleased", button="left", clickCount=1, **point),
-                    session,
-                    timeout=2,
-                )
-            except Exception:
-                if press_error is None:
-                    raise
-        if press_error is not None:
-            raise press_error
 
     def element(
         self, tab, operation, selector="", value="", role="", name="", exact=True
@@ -1066,38 +881,6 @@ class Browser:
                 )
             time.sleep(min(0.1, max(0, deadline - time.monotonic())))
 
-    def press(self, tab, key, selector="", role="", name="", exact=True):
-        info = parse_key(key)
-        body = """if(e.disabled||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};
-          if(typeof e.focus!=='function')return {ok:false,error:'not_focusable'};e.focus();
-          return {ok:document.activeElement===e||e.contains(document.activeElement),error:'not_focusable'};"""
-        focused = self.evaluate(
-            tab, self._locator_expression(selector, role, name, exact, body)
-        )
-        if not focused.get("ok"):
-            return focused
-        session = self.sid(tab)
-        params = dict(
-            key=info["key"],
-            code=info["code"],
-            windowsVirtualKeyCode=info["vk"],
-            modifiers=info["modifiers"],
-        )
-        down_params = dict(params)
-        if info["text"]:
-            down_params["text"] = info["text"]
-            down_params["unmodifiedText"] = info["text"]
-        self.call(
-            "Input.dispatchKeyEvent",
-            dict(type="keyDown", **down_params),
-            session,
-            timeout=2,
-        )
-        self.call(
-            "Input.dispatchKeyEvent", dict(type="keyUp", **params), session, timeout=2
-        )
-        return dict(ok=True, key=key, focused=True)
-
     def history(self, tab, action):
         session = self.sid(tab)
         if action == "reload":
@@ -1226,21 +1009,6 @@ class Browser:
             self.new(url)
         return dict(visible=visible, changed=True, tab_ids_invalidated=True)
 
-    def scroll(self, tab, x=0, y=500):
-        if (
-            type(x) is not int
-            or type(y) is not int
-            or not -2000 <= x <= 2000
-            or not -2000 <= y <= 2000
-        ):
-            raise PolicyError("Browser scroll deltas must be integers in -2000..2000")
-        self.call(
-            "Input.dispatchMouseEvent",
-            dict(type="mouseWheel", x=400, y=300, deltaX=x, deltaY=y),
-            self.sid(tab),
-        )
-        return dict(scrolled=True, delta_x=x, delta_y=y)
-
     def close(self, remove_profile=True):
         if (
             getattr(self, "ws", None)
@@ -1261,6 +1029,7 @@ class Browser:
             except Exception:
                 pass  # The socket may already be closed; continue owned-process cleanup.
             self.ws = None
+        self._cdp = None
         if self.proc:
             self.proc.close()
             self.proc = None

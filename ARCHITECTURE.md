@@ -84,9 +84,15 @@ Keep this separate from file permissions and owner approvals.
   operations still pass the same owner and resource checks in `dispatch`.
 - `udb.browser_actions` is the explicit browser action router and shared public
   action catalog. It never dispatches arbitrary caller-supplied method names.
-- `udb.host_browser` owns CDP transport, tab ownership and bounded DOM operations.
-  Fixed DOM programs live in `udb.browser_dom`; page identity artwork lives in
-  `udb.browser_identity`. Callers can pass validated locators and data, not code.
+- `udb.host_browser` owns its private Chrome/Edge process, profile, tabs and
+  browser-policy boundaries; public Browser methods remain stable.
+  `udb.browser_cdp` owns serialized, bounded WebSocket request handling with
+  redacted event-name markers and no automatic replay after uncertain timeouts.
+  `udb.browser_input` implements CDP-only virtual mouse, keyboard and scroll
+  without injecting operating-system input; `udb.browser_observation` holds
+  fixed, bounded, redacting DOM read/snapshot programs. Other fixed DOM programs
+  live in `udb.browser_dom`; page identity artwork lives in
+  `udb.browser_identity`. Callers pass validated locators and data, not code.
 - `udb.owned_process` owns Windows Job Object containment independently of browser
   and workspace code. `host_browser.OwnedProcess` remains a compatibility export.
 - `udb.activity.EventReader` skips unchanged idle polls using database/WAL metadata,
