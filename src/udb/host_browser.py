@@ -328,6 +328,21 @@ class Browser(BrowserInputMixin):
             )
         )
 
+    def _wait_for_cdp_event(self, methods, session=None, timeout=1, match=None):
+        channel = getattr(self, "_cdp", None)
+        if not hasattr(channel, "wait_for_event"):
+            return None
+        deadline = getattr(self, "deadline", None)
+        if deadline:
+            timeout = min(timeout, deadline - time.monotonic())
+        if timeout <= 0:
+            raise PolicyError(
+                "Browser action budget exceeded; inspect before retrying"
+            )
+        return channel.wait_for_event(
+            methods, session=session, timeout=timeout, match=match
+        )
+
     def _wait_for_document_ready(
         self,
         tab,
@@ -358,7 +373,7 @@ class Browser(BrowserInputMixin):
                 and not transition_seen
                 and hasattr(getattr(self, "_cdp", None), "wait_for_event")
             ):
-                event = self._cdp.wait_for_event(
+                event = self._wait_for_cdp_event(
                     "Page.lifecycleEvent",
                     session=self.sid(tab),
                     timeout=min(1.0, remaining),
@@ -462,7 +477,7 @@ class Browser(BrowserInputMixin):
         channel = getattr(self, "_cdp", None)
         if previous_frame_id and hasattr(channel, "wait_for_event"):
             while time.monotonic() < deadline:
-                event = channel.wait_for_event(
+                event = self._wait_for_cdp_event(
                     ("Page.frameNavigated", "Page.navigatedWithinDocument"),
                     session=self.sid(tab),
                     timeout=max(0.05, deadline - time.monotonic()),
