@@ -889,13 +889,53 @@ class Browser(BrowserInputMixin):
         elif value:
             raise PolicyError("value is only used with wait_for state=text")
         validate_locator(selector, role, name, exact)
-        body = """const visibleMatches=matches.filter(isVisible);const enabledMatches=visibleMatches.filter(e=>!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!e.closest('[inert]'));
-          const textMatches=matches.filter(e=>String(e.innerText||e.textContent||'').includes(__VALUE__));const state=__STATE__;
-          const ok=state==='attached'?matches.length>0:state==='visible'?visibleMatches.length>0:state==='hidden'?(matches.length===0||visibleMatches.length===0):state==='enabled'?enabledMatches.length>0:state==='text'?textMatches.length>0:false;
-          return {ok,state,matches:matches.length,visible:visibleMatches.length,enabled:enabledMatches.length};"""
+        body = """return new Promise(resolve => {
+          const waitState=__STATE__, wantedText=__VALUE__, timeout=__TIMEOUT__;
+          let observer=null, interval=null, timer=null, finished=false;
+          const observed=new WeakSet();
+          const finish=result=>{
+            if(finished)return;
+            finished=true;
+            if(observer)observer.disconnect();
+            if(interval!==null)clearInterval(interval);
+            if(timer!==null)clearTimeout(timer);
+            resolve(result);
+          };
+          const observeRoots=()=>{
+            if(!observer)return;
+            for(const root of collectOpenRoots().roots){
+              const target=root===document?document.documentElement:root;
+              if(target&&!observed.has(target)){
+                observer.observe(target,{subtree:true,childList:true,attributes:true,characterData:true});
+                observed.add(target);
+              }
+            }
+          };
+          const check=()=>{
+            matches=findMatches();
+            if(matches===null){finish({ok:false,error:'invalid_selector',state:waitState});return;}
+            const visibleMatches=matches.filter(isVisible);
+            const enabledMatches=visibleMatches.filter(e=>!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!e.closest('[inert]'));
+            const textMatches=matches.filter(e=>String(e.innerText||e.textContent||'').includes(wantedText));
+            const ok=waitState==='attached'?matches.length>0:
+              waitState==='visible'?visibleMatches.length>0:
+              waitState==='hidden'?(matches.length===0||visibleMatches.length===0):
+              waitState==='enabled'?enabledMatches.length>0:
+              waitState==='text'?textMatches.length>0:false;
+            if(ok){finish({ok:true,state:waitState,matches:matches.length,visible:visibleMatches.length,enabled:enabledMatches.length});return;}
+            if(traversalTruncated&&matches.length===0){
+              finish({ok:false,error:'locator_search_truncated',state:waitState});return;
+            }
+          };
+          observer=new MutationObserver(()=>{observeRoots();check();});
+          timer=setTimeout(()=>finish({ok:false,timed_out:true,state:waitState}),Math.max(1,timeout-50));
+          interval=setInterval(()=>{observeRoots();check();},200);
+          observeRoots();
+          check();
+        });"""
         body = body.replace("__VALUE__", json.dumps(value)).replace(
             "__STATE__", json.dumps(state)
-        )
+        ).replace("__TIMEOUT__", str(timeout_ms))
         expression = self._locator_expression(
             selector, role, name, exact, body, visible_only=False, unique=False
         )
@@ -906,31 +946,32 @@ class Browser(BrowserInputMixin):
                 return dict(ok=False, timed_out=True, state=state)
             try:
                 result = self.evaluate(
-                    tab, expression, timeout=max(0.2, min(1.5, remaining))
+                    tab,
+                    expression,
+                    timeout=min(10.25, remaining + 0.25),
+                    await_promise=True,
                 )
             except PolicyError as exc:
                 if self._is_transient_context_error(exc):
                     if time.monotonic() >= deadline:
                         return dict(ok=False, timed_out=True, state=state)
-                    time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                    time.sleep(min(0.05, max(0, deadline - time.monotonic())))
                     continue
                 if selector and self._css_selector_valid(tab, selector) is False:
                     return dict(ok=False, error="invalid_selector", state=state)
-                if time.monotonic() >= deadline:
+                if "timed out" in str(exc).lower():
                     return dict(ok=False, timed_out=True, state=state)
                 raise
-            if result.get("error") == "invalid_selector":
-                return dict(ok=False, error="invalid_selector", state=state)
-            if result.get("ok"):
-                return result
-            if time.monotonic() >= deadline:
+            if not isinstance(result, dict):
+                return dict(ok=False, error="invalid_page_result", state=state)
+            if result.get("error") in {"invalid_selector", "locator_search_truncated"}:
                 return dict(
                     ok=False,
-                    timed_out=True,
+                    error=result["error"],
                     state=state,
                     matches=result.get("matches", 0),
                 )
-            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+            return result
 
     def history(self, tab, action):
         session = self.sid(tab)
