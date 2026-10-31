@@ -44,6 +44,28 @@ udb stop
 
 To connect a supported ChatGPT workspace, run `udb setup` in your own terminal and follow the displayed tunnel/account instructions. A working local agent is **not** proof that a ChatGPT workspace is connected. Connection secrets are entered in hidden local prompts, not CLI arguments; owner grants are separate from connection settings.
 
+### When ChatGPT cannot call UDB tools
+
+A green local health indicator and an active tunnel do **not** prove that the
+current ChatGPT conversation has discovered the MCP tool catalog. Troubleshoot
+in order, without resetting credentials or loosening permissions:
+
+1. Run `udb status --json` and `udb doctor --json` on the intended computer.
+   Check local agent, tunnel and connection diagnostics separately.
+2. In ChatGPT, confirm that the **intended** UDB connection is enabled and that
+   UDB tools are actually available to the conversation. A Connected label alone
+   is not an end-to-end tool invocation test.
+3. Test a read-only UDB status tool before file writes or terminal commands.
+   Record whether discovery or invocation failed; these are different problems.
+4. If two computers use UDB, verify which machine the current connection targets.
+   Never infer the selected host from a local readiness indicator on either PC.
+5. Collect redacted `udb logs` and diagnostic output for a bug report. Never
+   paste access tokens, tunnel secrets, or private file contents into an issue.
+
+The manager's **Tunnel đã kết nối** indicator means only the tunnel is ready;
+end-to-end ChatGPT tool discovery must be checked from the ChatGPT side.
+
+
 ### Common commands
 
 | Command | Purpose |
