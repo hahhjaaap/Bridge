@@ -93,7 +93,7 @@ def live_browser(tmp_path, monkeypatch):
                 body = b"""<title>Shadow</title><div id="shadow-host"></div>
                 <script>
                 const root=document.querySelector('#shadow-host').attachShadow({mode:'open'});
-                root.innerHTML='<label for="shadow-name">Name</label><input id="shadow-name"><button id="shadow-run">Run shadow</button>';
+                root.innerHTML='<label for="shadow-name">Name</label><input id="shadow-name"><input type="file" id="shadow-upload"><button id="shadow-run">Run shadow</button>';
                 root.querySelector('#shadow-run').addEventListener('click',()=>document.title='ShadowClicked');
                 </script>"""
             else:
@@ -222,6 +222,29 @@ def test_real_browser_open_shadow_dom_locators_and_actions(live_browser):
     clicked = browser.element(tab, "click", role="button", name="Run shadow")
     assert clicked["clicked"]
     assert browser.evaluate(tab, "document.title") == "ShadowClicked"
+
+
+def test_real_browser_uploads_to_file_input_inside_open_shadow_dom(live_browser):
+    from pathlib import Path
+
+    from udb.browser_files import upload
+
+    browser, tab, url, _ = live_browser
+    browser.navigate(tab, url + "shadow")
+    result = upload(
+        browser, tab, "#shadow-upload", Path("shadow.txt"), b"shadow upload", url
+    )
+    assert result["selected"] and result["submitted"] is False
+    read = browser.call(
+        "Runtime.evaluate",
+        {
+            "expression": "document.querySelector('#shadow-host').shadowRoot.querySelector('#shadow-upload').files[0].text()",
+            "awaitPromise": True,
+            "returnByValue": True,
+        },
+        browser.sid(tab),
+    )
+    assert read["result"]["value"] == "shadow upload"
 
 
 def test_real_browser_wait_for_observes_mutations_inside_open_shadow_dom(live_browser):
