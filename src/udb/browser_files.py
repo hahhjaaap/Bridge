@@ -50,21 +50,46 @@ def upload(browser, tab, selector, source, data, expected_origin):
     if not isinstance(state, dict) or not state.get("ok"):
         raise PolicyError("Upload selector is not one enabled file input")
     session = browser.sid(tab)
-    root = browser.call("DOM.getDocument", {"depth": 0}, session)["root"]["nodeId"]
-    nodes = browser.call(
-        "DOM.querySelectorAll", {"nodeId": root, "selector": selector}, session
-    )["nodeIds"]
-    if len(nodes) != 1:
-        raise PolicyError("Upload selector must identify exactly one file input")
-    node = browser.call("DOM.describeNode", {"nodeId": nodes[0]}, session)["node"]
-    attributes = node.get("attributes", [])
-    attrs = dict(zip(attributes[::2], attributes[1::2], strict=True))
-    if (
-        node.get("nodeName") != "INPUT"
-        or attrs.get("type", "").lower() != "file"
-        or "disabled" in attrs
-    ):
-        raise PolicyError("Upload selector is not an enabled file input")
+    browser.call("DOM.getDocument", {"depth": 0, "pierce": True}, session)
+    expression = Browser._locator_expression(
+        selector,
+        "",
+        "",
+        True,
+        "return e&&e.tagName==='INPUT'&&e.type==='file'&&!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!isInert(e)?e:null;",
+        visible_only=False,
+    )
+    remote = browser.call(
+        "Runtime.evaluate",
+        {"expression": expression, "returnByValue": False},
+        session,
+    ).get("result", {})
+    object_id = remote.get("objectId")
+    if remote.get("subtype") != "node" or not isinstance(object_id, str):
+        raise PolicyError("Upload selector must identify exactly one enabled file input")
+    try:
+        node_id = browser.call(
+            "DOM.requestNode", {"objectId": object_id}, session
+        ).get("nodeId")
+        if not isinstance(node_id, int) or node_id <= 0:
+            raise PolicyError("Upload selector is not a live file input")
+        node = browser.call(
+            "DOM.describeNode", {"nodeId": node_id}, session
+        )["node"]
+        attributes = node.get("attributes", [])
+        attrs = dict(zip(attributes[::2], attributes[1::2], strict=True))
+        if (
+            node.get("nodeName") != "INPUT"
+            or attrs.get("type", "").lower() != "file"
+            or "disabled" in attrs
+        ):
+            raise PolicyError("Upload selector is not an enabled file input")
+    except BaseException:
+        try:
+            browser.call("Runtime.releaseObject", {"objectId": object_id}, session)
+        except Exception:
+            pass
+        raise
     if len(list(browser.folder.glob("udb-upload-*"))) >= 8:
         raise PolicyError(
             "Maximum 8 staged uploads per browser session; close the session to clear them"
@@ -77,13 +102,18 @@ def upload(browser, tab, selector, source, data, expected_origin):
         check_origin(browser, tab, expected_origin)
         browser.call(
             "DOM.setFileInputFiles",
-            {"files": [str(staged)], "nodeId": nodes[0]},
+            {"files": [str(staged)], "nodeId": node_id},
             session,
         )
     except BaseException:
         staged.unlink(missing_ok=True)
         folder.rmdir()
         raise
+    finally:
+        try:
+            browser.call("Runtime.releaseObject", {"objectId": object_id}, session)
+        except Exception:
+            pass
     return dict(
         selected=True,
         submitted=False,
