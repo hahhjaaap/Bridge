@@ -32,6 +32,8 @@ def check_origin(browser, tab, expected):
 
 def upload(browser, tab, selector, source, data, expected_origin):
     check_origin(browser, tab, expected_origin)
+    if not isinstance(data, (bytes, bytearray)) or len(data) > MAX_BYTES:
+        raise PolicyError("Upload exceeds the 8 MiB browser transfer limit")
     if not isinstance(selector, str) or not selector or len(selector) > 500:
         raise PolicyError("Upload requires one CSS file-input selector")
     state = browser.evaluate(
@@ -133,7 +135,10 @@ def download(browser, tab, url, expected_origin):
         raise PolicyError(
             "Download failed, redirected or exceeds 8 MiB; inspect before retrying"
         )
-    raw = base64.b64decode(value["data"], validate=True)
+    try:
+        raw = base64.b64decode(value["data"], validate=True)
+    except (ValueError, base64.binascii.Error) as exc:
+        raise PolicyError("Browser returned an invalid download payload") from exc
     if len(raw) > MAX_BYTES:
         raise PolicyError("Browser download exceeds 8 MiB")
     return raw, str(value.get("content_type", ""))[:200]
