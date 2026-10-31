@@ -128,6 +128,37 @@ def test_rpc_pipe_closed_during_write_reports_failure():
         child._send({"jsonrpc": "2.0", "id": 1, "method": "fixture"})
 
 
+def test_failing_notification_observer_does_not_disconnect_backend(tmp_path):
+    import threading
+
+    observed = []
+
+    def failing_observer(message):
+        observed.append(message)
+        raise RuntimeError("observer unavailable")
+
+    child = StdioChild("fixture", [], str(tmp_path), failing_observer)
+    messages = [
+        {"jsonrpc": "2.0", "method": "notifications/progress", "params": {}},
+        {"jsonrpc": "2.0", "id": 7, "result": {"ok": True}},
+    ]
+    stream = SimpleNamespace(
+        readline=lambda limit: compact_json(messages.pop(0)) if messages else b""
+    )
+    child.process = SimpleNamespace(stdout=stream)
+    waiter = __import__("queue").Queue(maxsize=1)
+    child.waiters[7] = waiter
+
+    thread = threading.Thread(target=child._read_loop)
+    thread.start()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert len(observed) == 1
+    assert waiter.get_nowait()["result"] == {"ok": True}
+    assert child.terminated.is_set()
+
+
 @pytest.mark.parametrize("encoding", ["json", "wrapped_json", "structured"])
 @pytest.mark.parametrize(
     "report,expected",
