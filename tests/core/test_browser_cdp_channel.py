@@ -5,7 +5,12 @@ from collections import deque
 
 import pytest
 
-from udb.browser_cdp import MAX_EVENT_MARKERS, MAX_REPLY_BYTES, CDPChannel
+from udb.browser_cdp import (
+    MAX_COMMAND_TIMEOUT_SECONDS,
+    MAX_EVENT_MARKERS,
+    MAX_REPLY_BYTES,
+    CDPChannel,
+)
 from udb.core import PolicyError
 from udb.host_browser import Browser
 
@@ -58,6 +63,69 @@ def test_cdp_channel_retains_only_bounded_event_names():
     assert "secret" not in repr(channel.event_markers())
 
 
+def test_cdp_channel_waits_for_sanitized_main_frame_event():
+    socket = Socket(
+        [
+            json.dumps(
+                {
+                    "method": "Page.frameNavigated",
+                    "sessionId": "owned-session",
+                    "params": {
+                        "frame": {
+                            "id": "main-frame",
+                            "loaderId": "new-loader",
+                            "url": "https://example.test/path?secret=private",
+                        }
+                    },
+                }
+            )
+        ]
+    )
+    channel = CDPChannel(socket, Process())
+    event = channel.wait_for_event(
+        "Page.frameNavigated",
+        session="owned-session",
+        timeout=1,
+        match={"frameId": "main-frame"},
+    )
+    assert event == {
+        "method": "Page.frameNavigated",
+        "sessionId": "owned-session",
+        "frameId": "main-frame",
+        "loaderId": "new-loader",
+    }
+    assert "secret" not in repr(event) and "private" not in repr(event)
+
+
+def test_cdp_channel_queues_events_seen_while_waiting_for_a_reply():
+    socket = Socket(
+        [
+            json.dumps(
+                {
+                    "method": "Page.lifecycleEvent",
+                    "sessionId": "owned-session",
+                    "params": {
+                        "frameId": "main-frame",
+                        "loaderId": "loader-1",
+                        "name": "load",
+                        "timestamp": 123.4,
+                    },
+                }
+            ),
+            json.dumps({"id": 1, "result": {"ok": True}}),
+        ]
+    )
+    channel = CDPChannel(socket, Process())
+    assert channel.call("Page.getFrameTree") == {"ok": True}
+    event = channel.wait_for_event(
+        "Page.lifecycleEvent",
+        session="owned-session",
+        match={"name": "load", "loaderId": "loader-1"},
+    )
+    assert event["frameId"] == "main-frame" and event["name"] == "load"
+    assert "timestamp" not in event
+
+
 def test_cdp_channel_discards_late_reply_without_reusing_old_result():
     socket = Socket(
         [
@@ -102,6 +170,41 @@ def test_cdp_channel_does_not_hide_protocol_errors():
     )
     with pytest.raises(PolicyError, match="Browser operation failed: blocked"):
         channel.call("Page.navigate")
+
+
+def test_cdp_channel_enforces_timeout_type_and_upper_bound():
+    channel = CDPChannel(Socket([]), Process())
+    for timeout in (
+        True,
+        float("nan"),
+        float("inf"),
+        0,
+        -1,
+        MAX_COMMAND_TIMEOUT_SECONDS + 1,
+        "1",
+    ):
+        with pytest.raises(PolicyError, match="Invalid browser command timeout"):
+            channel.call("Page.getFrameTree", timeout=timeout)
+    assert channel.seq == 0
+
+
+def test_cdp_channel_applies_reply_limit_to_utf8_bytes_not_character_count():
+    payload = "é" * (MAX_REPLY_BYTES // 2 + 1)
+    assert len(payload) < MAX_REPLY_BYTES
+    channel = CDPChannel(Socket([payload]), Process())
+    with pytest.raises(PolicyError, match="exceeds limit"):
+        channel.call("Page.getFrameTree", timeout=1)
+
+
+def test_cdp_channel_does_not_treat_boolean_id_as_integer_response_id():
+    socket = Socket(
+        [
+            json.dumps({"id": True, "result": {"wrong": True}}),
+            json.dumps({"id": 1, "result": {"right": True}}),
+        ]
+    )
+    channel = CDPChannel(socket, Process())
+    assert channel.call("Page.getFrameTree") == {"right": True}
 
 
 def test_browser_call_keeps_legacy_method_contract_and_deadline():

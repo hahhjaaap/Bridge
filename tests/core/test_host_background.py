@@ -9,7 +9,13 @@ from types import SimpleNamespace
 import pytest
 
 from udb.core import Agent, PolicyError
-from udb.host_browser import Browser, parse_key, validate_locator, validate_url
+from udb.host_browser import (
+    Browser,
+    _browser_launch_args,
+    parse_key,
+    validate_locator,
+    validate_url,
+)
 from udb.host_client import atomic_json, status
 from udb.host_service import HostService
 from udb.resources import LIMITS, Governor, require_capacity
@@ -364,23 +370,24 @@ def test_browser_snapshot_is_bounded_and_redacts_secret_controls():
     assert "aria-labelledby" in captured["expression"]
 
 
-def test_browser_wait_for_polls_until_visible():
+def test_browser_wait_for_uses_one_mutation_observer_round_trip():
     browser = Browser.__new__(Browser)
-    results = iter(
-        [
-            {"ok": False, "state": "visible", "matches": 0},
-            {"ok": True, "state": "visible", "matches": 1, "visible": 1},
-        ]
-    )
     captured = []
-    browser.evaluate = lambda tab, expression, timeout=10: (
-        captured.append(expression) or next(results)
-    )
+
+    def evaluate(tab, expression, timeout=10, **kwargs):
+        captured.append((expression, timeout, kwargs))
+        return {"ok": True, "state": "visible", "matches": 1, "visible": 1}
+
+    browser.evaluate = evaluate
     result = browser.wait_for(
         "owned-tab", role="button", name="Continue", timeout_ms=1000
     )
-    assert result["ok"] and len(captured) == 2
-    assert all("wantedName" in expression for expression in captured)
+    assert result["ok"] and len(captured) == 1
+    expression, timeout, kwargs = captured[0]
+    assert "MutationObserver" in expression
+    assert "wantedName" in expression
+    assert kwargs["await_promise"] is True
+    assert timeout <= 1.25
 
 
 def test_browser_wait_for_timeout_is_explicit():
@@ -388,10 +395,92 @@ def test_browser_wait_for_timeout_is_explicit():
     browser.evaluate = lambda *args, **kwargs: {
         "ok": False,
         "state": "visible",
-        "matches": 0,
+        "timed_out": True,
     }
     result = browser.wait_for("owned-tab", selector="#late", timeout_ms=100)
     assert result["ok"] is False and result["timed_out"] is True
+
+
+def test_browser_launch_flags_preserve_features_and_isolate_profile(tmp_path):
+    args = _browser_launch_args("chrome.exe", tmp_path)
+    assert args[0] == "chrome.exe"
+    assert "--headless=new" in args
+    assert "--user-data-dir=" + str(tmp_path) in args
+    assert "--remote-debugging-address=127.0.0.1" in args
+    assert "--remote-debugging-port=0" in args
+    assert "--disable-extensions" in args
+    assert not {
+        "--disable-gpu",
+        "--disable-component-update",
+        "--disable-background-networking",
+        "--renderer-process-limit=4",
+        "--disable-features=Translate,MediaRouter",
+    }.intersection(args)
+    visible = _browser_launch_args("chrome.exe", tmp_path, visible=True)
+    assert "--headless=new" not in visible
+
+
+def test_browser_attach_does_not_emulate_a_slow_cpu():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {}
+    calls = []
+
+    def call(method, params=None, session=None, timeout=10):
+        calls.append(method)
+        if method == "Target.attachToTarget":
+            return {"sessionId": "owned-session"}
+        return {}
+
+    browser.call = call
+    browser.identity_script = lambda: "/* UDB identity */"
+    browser.attach("owned-target")
+    assert "Page.setDownloadBehavior" in calls
+    assert "Page.setLifecycleEventsEnabled" in calls
+    assert "Network.setBlockedURLs" in calls
+    assert "Emulation.setCPUThrottlingRate" not in calls
+
+
+def test_browser_identity_reuses_isolated_world_context():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+    browser._identity_contexts = {}
+    browser.identity_script = lambda: "installIdentity()"
+    calls = []
+
+    def call(method, params=None, session=None, timeout=10):
+        calls.append((method, params))
+        if method == "Page.getFrameTree":
+            return {"frameTree": {"frame": {"id": "main-frame"}}}
+        if method == "Page.createIsolatedWorld":
+            return {"executionContextId": 42}
+        return {}
+
+    browser.call = call
+    assert browser._show_identity("owned-tab", 10, 20)
+    assert browser._show_identity("owned-tab", 30, 40)
+    assert browser._show_identity("owned-tab")
+    assert [name for name, _ in calls].count("Page.getFrameTree") == 1
+    assert [name for name, _ in calls].count("Page.createIsolatedWorld") == 1
+    assert [name for name, _ in calls].count("Runtime.evaluate") == 2
+
+
+def test_browser_scroll_uses_actual_viewport_center():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+    calls = []
+
+    def call(method, params=None, session=None, timeout=10):
+        calls.append((method, params))
+        if method == "Page.getLayoutMetrics":
+            return {"cssVisualViewport": {"clientWidth": 320, "clientHeight": 600}}
+        return {}
+
+    browser.call = call
+    result = browser.scroll("owned-tab", 0, 500)
+    wheel = next(
+        params for method, params in calls if method == "Input.dispatchMouseEvent"
+    )
+    assert result["scrolled"] and wheel["x"] == 160 and wheel["y"] == 300
 
 
 @pytest.mark.parametrize(
@@ -751,6 +840,145 @@ def test_click_without_navigation_does_not_wait_for_document_ready():
     assert result == {"navigation_completed": False}
 
 
+def test_browser_click_navigation_falls_back_when_frame_events_are_missing():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+
+    class EventChannel:
+        def wait_for_event(self, methods, session=None, timeout=1, match=None):
+            if isinstance(methods, tuple):
+                return None
+            return {
+                "method": "Page.lifecycleEvent",
+                "sessionId": session,
+                "frameId": "main-frame",
+                "loaderId": "new-loader",
+                "name": "load",
+            }
+
+    browser._cdp = EventChannel()
+
+    def call(method, params=None, session=None, timeout=10):
+        if method == "Target.getTargets":
+            return {
+                "targetInfos": [
+                    {"targetId": "owned-tab", "url": "https://same.example/forms"}
+                ]
+            }
+        if method == "Page.getFrameTree":
+            return {
+                "frameTree": {"frame": {"id": "main-frame", "loaderId": "new-loader"}}
+            }
+        pytest.fail(f"Unexpected CDP call: {method}")
+
+    browser.call = call
+    browser.evaluate = lambda tab, expression, timeout=10, **kwargs: {
+        "readyState": "complete",
+        "href": "https://same.example/forms",
+    }
+    result = browser._wait_for_click_navigation(
+        "owned-tab",
+        "https://same.example/forms",
+        previous_loader_id="old-loader",
+        previous_frame_id="main-frame",
+    )
+    assert result["navigation_completed"]
+    assert result["url"] == "https://same.example/forms"
+
+
+def test_browser_navigation_waits_for_lifecycle_event_before_polling_frame_tree():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+
+    class EventChannel:
+        def __init__(self):
+            self.calls = []
+
+        def wait_for_event(self, methods, session=None, timeout=1, match=None):
+            self.calls.append((methods, session, match))
+            return {
+                "method": "Page.lifecycleEvent",
+                "sessionId": session,
+                "frameId": "main-frame",
+                "loaderId": "new-loader",
+                "name": "load",
+            }
+
+    channel = EventChannel()
+    browser._cdp = channel
+    browser.call = lambda *args, **kwargs: pytest.fail(
+        "A matching lifecycle event should avoid frame-tree polling"
+    )
+    browser.evaluate = lambda tab, expression, timeout=10, **kwargs: {
+        "readyState": "complete",
+        "href": "https://next.example/",
+    }
+    result = browser._wait_for_document_ready(
+        "owned-tab",
+        timeout_ms=1000,
+        previous_url="https://old.example/",
+        require_transition=True,
+        expected_loader_id="new-loader",
+    )
+    assert result["navigation_completed"]
+    assert channel.calls == [
+        (
+            "Page.lifecycleEvent",
+            "owned-session",
+            {"name": "load", "loaderId": "new-loader"},
+        )
+    ]
+
+
+def test_browser_event_wait_respects_host_action_deadline():
+    browser = Browser.__new__(Browser)
+    browser.deadline = time.monotonic() - 0.01
+
+    class EventChannel:
+        def wait_for_event(self, *args, **kwargs):
+            pytest.fail("Expired browser action must not wait on the CDP socket")
+
+    browser._cdp = EventChannel()
+    with pytest.raises(PolicyError, match="Browser action budget exceeded"):
+        browser._wait_for_cdp_event("Page.lifecycleEvent", timeout=1)
+
+
+def test_browser_click_navigation_uses_main_frame_events():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+
+    class EventChannel:
+        def wait_for_event(self, methods, session=None, timeout=1, match=None):
+            if methods == ("Page.frameNavigated", "Page.navigatedWithinDocument"):
+                return {
+                    "method": "Page.frameNavigated",
+                    "sessionId": session,
+                    "frameId": "main-frame",
+                    "loaderId": "new-loader",
+                }
+            return {
+                "method": "Page.lifecycleEvent",
+                "sessionId": session,
+                "frameId": "main-frame",
+                "loaderId": "new-loader",
+                "name": "load",
+            }
+
+    browser._cdp = EventChannel()
+    browser.evaluate = lambda tab, expression, timeout=10, **kwargs: {
+        "readyState": "complete",
+        "href": "https://next.example/",
+    }
+    result = browser._wait_for_click_navigation(
+        "owned-tab",
+        "https://old.example/",
+        previous_loader_id="old-loader",
+        previous_frame_id="main-frame",
+    )
+    assert result["navigation_completed"]
+    assert result["url"] == "https://next.example/"
+
+
 def test_browser_same_url_navigation_waits_for_new_loader():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
@@ -797,7 +1025,7 @@ def test_browser_invalid_css_selector_maps_runtime_exception():
     browser = Browser.__new__(Browser)
     calls = []
 
-    def evaluate(tab, expression, timeout=10):
+    def evaluate(tab, expression, timeout=10, **kwargs):
         calls.append(expression)
         if len(calls) == 1:
             raise PolicyError("Page operation failed; inspect page state")
@@ -816,7 +1044,7 @@ def test_browser_valid_css_selector_does_not_mask_page_errors():
     browser = Browser.__new__(Browser)
     calls = []
 
-    def evaluate(tab, expression, timeout=10):
+    def evaluate(tab, expression, timeout=10, **kwargs):
         calls.append(expression)
         if len(calls) == 1:
             raise PolicyError("Page operation failed; inspect page state")
@@ -836,7 +1064,7 @@ def test_browser_wait_for_invalid_css_selector_returns_structured_error():
     browser.tabs = {"owned-tab": "owned-session"}
     calls = []
 
-    def evaluate(tab, expression, timeout=10):
+    def evaluate(tab, expression, timeout=10, **kwargs):
         calls.append(expression)
         if len(calls) == 1:
             raise PolicyError("Page operation failed; inspect page state")

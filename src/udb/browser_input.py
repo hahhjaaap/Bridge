@@ -119,7 +119,7 @@ class BrowserInputMixin:
 
     def press(self, tab, key, selector="", role="", name="", exact=True):
         info = parse_key(key)
-        body = """if(e.disabled||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};
+        body = """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||isInert(e))return {ok:false,error:'disabled'};
           if(typeof e.focus!=='function')return {ok:false,error:'not_focusable'};e.focus();
           return {ok:document.activeElement===e||e.contains(document.activeElement),error:'not_focusable'};"""
         focused = self.evaluate(
@@ -138,15 +138,29 @@ class BrowserInputMixin:
         if info["text"]:
             down_params["text"] = info["text"]
             down_params["unmodifiedText"] = info["text"]
-        self.call(
-            "Input.dispatchKeyEvent",
-            dict(type="keyDown", **down_params),
-            session,
-            timeout=2,
-        )
-        self.call(
-            "Input.dispatchKeyEvent", dict(type="keyUp", **params), session, timeout=2
-        )
+        down_error = None
+        try:
+            self.call(
+                "Input.dispatchKeyEvent",
+                dict(type="keyDown", **down_params),
+                session,
+                timeout=2,
+            )
+        except Exception as exc:
+            down_error = exc
+        finally:
+            try:
+                self.call(
+                    "Input.dispatchKeyEvent",
+                    dict(type="keyUp", **params),
+                    session,
+                    timeout=2,
+                )
+            except Exception:
+                if down_error is None:
+                    raise
+        if down_error is not None:
+            raise down_error
         return dict(ok=True, key=key, focused=True)
 
     def scroll(self, tab, x=0, y=500):
@@ -157,9 +171,35 @@ class BrowserInputMixin:
             or not -2000 <= y <= 2000
         ):
             raise PolicyError("Browser scroll deltas must be integers in -2000..2000")
+        session = self.sid(tab)
+        metrics = self.call("Page.getLayoutMetrics", session=session, timeout=2)
+        viewport = (
+            metrics.get("cssVisualViewport")
+            or metrics.get("visualViewport")
+            or metrics.get("cssLayoutViewport")
+            or metrics.get("layoutViewport")
+            or {}
+        )
+        width, height = viewport.get("clientWidth"), viewport.get("clientHeight")
+        if (
+            isinstance(width, bool)
+            or not isinstance(width, (int, float))
+            or isinstance(height, bool)
+            or not isinstance(height, (int, float))
+            or width <= 0
+            or height <= 0
+        ):
+            raise PolicyError("Browser viewport is unavailable; inspect the tab")
         self.call(
             "Input.dispatchMouseEvent",
-            dict(type="mouseWheel", x=400, y=300, deltaX=x, deltaY=y),
-            self.sid(tab),
+            dict(
+                type="mouseWheel",
+                x=max(0, min(int(width) - 1, int(width // 2))),
+                y=max(0, min(int(height) - 1, int(height // 2))),
+                deltaX=x,
+                deltaY=y,
+            ),
+            session,
+            timeout=2,
         )
         return dict(scrolled=True, delta_x=x, delta_y=y)

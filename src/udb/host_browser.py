@@ -15,7 +15,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .browser_cdp import CDPChannel
-from .browser_dom import CLICK_POINT_SCRIPT, LOCATOR_SCRIPT, SELECT_OPTION_SCRIPT
+from .browser_dom import (
+    CLICK_POINT_SCRIPT,
+    DOM_TRAVERSAL_SCRIPT,
+    LOCATOR_SCRIPT,
+    SELECT_OPTION_SCRIPT,
+)
 from .browser_identity import identity_script
 from .browser_input import BrowserInputMixin
 from .browser_input import parse_key as parse_key
@@ -153,6 +158,31 @@ def validate_locator(selector="", role="", name="", exact=True):
         raise PolicyError("Provide a CSS selector or an accessible role")
 
 
+def _browser_launch_args(exe, folder, visible=False):
+    """Build a minimal, compatibility-first command for an owned profile."""
+    if type(visible) is not bool:
+        raise PolicyError("Invalid browser presentation")
+    args = [str(exe)]
+    if not visible:
+        args.append("--headless=new")
+    args.extend(
+        [
+            "--remote-debugging-port=0",
+            "--remote-debugging-address=127.0.0.1",
+            "--user-data-dir=" + str(folder),
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            "--disable-sync",
+            "--disable-default-apps",
+            "--disk-cache-size=67108864",
+            "--mute-audio",
+            "about:blank",
+        ]
+    )
+    return args
+
+
 def find_browser():
     candidates = [
         Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
@@ -188,6 +218,7 @@ class Browser(BrowserInputMixin):
         self.proc = None
         self.ws = None
         self._cdp = None
+        self._identity_contexts = {}
         self.tabs = {}
         self.frozen = False
         self.freeze_errors = 0
@@ -198,27 +229,7 @@ class Browser(BrowserInputMixin):
             endpoint.unlink(missing_ok=True)
             exe = find_browser()
             self.proc = OwnedProcess(
-                [
-                    exe,
-                    *([] if visible else ["--headless=new"]),
-                    "--remote-debugging-port=0",
-                    "--remote-debugging-address=127.0.0.1",
-                    "--user-data-dir=" + str(self.folder),
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    "--disable-extensions",
-                    "--disable-sync",
-                    "--disable-background-networking",
-                    "--disable-default-apps",
-                    "--disable-component-update",
-                    "--disk-cache-size=67108864",
-                    "--media-cache-size=16777216",
-                    "--disable-gpu",
-                    "--mute-audio",
-                    "--renderer-process-limit=4",
-                    "--disable-features=Translate,MediaRouter",
-                    "about:blank",
-                ],
+                _browser_launch_args(exe, self.folder, visible),
                 self.folder,
                 LIMITS["browser_memory_mib"],
             )
@@ -254,12 +265,14 @@ class Browser(BrowserInputMixin):
         return self._cdp.call(method, params, session, timeout)
 
     def attach(self, target):
+        getattr(self, "_identity_contexts", {}).pop(target, None)
         sid = self.call("Target.attachToTarget", dict(targetId=target, flatten=True))[
             "sessionId"
         ]
         self.tabs[target] = sid
         try:
             self.call("Page.enable", session=sid)
+            self.call("Page.setLifecycleEventsEnabled", dict(enabled=True), sid)
             self.call(
                 "Page.addScriptToEvaluateOnNewDocument",
                 dict(source=self.identity_script(), worldName="UDBIdentity"),
@@ -271,7 +284,6 @@ class Browser(BrowserInputMixin):
                 dict(urls=list(_BLOCKED_URL_PATTERNS)),
                 session=sid,
             )
-            self.call("Emulation.setCPUThrottlingRate", dict(rate=2), sid)
             self.call("Page.setDownloadBehavior", dict(behavior="deny"), sid)
         except BaseException:
             self.tabs.pop(target, None)
@@ -287,13 +299,13 @@ class Browser(BrowserInputMixin):
             raise PolicyError("Unknown or foreign tab; use host browser list")
         return self.tabs[tab]
 
-    def evaluate(self, tab, expression, timeout=10):
+    def evaluate(self, tab, expression, timeout=10, *, await_promise=False):
         r = self.call(
             "Runtime.evaluate",
             dict(
                 expression=expression,
                 returnByValue=True,
-                awaitPromise=False,
+                awaitPromise=bool(await_promise),
                 timeout=max(100, min(10000, int(timeout * 1000))),
             ),
             self.sid(tab),
@@ -314,6 +326,19 @@ class Browser(BrowserInputMixin):
                 "no frame with given id",
                 "inspected target navigated or closed",
             )
+        )
+
+    def _wait_for_cdp_event(self, methods, session=None, timeout=1, match=None):
+        channel = getattr(self, "_cdp", None)
+        if not hasattr(channel, "wait_for_event"):
+            return None
+        deadline = getattr(self, "deadline", None)
+        if deadline:
+            timeout = min(timeout, deadline - time.monotonic())
+        if timeout <= 0:
+            raise PolicyError("Browser action budget exceeded; inspect before retrying")
+        return channel.wait_for_event(
+            methods, session=session, timeout=timeout, match=match
         )
 
     def _wait_for_document_ready(
@@ -339,8 +364,22 @@ class Browser(BrowserInputMixin):
                 raise PolicyError(
                     f"Navigation timed out after {timeout_ms} ms; inspect before retrying"
                 )
-            # Same-URL navigations cannot be detected by comparing href. CDP
-            # returns the new loaderId; wait until the main frame adopts it.
+            # Lifecycle events avoid repeatedly querying the frame tree while
+            # a navigation is in flight. Retain the bounded poll as a fallback.
+            if (
+                expected_loader_id
+                and not transition_seen
+                and hasattr(getattr(self, "_cdp", None), "wait_for_event")
+            ):
+                event = self._wait_for_cdp_event(
+                    "Page.lifecycleEvent",
+                    session=self.sid(tab),
+                    timeout=min(1.0, remaining),
+                    match={"name": "load", "loaderId": expected_loader_id},
+                )
+                if event:
+                    transition_seen = True
+                    continue
             if expected_loader_id and not transition_seen:
                 try:
                     tree = self.call(
@@ -422,57 +461,152 @@ class Browser(BrowserInputMixin):
         observe_ms=1000,
         timeout_ms=10000,
         previous_loader_id=None,
+        previous_frame_id=None,
     ):
         if not isinstance(previous_url, str) or not previous_url:
             return dict(navigation_completed=False)
         observation_ms = max(100, min(1000, int(observe_ms)))
         deadline = time.monotonic() + observation_ms / 1000
-        # Runtime.evaluate may lose its reply while a click destroys the old
-        # execution context. Observe navigation from the browser target instead.
         transitioned = False
         next_loader_id = None
-        while time.monotonic() < deadline:
-            remaining = deadline - time.monotonic()
-            try:
-                targets = self.call(
-                    "Target.getTargets",
-                    timeout=max(0.2, min(0.5, remaining)),
-                ).get("targetInfos", [])
-            except PolicyError as exc:
-                if "timed out" not in str(exc).lower():
-                    raise
-                continue
-            target = next((t for t in targets if t.get("targetId") == tab), None)
-            if target is None:
-                raise PolicyError("Owned browser tab closed during click")
-            current_url = str(target.get("url", ""))
-            if current_url and current_url != previous_url:
-                transitioned = True
-                break
-            if previous_loader_id:
-                try:
-                    frame = (
-                        self.call(
-                            "Page.getFrameTree",
-                            session=self.sid(tab),
-                            timeout=max(0.2, min(0.5, deadline - time.monotonic())),
-                        )
-                        .get("frameTree", {})
-                        .get("frame", {})
+
+        # Use the browser's own main-frame events instead of polling targets and
+        # frame trees every 50 ms. Event records contain IDs only, never URLs.
+        channel = getattr(self, "_cdp", None)
+        if previous_frame_id and hasattr(channel, "wait_for_event"):
+            event_deadline = min(deadline, time.monotonic() + 0.15)
+            while time.monotonic() < event_deadline:
+                event = self._wait_for_cdp_event(
+                    ("Page.frameNavigated", "Page.navigatedWithinDocument"),
+                    session=self.sid(tab),
+                    timeout=max(0.01, event_deadline - time.monotonic()),
+                    match={"frameId": previous_frame_id},
+                )
+                if event is None:
+                    break
+                if event.get("method") == "Page.navigatedWithinDocument":
+                    try:
+                        current_url = self.evaluate(tab, "location.href", timeout=1)
+                    except PolicyError:
+                        current_url = ""
+                    if not current_url or current_url == previous_url:
+                        continue
+                    safe_url = self._safe_page_url(current_url)
+                    return dict(
+                        navigation_completed=bool(safe_url),
+                        ready_state="complete" if safe_url else "",
+                        url=safe_url,
                     )
+                if (
+                    event.get("method") == "Page.frameNavigated"
+                    and not event.get("parentId")
+                    and (
+                        not previous_loader_id
+                        or event.get("loaderId") != previous_loader_id
+                    )
+                ):
+                    next_loader_id = event.get("loaderId")
+                    transitioned = True
+                    break
+
+            # Some Chromium builds do not emit a main-frame lifecycle event for
+            # every form/history navigation. Use a bounded, low-frequency state
+            # fallback for the remaining observation budget.
+            while not transitioned and time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                try:
+                    targets = self.call(
+                        "Target.getTargets",
+                        timeout=max(0.05, min(0.2, remaining)),
+                    ).get("targetInfos", [])
                 except PolicyError as exc:
                     if (
                         self._is_transient_context_error(exc)
                         or "timed out" in str(exc).lower()
                     ):
+                        time.sleep(min(0.05, max(0, deadline - time.monotonic())))
                         continue
                     raise
-                loader = frame.get("loaderId")
-                if loader and loader != previous_loader_id:
-                    next_loader_id = loader
+                target = next(
+                    (item for item in targets if item.get("targetId") == tab), None
+                )
+                if target is None:
+                    raise PolicyError("Owned browser tab closed during click")
+                current_url = str(target.get("url", ""))
+                if current_url and current_url != previous_url:
                     transitioned = True
                     break
-            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+                if previous_loader_id:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        frame = (
+                            self.call(
+                                "Page.getFrameTree",
+                                session=self.sid(tab),
+                                timeout=max(0.01, min(0.5, remaining)),
+                            )
+                            .get("frameTree", {})
+                            .get("frame", {})
+                        )
+                    except PolicyError as exc:
+                        if (
+                            self._is_transient_context_error(exc)
+                            or "timed out" in str(exc).lower()
+                        ):
+                            continue
+                        raise
+                    loader = frame.get("loaderId")
+                    if loader and loader != previous_loader_id:
+                        next_loader_id = loader
+                        transitioned = True
+                        break
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        else:
+            # Compatibility path for simple test adapters and older channels.
+            while time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                try:
+                    targets = self.call(
+                        "Target.getTargets",
+                        timeout=max(0.2, min(0.5, remaining)),
+                    ).get("targetInfos", [])
+                except PolicyError as exc:
+                    if "timed out" not in str(exc).lower():
+                        raise
+                    continue
+                target = next((t for t in targets if t.get("targetId") == tab), None)
+                if target is None:
+                    raise PolicyError("Owned browser tab closed during click")
+                current_url = str(target.get("url", ""))
+                if current_url and current_url != previous_url:
+                    transitioned = True
+                    break
+                if previous_loader_id:
+                    try:
+                        frame = (
+                            self.call(
+                                "Page.getFrameTree",
+                                session=self.sid(tab),
+                                timeout=max(0.2, min(0.5, deadline - time.monotonic())),
+                            )
+                            .get("frameTree", {})
+                            .get("frame", {})
+                        )
+                    except PolicyError as exc:
+                        if (
+                            self._is_transient_context_error(exc)
+                            or "timed out" in str(exc).lower()
+                        ):
+                            continue
+                        raise
+                    loader = frame.get("loaderId")
+                    if loader and loader != previous_loader_id:
+                        next_loader_id = loader
+                        transitioned = True
+                        break
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
         if not transitioned:
             return dict(navigation_completed=False)
         try:
@@ -516,6 +650,7 @@ class Browser(BrowserInputMixin):
         for tab in list(self.tabs):
             if tab not in valid:
                 self.tabs.pop(tab)
+                getattr(self, "_identity_contexts", {}).pop(tab, None)
         # Only HTTP(S) pages in our own profile are interactive. Do not adopt
         # browser-internal pages or targets with an unsupported destination URL.
         for target in page_targets:
@@ -523,6 +658,7 @@ class Browser(BrowserInputMixin):
             safe_url = self._safe_page_url(target.get("url", ""))
             if not safe_url:
                 self.tabs.pop(tab, None)
+                getattr(self, "_identity_contexts", {}).pop(tab, None)
                 try:
                     self.call("Target.closeTarget", dict(targetId=tab), timeout=2)
                 except Exception:
@@ -585,7 +721,10 @@ class Browser(BrowserInputMixin):
             previous_url=previous_url,
             require_transition=bool(result.get("loaderId")),
             expected_loader_id=(
-                result.get("loaderId") if previous_url == url else None
+                result.get("loaderId")
+                if previous_url == url
+                or hasattr(getattr(self, "_cdp", None), "wait_for_event")
+                else None
             ),
         )
         return dict(tab_id=tab, navigation_started=True, **ready)
@@ -599,7 +738,8 @@ class Browser(BrowserInputMixin):
     ):
         validate_locator(selector, role, name, exact)
         return (
-            LOCATOR_SCRIPT.replace("__SELECTOR__", json.dumps(selector))
+            LOCATOR_SCRIPT.replace("__TRAVERSAL__", DOM_TRAVERSAL_SCRIPT)
+            .replace("__SELECTOR__", json.dumps(selector))
             .replace("__ROLE__", json.dumps(role))
             .replace("__NAME__", json.dumps(name))
             .replace("__EXACT__", "true" if exact else "false")
@@ -657,7 +797,7 @@ class Browser(BrowserInputMixin):
             matches = result.get("matches", 0)
             if error == "locator_not_unique" and matches > 1:
                 return result
-            if error == "invalid_selector":
+            if error in {"invalid_selector", "locator_search_truncated"}:
                 return result
             if error == "state_mismatch" and not retry_context:
                 return result  # An input/change handler already ran; never replay it.
@@ -682,17 +822,46 @@ class Browser(BrowserInputMixin):
         return identity_script(getattr(self, "visible", False))
 
     def _show_identity(self, tab, x=None, y=None):
-        """Decorate only our page in an isolated JS world; never use OS input.
-
-        Presentation failure must not replay or block an application action.
-        No privileged API is exposed to page scripts.
-        """
+        """Install identity once per document and cache its isolated-world context."""
         session = self.sid(tab)
+        contexts = getattr(self, "_identity_contexts", None)
+        if contexts is None:
+            contexts = {}
+            self._identity_contexts = contexts
+        context_id = contexts.get(tab)
+        if context_id is not None:
+            if x is None or y is None:
+                return True
+            try:
+                expression = (
+                    "globalThis.__udbMovePointer("
+                    + json.dumps(float(x))
+                    + ","
+                    + json.dumps(float(y))
+                    + ");"
+                )
+                result = self.call(
+                    "Runtime.evaluate",
+                    dict(
+                        expression=expression,
+                        contextId=context_id,
+                        returnByValue=True,
+                    ),
+                    session,
+                    timeout=2,
+                )
+                if result.get("exceptionDetails"):
+                    raise PolicyError("Browser identity context is unavailable")
+                return True
+            except PolicyError as exc:
+                if not self._is_transient_context_error(exc):
+                    return False
+                contexts.pop(tab, None)
         try:
             frame = self.call("Page.getFrameTree", session=session)["frameTree"][
                 "frame"
             ]["id"]
-            world = self.call(
+            context_id = self.call(
                 "Page.createIsolatedWorld",
                 dict(frameId=frame, worldName="UDBIdentity"),
                 session,
@@ -700,14 +869,25 @@ class Browser(BrowserInputMixin):
             expression = self.identity_script()
             if x is not None and y is not None:
                 expression += (
-                    f";globalThis.__udbMovePointer({float(x)!r},{float(y)!r});"
+                    ";globalThis.__udbMovePointer("
+                    + json.dumps(float(x))
+                    + ","
+                    + json.dumps(float(y))
+                    + ");"
                 )
-            self.call(
+            result = self.call(
                 "Runtime.evaluate",
-                dict(expression=expression, contextId=world, returnByValue=True),
+                dict(
+                    expression=expression,
+                    contextId=context_id,
+                    returnByValue=True,
+                ),
                 session,
                 timeout=2,
             )
+            if result.get("exceptionDetails"):
+                raise PolicyError("Browser identity installation failed")
+            contexts[tab] = context_id
         except (PolicyError, KeyError):
             return False
         return True
@@ -731,7 +911,7 @@ class Browser(BrowserInputMixin):
                 previous_url = None
             body = (
                 """if(e.tagName==='OPTION')return {ok:false,error:'use_select_option',action:'select_option'};
-                if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+                if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||isInert(e))return {ok:false,error:'disabled'};
 """
                 + CLICK_POINT_SCRIPT
                 + """              return {ok:true,x:point[0],y:point[1]};"""
@@ -741,18 +921,23 @@ class Browser(BrowserInputMixin):
             if not result.get("ok"):
                 return result
             previous_loader_id = None
+            previous_frame_id = None
             try:
-                previous_loader_id = (
+                frame = (
                     self.call("Page.getFrameTree", session=self.sid(tab), timeout=1)
                     .get("frameTree", {})
                     .get("frame", {})
-                    .get("loaderId")
                 )
+                previous_loader_id = frame.get("loaderId")
+                previous_frame_id = frame.get("id")
             except PolicyError:
                 pass  # URL observation is still available if a frame is transitioning.
             self._mouse_click(tab, result["x"], result["y"])
             navigation = self._wait_for_click_navigation(
-                tab, previous_url, previous_loader_id=previous_loader_id
+                tab,
+                previous_url,
+                previous_loader_id=previous_loader_id,
+                previous_frame_id=previous_frame_id,
             )
             return dict(ok=True, clicked=True, replay_safe=False, **navigation)
 
@@ -762,7 +947,7 @@ class Browser(BrowserInputMixin):
                 "if(e.tagName==='SELECT'){"
                 + select_body
                 + "}\n"
-                + """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+                + """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||isInert(e))return {ok:false,error:'disabled'};
               if(e.readOnly)return {ok:false,error:'readonly'};
               if(e.isContentEditable){e.focus();e.textContent=__VALUE__;}else{
                 if(!['INPUT','TEXTAREA'].includes(e.tagName)||e.type==='file'||['button','submit','reset','checkbox','radio','hidden','image'].includes((e.type||'').toLowerCase()))return {ok:false,error:'unsupported_control'};
@@ -778,7 +963,7 @@ class Browser(BrowserInputMixin):
             body = (
                 """const native=e.tagName==='INPUT'&&['checkbox','radio'].includes((e.type||'').toLowerCase());const role=(e.getAttribute('role')||'').toLowerCase();
               if(!native&&!['checkbox','radio'].includes(role))return {ok:false,error:'unsupported_control'};
-              if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+              if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||isInert(e))return {ok:false,error:'disabled'};
               const current=native?!!e.checked:e.getAttribute('aria-checked')==='true';
               if(current===__DESIRED__)return {ok:true,checked:current,already_set:true};
               if((native&&e.type==='radio'||role==='radio')&&__DESIRED__===false)return {ok:false,error:'radio_cannot_be_unchecked'};
@@ -838,12 +1023,60 @@ class Browser(BrowserInputMixin):
         elif value:
             raise PolicyError("value is only used with wait_for state=text")
         validate_locator(selector, role, name, exact)
-        body = """const visibleMatches=matches.filter(isVisible);const enabledMatches=visibleMatches.filter(e=>!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!e.closest('[inert]'));
-          const textMatches=matches.filter(e=>String(e.innerText||e.textContent||'').includes(__VALUE__));const state=__STATE__;
-          const ok=state==='attached'?matches.length>0:state==='visible'?visibleMatches.length>0:state==='hidden'?(matches.length===0||visibleMatches.length===0):state==='enabled'?enabledMatches.length>0:state==='text'?textMatches.length>0:false;
-          return {ok,state,matches:matches.length,visible:visibleMatches.length,enabled:enabledMatches.length};"""
-        body = body.replace("__VALUE__", json.dumps(value)).replace(
-            "__STATE__", json.dumps(state)
+        body = """return new Promise(resolve => {
+          const waitState=__STATE__, wantedText=__VALUE__, timeout=__TIMEOUT__;
+          let observer=null, interval=null, timer=null, scheduled=null, finished=false;
+          const observed=new WeakSet();
+          const finish=result=>{
+            if(finished)return;
+            finished=true;
+            if(observer)observer.disconnect();
+            if(interval!==null)clearInterval(interval);
+            if(timer!==null)clearTimeout(timer);
+            if(scheduled!==null)clearTimeout(scheduled);
+            resolve(result);
+          };
+          const observeRoots=()=>{
+            if(!observer)return;
+            for(const root of openShadowRoots){
+              const target=root===document?document.documentElement:root;
+              if(target&&!observed.has(target)){
+                observer.observe(target,{subtree:true,childList:true,attributes:true,characterData:true});
+                observed.add(target);
+              }
+            }
+          };
+          const check=()=>{
+            matches=findMatches();
+            if(matches===null){finish({ok:false,error:'invalid_selector',state:waitState});return;}
+            observeRoots();
+            const visibleMatches=matches.filter(isVisible);
+            const enabledMatches=visibleMatches.filter(e=>!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!isInert(e));
+            const textMatches=matches.filter(e=>String(e.innerText||e.textContent||'').includes(wantedText));
+            const shadowTextMatch=waitState==='text'&&openShadowRoots.slice(1).some(root=>String(root.textContent||'').includes(wantedText));
+            const ok=waitState==='attached'?matches.length>0:
+              waitState==='visible'?visibleMatches.length>0:
+              waitState==='hidden'?(matches.length===0||visibleMatches.length===0):
+              waitState==='enabled'?enabledMatches.length>0:
+              waitState==='text'?textMatches.length>0||shadowTextMatch:false;
+            if(ok){finish({ok:true,state:waitState,matches:matches.length,visible:visibleMatches.length,enabled:enabledMatches.length});return;}
+            if(traversalTruncated&&(matches.length===0||waitState==='hidden')){
+              finish({ok:false,error:'locator_search_truncated',state:waitState});return;
+            }
+          };
+          const scheduleCheck=()=>{
+            if(finished||scheduled!==null)return;
+            scheduled=setTimeout(()=>{scheduled=null;if(!finished)check();},50);
+          };
+          observer=new MutationObserver(scheduleCheck);
+          timer=setTimeout(()=>finish({ok:false,timed_out:true,state:waitState}),Math.max(1,timeout-50));
+          interval=setInterval(scheduleCheck,500);
+          check();
+        });"""
+        body = (
+            body.replace("__VALUE__", json.dumps(value))
+            .replace("__STATE__", json.dumps(state))
+            .replace("__TIMEOUT__", str(timeout_ms))
         )
         expression = self._locator_expression(
             selector, role, name, exact, body, visible_only=False, unique=False
@@ -855,31 +1088,32 @@ class Browser(BrowserInputMixin):
                 return dict(ok=False, timed_out=True, state=state)
             try:
                 result = self.evaluate(
-                    tab, expression, timeout=max(0.2, min(1.5, remaining))
+                    tab,
+                    expression,
+                    timeout=min(10.25, remaining + 0.25),
+                    await_promise=True,
                 )
             except PolicyError as exc:
                 if self._is_transient_context_error(exc):
                     if time.monotonic() >= deadline:
                         return dict(ok=False, timed_out=True, state=state)
-                    time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                    time.sleep(min(0.05, max(0, deadline - time.monotonic())))
                     continue
                 if selector and self._css_selector_valid(tab, selector) is False:
                     return dict(ok=False, error="invalid_selector", state=state)
-                if time.monotonic() >= deadline:
+                if "timed out" in str(exc).lower():
                     return dict(ok=False, timed_out=True, state=state)
                 raise
-            if result.get("error") == "invalid_selector":
-                return dict(ok=False, error="invalid_selector", state=state)
-            if result.get("ok"):
-                return result
-            if time.monotonic() >= deadline:
+            if not isinstance(result, dict):
+                return dict(ok=False, error="invalid_page_result", state=state)
+            if result.get("error") in {"invalid_selector", "locator_search_truncated"}:
                 return dict(
                     ok=False,
-                    timed_out=True,
+                    error=result["error"],
                     state=state,
                     matches=result.get("matches", 0),
                 )
-            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+            return result
 
     def history(self, tab, action):
         session = self.sid(tab)
@@ -942,6 +1176,7 @@ class Browser(BrowserInputMixin):
         result = self.call("Target.closeTarget", dict(targetId=tab))
         if result.get("success"):
             self.tabs.pop(tab)
+            getattr(self, "_identity_contexts", {}).pop(tab, None)
         return result
 
     def switch_presentation(self, visible):
@@ -1030,6 +1265,7 @@ class Browser(BrowserInputMixin):
                 pass  # The socket may already be closed; continue owned-process cleanup.
             self.ws = None
         self._cdp = None
+        getattr(self, "_identity_contexts", {}).clear()
         if self.proc:
             self.proc.close()
             self.proc = None

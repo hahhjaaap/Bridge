@@ -83,6 +83,19 @@ def live_browser(tmp_path, monkeypatch):
                 <button>Submit</button></form>"""
             elif self.path.startswith("/destination"):
                 body = b"<title>Destination</title><h1>Arrived</h1>"
+            elif self.path.startswith("/shadow-delay"):
+                body = b"""<title>Shadow delay</title><div id="shadow-host"></div>
+                <script>
+                const root=document.querySelector('#shadow-host').attachShadow({mode:'open'});
+                setTimeout(()=>{root.innerHTML='<button id="ready">Ready</button>'},100);
+                </script>"""
+            elif self.path.startswith("/shadow"):
+                body = b"""<title>Shadow</title><div id="shadow-host"></div>
+                <script>
+                const root=document.querySelector('#shadow-host').attachShadow({mode:'open'});
+                root.innerHTML='<label for="shadow-name">Name</label><input id="shadow-name"><input type="file" id="shadow-upload"><button id="shadow-run">Run shadow</button>';
+                root.querySelector('#shadow-run').addEventListener('click',()=>document.title='ShadowClicked');
+                </script>"""
             else:
                 body = b"<title>Ready</title><button onclick=\"document.title='Clicked'\">Run</button><input type='file' id='upload'>"
             self.send_response(200)
@@ -119,6 +132,8 @@ def live_browser(tmp_path, monkeypatch):
         fixture_url + "forms",
         fixture_url + "forms?text=&country=",
         fixture_url + "destination",
+        fixture_url + "shadow",
+        fixture_url + "shadow-delay",
         fixture_url.replace("127.0.0.1", "localhost") + "destination",
     }
     # This test exercises CDP/DOM identity, not public-site network policy.
@@ -187,6 +202,59 @@ def test_real_browser_background_click_identity_and_reload(live_browser):
         tab, "!!document.getElementById('__udb_owned_browser_identity')"
     )
     assert browser.evaluate(tab, "document.title") == "Ready"
+
+
+def test_real_browser_open_shadow_dom_locators_and_actions(live_browser):
+    browser, tab, url, _ = live_browser
+    browser.navigate(tab, url + "shadow")
+    snapshot = browser.snapshot(tab)
+    elements = {item["id"]: item for item in snapshot["elements"]}
+    assert snapshot["shadow_roots"] >= 1
+    assert elements["shadow-run"]["name"] == "Run shadow"
+    assert elements["shadow-name"]["role"] == "textbox"
+
+    filled = browser.element(tab, "fill", selector="#shadow-name", value="UDB")
+    assert filled["ok"]
+    elements = {item["id"]: item for item in browser.snapshot(tab)["elements"]}
+    assert elements["shadow-name"]["value"] == "UDB"
+
+    clicked = browser.element(tab, "click", role="button", name="Run shadow")
+    assert clicked["clicked"]
+    assert browser.evaluate(tab, "document.title") == "ShadowClicked"
+
+
+def test_real_browser_uploads_to_file_input_inside_open_shadow_dom(live_browser):
+    from pathlib import Path
+
+    from udb.browser_files import upload
+
+    browser, tab, url, _ = live_browser
+    browser.navigate(tab, url + "shadow")
+    result = upload(
+        browser, tab, "#shadow-upload", Path("shadow.txt"), b"shadow upload", url
+    )
+    assert result["selected"] and result["submitted"] is False
+    read = browser.call(
+        "Runtime.evaluate",
+        {
+            "expression": "document.querySelector('#shadow-host').shadowRoot.querySelector('#shadow-upload').files[0].text()",
+            "awaitPromise": True,
+            "returnByValue": True,
+        },
+        browser.sid(tab),
+    )
+    assert read["result"]["value"] == "shadow upload"
+
+
+def test_real_browser_wait_for_observes_mutations_inside_open_shadow_dom(live_browser):
+    browser, tab, url, _ = live_browser
+    browser.navigate(tab, url + "shadow-delay")
+    result = browser.wait_for(tab, role="button", name="Ready", timeout_ms=2000)
+    assert result["ok"] and result["state"] == "visible"
+    text_result = browser.wait_for(
+        tab, selector="body", state="text", value="Ready", timeout_ms=2000
+    )
+    assert text_result["ok"] and text_result["state"] == "text"
 
 
 def test_real_browser_cookie_download_and_redirect_rejection(live_browser):
