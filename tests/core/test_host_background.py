@@ -884,6 +884,20 @@ def test_browser_navigation_waits_for_lifecycle_event_before_polling_frame_tree(
     ]
 
 
+
+def test_browser_event_wait_respects_host_action_deadline():
+    browser = Browser.__new__(Browser)
+    browser.deadline = time.monotonic() - 0.01
+
+    class EventChannel:
+        def wait_for_event(self, *args, **kwargs):
+            pytest.fail("Expired browser action must not wait on the CDP socket")
+
+    browser._cdp = EventChannel()
+    with pytest.raises(PolicyError, match="Browser action budget exceeded"):
+        browser._wait_for_cdp_event("Page.lifecycleEvent", timeout=1)
+
+
 def test_browser_click_navigation_uses_main_frame_events():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
