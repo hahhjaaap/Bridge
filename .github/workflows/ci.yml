@@ -34,6 +34,8 @@ jobs:
         if: runner.os == 'Linux'
         # Chrome needs a live session bus, even with headless rendering.
         run: dbus-run-session -- python -m pytest --junitxml="${{ runner.temp }}/udb-tests.xml"
+      - name: Benchmark local MCP stdio routing (informational)
+        run: python tools/benchmark_rpc.py --calls 100 --parallel 4
       - name: Upload regression scenario report
         if: always()
         continue-on-error: true
