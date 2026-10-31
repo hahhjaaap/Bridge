@@ -84,36 +84,25 @@ def upload(browser, tab, selector, source, data, expected_origin):
             or "disabled" in attrs
         ):
             raise PolicyError("Upload selector is not an enabled file input")
-    except BaseException:
+        if len(list(browser.folder.glob("udb-upload-*"))) >= 8:
+            raise PolicyError(
+                "Maximum 8 staged uploads per browser session; close the session to clear them"
+            )
+        folder = browser.folder / ("udb-upload-" + uuid.uuid4().hex)
+        folder.mkdir()
+        staged = folder / source.name
         try:
-            browser.call("Runtime.releaseObject", {"objectId": object_id}, session)
-        except Exception:
-            pass
-        raise
-    if len(list(browser.folder.glob("udb-upload-*"))) >= 8:
-        raise PolicyError(
-            "Maximum 8 staged uploads per browser session; close the session to clear them"
-        )
-    folder = browser.folder / ("udb-upload-" + uuid.uuid4().hex)
-    folder.mkdir()
-    staged = folder / source.name
-    try:
-        staged.write_bytes(data)
-        check_origin(browser, tab, expected_origin)
-        browser.call(
-            "DOM.setFileInputFiles",
-            {"files": [str(staged)], "nodeId": node_id},
-            session,
-        )
-    except BaseException:
-        staged.unlink(missing_ok=True)
-        folder.rmdir()
-        raise
-    finally:
-        try:
-            browser.call("Runtime.releaseObject", {"objectId": object_id}, session)
-        except Exception:
-            pass
+            staged.write_bytes(data)
+            check_origin(browser, tab, expected_origin)
+            browser.call(
+                "DOM.setFileInputFiles",
+                {"files": [str(staged)], "nodeId": node_id},
+                session,
+            )
+        except BaseException:
+            staged.unlink(missing_ok=True)
+            folder.rmdir()
+            raise
     return dict(
         selected=True,
         submitted=False,
