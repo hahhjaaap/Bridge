@@ -272,9 +272,7 @@ class Browser(BrowserInputMixin):
         self.tabs[target] = sid
         try:
             self.call("Page.enable", session=sid)
-            self.call(
-                "Page.setLifecycleEventsEnabled", dict(enabled=True), sid
-            )
+            self.call("Page.setLifecycleEventsEnabled", dict(enabled=True), sid)
             self.call(
                 "Page.addScriptToEvaluateOnNewDocument",
                 dict(source=self.identity_script(), worldName="UDBIdentity"),
@@ -551,9 +549,7 @@ class Browser(BrowserInputMixin):
                             self.call(
                                 "Page.getFrameTree",
                                 session=self.sid(tab),
-                                timeout=max(
-                                    0.2, min(0.5, deadline - time.monotonic())
-                                ),
+                                timeout=max(0.2, min(0.5, deadline - time.monotonic())),
                             )
                             .get("frameTree", {})
                             .get("frame", {})
@@ -1026,9 +1022,11 @@ class Browser(BrowserInputMixin):
           interval=setInterval(()=>{observeRoots();check();},200);
           check();
         });"""
-        body = body.replace("__VALUE__", json.dumps(value)).replace(
-            "__STATE__", json.dumps(state)
-        ).replace("__TIMEOUT__", str(timeout_ms))
+        body = (
+            body.replace("__VALUE__", json.dumps(value))
+            .replace("__STATE__", json.dumps(state))
+            .replace("__TIMEOUT__", str(timeout_ms))
+        )
         expression = self._locator_expression(
             selector, role, name, exact, body, visible_only=False, unique=False
         )
