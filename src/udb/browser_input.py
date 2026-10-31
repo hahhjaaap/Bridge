@@ -163,4 +163,3 @@ class BrowserInputMixin:
             self.sid(tab),
         )
         return dict(scrolled=True, delta_x=x, delta_y=y)
-
