@@ -232,7 +232,12 @@ class UnifiedProxy:
                     self.companion.request("udb/close-sessions", timeout=10)
                     self._pointer_presence_started = False
                 except (RuntimeError, TimeoutError, OSError):
-                    return
+                    # The cleanup backend can be temporarily unavailable.
+                    # Keep watching so the next cycle can recheck the owner
+                    # grant and retry closing sessions. Exiting here would
+                    # permanently disable revocation monitoring for this proxy.
+                    self._pointer_presence_started = False
+                    continue
 
     def tools_list(self) -> dict[str, Any]:
         # Backends advertise tools.listChanged=False. Discovery is immutable
