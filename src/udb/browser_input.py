@@ -119,7 +119,7 @@ class BrowserInputMixin:
 
     def press(self, tab, key, selector="", role="", name="", exact=True):
         info = parse_key(key)
-        body = """if(e.disabled||e.getAttribute('aria-disabled')==='true')return {ok:false,error:'disabled'};
+        body = """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||isInert(e))return {ok:false,error:'disabled'};
           if(typeof e.focus!=='function')return {ok:false,error:'not_focusable'};e.focus();
           return {ok:document.activeElement===e||e.contains(document.activeElement),error:'not_focusable'};"""
         focused = self.evaluate(
