@@ -5,7 +5,7 @@ Callers may supply only validated locators and JSON-encoded values, never code.
 
 DOM_TRAVERSAL_SCRIPT = r"""
 const MAX_SHADOW_ROOTS = 32, MAX_SCANNED_ELEMENTS = 10000, MAX_MATCHES = 10000;
-let traversalTruncated = false, openShadowRootCount = 0;
+let traversalTruncated = false, openShadowRootCount = 0, openShadowRoots = [document];
 const collectOpenRoots = () => {
   const roots = [document];
   let cursor = 0, scanned = 0, truncated = false;
@@ -31,6 +31,7 @@ const collectOpenRoots = () => {
 const queryAll = selector => {
   const discovered = collectOpenRoots();
   traversalTruncated = discovered.truncated;
+  openShadowRoots = discovered.roots;
   openShadowRootCount = Math.max(0, discovered.roots.length - 1);
   const found = [];
   for (const root of discovered.roots) {
