@@ -120,6 +120,22 @@ def test_rpc_pipe_short_writes_still_send_one_complete_utf8_frame():
     assert writer.flushed
 
 
+def test_transport_close_tolerates_an_already_closed_input_pipe():
+    class ClosedInput:
+        def close(self):
+            raise ValueError("I/O operation on closed file")
+
+    child = StdioChild("fixture", [], ".", lambda _: None)
+    child.process = SimpleNamespace(
+        stdin=ClosedInput(),
+        stdout=None,
+        stderr=None,
+        poll=lambda: 0,
+    )
+    child.close()
+    child.close()
+
+
 def test_rpc_pipe_closed_during_write_reports_failure():
     writer = ShortWriter(0)
     child = StdioChild("fixture", [], ".", lambda _: None)
