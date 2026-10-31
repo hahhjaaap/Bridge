@@ -111,9 +111,7 @@ class StdioChild:
                     # Only string-valued MCP notifications may be forwarded.
                     # Reject malformed frames without losing live RPC replies.
                     method = message["method"]
-                    if isinstance(method, str) and method.startswith(
-                        "notifications/"
-                    ):
+                    if isinstance(method, str) and method.startswith("notifications/"):
                         try:
                             self.notify(message)
                         except Exception:
