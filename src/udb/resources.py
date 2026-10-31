@@ -280,7 +280,9 @@ def require_capacity(status, reserve_mib=256):
         ):
             raise PolicyError("Resource monitor returned invalid commit headroom")
         if commit - reserve_mib < LIMITS["min_commit_mib"]:
-            raise PolicyError("Insufficient system commit headroom; no new task was opened")
+            raise PolicyError(
+                "Insufficient system commit headroom; no new task was opened"
+            )
 
 
 def guard_new_heavy_task(agent, reserve_mib=512):
