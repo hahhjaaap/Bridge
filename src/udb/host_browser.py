@@ -905,7 +905,7 @@ class Browser(BrowserInputMixin):
           };
           const observeRoots=()=>{
             if(!observer)return;
-            for(const root of collectOpenRoots().roots){
+            for(const root of openShadowRoots){
               const target=root===document?document.documentElement:root;
               if(target&&!observed.has(target)){
                 observer.observe(target,{subtree:true,childList:true,attributes:true,characterData:true});
@@ -916,6 +916,7 @@ class Browser(BrowserInputMixin):
           const check=()=>{
             matches=findMatches();
             if(matches===null){finish({ok:false,error:'invalid_selector',state:waitState});return;}
+            observeRoots();
             const visibleMatches=matches.filter(isVisible);
             const enabledMatches=visibleMatches.filter(e=>!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!isInert(e));
             const textMatches=matches.filter(e=>String(e.innerText||e.textContent||'').includes(wantedText));
@@ -929,10 +930,9 @@ class Browser(BrowserInputMixin):
               finish({ok:false,error:'locator_search_truncated',state:waitState});return;
             }
           };
-          observer=new MutationObserver(()=>{observeRoots();check();});
+          observer=new MutationObserver(check);
           timer=setTimeout(()=>finish({ok:false,timed_out:true,state:waitState}),Math.max(1,timeout-50));
           interval=setInterval(()=>{observeRoots();check();},200);
-          observeRoots();
           check();
         });"""
         body = body.replace("__VALUE__", json.dumps(value)).replace(
