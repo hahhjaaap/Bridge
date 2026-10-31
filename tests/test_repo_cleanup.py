@@ -115,9 +115,7 @@ def test_repository_audit_identifies_only_high_confidence_junk(tmp_path):
 def test_audit_separates_required_compatibility_shims_from_real_duplicates(tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "udb_unified.py").write_text("from udb.proxy import run\n")
-    (tmp_path / "src" / "udb_unified.py").write_text(
-        "from udb.proxy import run\n"
-    )
+    (tmp_path / "src" / "udb_unified.py").write_text("from udb.proxy import run\n")
     (tmp_path / "src" / "one.py").write_text("x = 1\n")
     (tmp_path / "src" / "two.py").write_text("x = 1\n")
     report = audit(
