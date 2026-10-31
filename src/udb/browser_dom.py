@@ -51,6 +51,18 @@ const queryAll = selector => {
   }
   return found;
 };
+const isInert = element => {
+  let node = element;
+  while (node) {
+    if (node.nodeType === 1 && node.hasAttribute('inert')) return true;
+    if (node.parentElement) node = node.parentElement;
+    else {
+      const root = node.getRootNode && node.getRootNode();
+      node = root && root.host ? root.host : null;
+    }
+  }
+  return false;
+};
 """
 
 SELECT_OPTION_SCRIPT = """if(e.tagName!=='SELECT')return {ok:false,error:'unsupported_control'};
