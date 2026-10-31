@@ -1018,7 +1018,7 @@ def test_browser_wait_for_invalid_css_selector_returns_structured_error():
     browser.tabs = {"owned-tab": "owned-session"}
     calls = []
 
-    def evaluate(tab, expression, timeout=10):
+    def evaluate(tab, expression, timeout=10, **kwargs):
         calls.append(expression)
         if len(calls) == 1:
             raise PolicyError("Page operation failed; inspect page state")
