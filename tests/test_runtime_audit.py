@@ -120,12 +120,90 @@ def test_rpc_pipe_short_writes_still_send_one_complete_utf8_frame():
     assert writer.flushed
 
 
+def test_transport_close_tolerates_an_already_closed_input_pipe():
+    class ClosedInput:
+        def close(self):
+            raise ValueError("I/O operation on closed file")
+
+    child = StdioChild("fixture", [], ".", lambda _: None)
+    child.process = SimpleNamespace(
+        stdin=ClosedInput(),
+        stdout=None,
+        stderr=None,
+        poll=lambda: 0,
+    )
+    child.close()
+    child.close()
+
+
 def test_rpc_pipe_closed_during_write_reports_failure():
     writer = ShortWriter(0)
     child = StdioChild("fixture", [], ".", lambda _: None)
     child.process = SimpleNamespace(stdin=writer)
     with pytest.raises(RuntimeError, match="write failed"):
         child._send({"jsonrpc": "2.0", "id": 1, "method": "fixture"})
+
+
+def test_failing_notification_observer_does_not_disconnect_backend(tmp_path):
+    import threading
+
+    observed = []
+
+    def failing_observer(message):
+        observed.append(message)
+        raise RuntimeError("observer unavailable")
+
+    child = StdioChild("fixture", [], str(tmp_path), failing_observer)
+    messages = [
+        {"jsonrpc": "2.0", "method": "notifications/progress", "params": {}},
+        {"jsonrpc": "2.0", "id": 7, "result": {"ok": True}},
+    ]
+    stream = SimpleNamespace(
+        readline=lambda limit: compact_json(messages.pop(0)) if messages else b""
+    )
+    child.process = SimpleNamespace(stdout=stream)
+    waiter = __import__("queue").Queue(maxsize=1)
+    child.waiters[7] = waiter
+
+    thread = threading.Thread(target=child._read_loop)
+    thread.start()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert len(observed) == 1
+    assert waiter.get_nowait()["result"] == {"ok": True}
+    assert child.terminated.is_set()
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"jsonrpc": "2.0", "id": [], "result": {}},
+        {"jsonrpc": "2.0", "id": {"bad": "key"}, "result": {}},
+        {"jsonrpc": "2.0", "id": True, "result": {}},
+        {"jsonrpc": "2.0", "method": None},
+        {"jsonrpc": "2.0", "method": {"bad": "method"}},
+    ],
+)
+def test_invalid_child_frame_does_not_discard_another_rpc_reply(tmp_path, malformed):
+    import queue
+
+    child = StdioChild("fixture", [], str(tmp_path), lambda _: None)
+    frames = [
+        malformed,
+        {"jsonrpc": "2.0", "id": 7, "result": {"ok": True}},
+    ]
+    child.process = SimpleNamespace(
+        stdout=SimpleNamespace(
+            readline=lambda limit: compact_json(frames.pop(0)) if frames else b""
+        )
+    )
+    waiter = queue.Queue(maxsize=1)
+    child.waiters[7] = waiter
+
+    child._read_loop()
+
+    assert waiter.get_nowait()["result"] == {"ok": True}
 
 
 @pytest.mark.parametrize("encoding", ["json", "wrapped_json", "structured"])

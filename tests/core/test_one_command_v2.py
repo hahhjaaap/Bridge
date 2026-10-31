@@ -107,6 +107,26 @@ class ReadinessTests(Fixture):
         self.assertEqual(report["background"], "disabled")
         self.assertFalse(report["chatgpt_connection_verified"])
 
+    def test_tunnel_readiness_never_claims_chatgpt_tool_discovery(self):
+        report = self.report(running=True, ready=True)
+        self.assertTrue(report["local_tunnel_ready"])
+        self.assertIs(report["chatgpt_connection_verified"], False)
+        self.assertIn("bridge_status", report["next_action"])
+
+    def test_two_computers_require_independent_end_to_end_verification(self):
+        second_home = Path(self.temp.name) / "SECOND-COMPUTER"
+        (second_home / "state").mkdir(parents=True)
+        for home in (self.home, second_home):
+            with self.subTest(home=home):
+                report = cli.inspect(
+                    home,
+                    self.exe,
+                    running=lambda *args: True,
+                    ready=lambda *args: True,
+                )
+                self.assertTrue(report["local_tunnel_ready"])
+                self.assertFalse(report["chatgpt_connection_verified"])
+
     def test_stale_health_without_live_manager_is_not_ready(self):
         calls = []
         report = cli.inspect(

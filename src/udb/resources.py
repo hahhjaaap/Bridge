@@ -167,6 +167,45 @@ class Governor:
 
     def update(self, sample):
         cpu = sample.get("cpu_percent")
+        metrics = (
+            ("ram_percent", 100),
+            ("available_mib", None),
+            ("commit_percent", 100),
+        )
+        # A corrupt or stale monitor reading must never authorize new work.
+        # Keep hysteresis after telemetry returns rather than treating a
+        # missing resource sample as proof that the machine recovered.
+        invalid = not fresh(sample)
+        for name, upper in metrics:
+            value = sample.get(name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+                or (upper is not None and value > upper)
+            ):
+                invalid = True
+        commit_free = sample.get("commit_available_mib")
+        if commit_free is not None and (
+            isinstance(commit_free, bool)
+            or not isinstance(commit_free, (int, float))
+            or not math.isfinite(commit_free)
+            or commit_free < 0
+        ):
+            invalid = True
+        if cpu is not None and (
+            isinstance(cpu, bool)
+            or not isinstance(cpu, (int, float))
+            or not math.isfinite(cpu)
+            or not 0 <= cpu <= 100
+        ):
+            invalid = True
+        if invalid:
+            self.paused = True
+            self.cool = 0
+            self.reason = "monitor_unavailable"
+            return self.status(sample)
         if cpu is None:
             self.reason = "warming_up"
             return self.status(sample)
@@ -221,11 +260,29 @@ def require_capacity(status, reserve_mib=256):
         raise PolicyError(
             "Machine busy or resource monitor unavailable; retry after 6 seconds"
         )
-    if status["available_mib"] - reserve_mib < LIMITS["min_free_mib"]:
+    available = status.get("available_mib")
+    if (
+        isinstance(available, bool)
+        or not isinstance(available, (int, float))
+        or not math.isfinite(available)
+        or available < 0
+    ):
+        raise PolicyError("Resource monitor returned invalid free RAM")
+    if available - reserve_mib < LIMITS["min_free_mib"]:
         raise PolicyError("Insufficient free RAM; no new task was opened")
     commit = status.get("commit_available_mib")
-    if commit is not None and commit - reserve_mib < LIMITS["min_commit_mib"]:
-        raise PolicyError("Insufficient system commit headroom; no new task was opened")
+    if commit is not None:
+        if (
+            isinstance(commit, bool)
+            or not isinstance(commit, (int, float))
+            or not math.isfinite(commit)
+            or commit < 0
+        ):
+            raise PolicyError("Resource monitor returned invalid commit headroom")
+        if commit - reserve_mib < LIMITS["min_commit_mib"]:
+            raise PolicyError(
+                "Insufficient system commit headroom; no new task was opened"
+            )
 
 
 def guard_new_heavy_task(agent, reserve_mib=512):

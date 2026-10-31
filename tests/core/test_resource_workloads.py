@@ -21,6 +21,45 @@ def sample(**overrides):
     return row
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"at": time.time() - 100},
+        {"cpu_percent": float("nan")},
+        {"cpu_percent": "high"},
+        {"ram_percent": None},
+        {"ram_percent": float("inf")},
+        {"available_mib": "unknown"},
+        {"commit_percent": float("nan")},
+        {"commit_available_mib": float("nan")},
+    ],
+)
+def test_governor_denies_invalid_monitor_data_and_recovers_conservatively(changes):
+    gov = Governor()
+    invalid = gov.update(sample(**changes))
+    assert invalid["admission_ready"] is False
+    assert invalid["reason"] == "monitor_unavailable"
+    for _ in range(2):
+        assert not gov.update(sample())["admission_ready"]
+    assert gov.update(sample())["admission_ready"]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("available_mib", float("nan")),
+        ("available_mib", "unknown"),
+        ("commit_available_mib", float("nan")),
+        ("commit_available_mib", -1),
+    ],
+)
+def test_heavy_admission_denies_corrupt_capacity_snapshot(field, value):
+    state = Governor().update(sample())
+    state[field] = value
+    with pytest.raises(PolicyError):
+        require_capacity(state)
+
+
 def test_cpu_spike_recovers_without_demanding_unrelated_commit_drop():
     gov = Governor()
     assert gov.update(sample(cpu_percent=92))["pressure_causes"] == ["cpu"]
