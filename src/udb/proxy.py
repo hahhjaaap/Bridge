@@ -29,6 +29,27 @@ from udb.transport import (
 )
 
 
+def _result_payload(result: dict[str, Any]) -> dict[str, Any]:
+    """Read a backend object once; malformed data never grants owner access."""
+    if not isinstance(result, dict):
+        return {}
+    structured = result.get("structuredContent")
+    if structured is not None:
+        return structured if isinstance(structured, dict) else {}
+    blocks = result.get("content")
+    if not isinstance(blocks, list):
+        return {}
+    for block in blocks:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        try:
+            parsed = json.loads(block["text"])
+        except (KeyError, TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def normalized_output(tool: str, result: dict[str, Any]) -> dict[str, Any]:
     """Classify tool completion conservatively; preserve the original backend result.
 
@@ -179,15 +200,7 @@ class UnifiedProxy:
                     timeout=5,
                 )
                 result = reply.get("result", {})
-                grant = result.get("structuredContent")
-                if grant is None:
-                    grant = json.loads(
-                        next(
-                            b["text"]
-                            for b in result.get("content", [])
-                            if b.get("type") == "text"
-                        )
-                    )
+                grant = _result_payload(result)
                 if (
                     result.get("isError")
                     or not isinstance(grant, dict)
@@ -292,18 +305,7 @@ class UnifiedProxy:
                 "tools/call", {"name": "computer_status", "arguments": {}}
             )
             result = access.get("result", {})
-            grant = result.get("structuredContent")
-            if grant is None:
-                try:
-                    grant = json.loads(
-                        next(
-                            b["text"]
-                            for b in result.get("content", [])
-                            if b.get("type") == "text"
-                        )
-                    )
-                except (ValueError, KeyError, StopIteration, TypeError):
-                    grant = {}
+            grant = _result_payload(result)
             if (
                 result.get("isError")
                 or not isinstance(grant, dict)
@@ -364,18 +366,7 @@ class UnifiedProxy:
                     "tools/call", {"name": "host_status", "arguments": {}}
                 )
                 data = host.get("result", {})
-                state = data.get("structuredContent")
-                if state is None:
-                    try:
-                        state = json.loads(
-                            next(
-                                b["text"]
-                                for b in data.get("content", [])
-                                if b.get("type") == "text"
-                            )
-                        )
-                    except (ValueError, KeyError, StopIteration, TypeError):
-                        state = {}
+                state = _result_payload(data)
                 resources = (
                     state.get("resources", {}) if isinstance(state, dict) else {}
                 )

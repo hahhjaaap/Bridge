@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from udb.proxy import UnifiedProxy
+from udb.proxy import UnifiedProxy, _result_payload
 
 
 def test_access_watcher_survives_companion_disconnect():
@@ -42,3 +42,45 @@ def test_corrupt_host_status_never_reaches_companion(bad_resources):
     with pytest.raises(RuntimeError, match="resource monitor unavailable"):
         proxy.call_tool({"name": "terminal_start", "arguments": {}})
     companion.request.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("backend_result", "expected"),
+    [
+        ({"structuredContent": {"enabled": True}}, {"enabled": True}),
+        (
+            {"content": [{"type": "text", "text": '{"enabled": true}'}]},
+            {"enabled": True},
+        ),
+        ({"structuredContent": ["invalid"]}, {}),
+        ({"content": [{"type": "text", "text": "not-json"}]}, {}),
+        ({"content": [{"type": "text"}]}, {}),
+        ({"content": None}, {}),
+        ({"content": ["not-an-object"]}, {}),
+        ({"structuredContent": {}}, {}),
+        ({}, {}),
+    ],
+)
+def test_backend_payload_parsing_is_bounded_and_fail_closed(backend_result, expected):
+    assert _result_payload(backend_result) == expected
+
+
+@pytest.mark.parametrize(
+    "bad_result",
+    [
+        {"structuredContent": []},
+        {"content": [{"type": "text", "text": "not-json"}]},
+        {"content": None},
+    ],
+)
+def test_invalid_owner_access_never_dispatches_companion_tool(bad_result):
+    primary, companion = Mock(), Mock()
+    primary.request.return_value = {"result": bad_result}
+    proxy = UnifiedProxy(primary, companion)
+    proxy.tool_routes = {"terminal_start": companion}
+
+    with pytest.raises(RuntimeError, match="owner computer access is required"):
+        proxy.call_tool({"name": "terminal_start", "arguments": {}})
+
+    assert companion.request.call_args_list[0].args == ("udb/close-sessions",)
+    assert companion.request.call_count == 1
