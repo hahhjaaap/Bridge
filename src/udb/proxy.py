@@ -20,6 +20,7 @@ from udb.catalog import public_catalog, resolve_call
 from udb.concurrency import MAX_CONCURRENT
 from udb.outcomes import ERROR_PREFIXES, native_status, report_from_text, report_outcome
 from udb.recovery import RecoveringChild
+from udb.resources import fresh
 from udb.transport import (
     MAX_LINE,
     StdioChild,
@@ -371,6 +372,8 @@ class UnifiedProxy:
                 resources = (
                     state.get("resources", {}) if isinstance(state, dict) else {}
                 )
+                if not isinstance(resources, dict):
+                    resources = {}
                 light = name in {
                     "file_list",
                     "file_read",
@@ -392,7 +395,7 @@ class UnifiedProxy:
                     if light
                     else resources.get("admission_ready")
                 )
-                if not ready or not -2 <= time.time() - resources.get("at", 0) <= 6:
+                if not ready or not fresh(resources):
                     raise RuntimeError(
                         "Machine busy or resource monitor unavailable; retry after 6 seconds"
                     )
