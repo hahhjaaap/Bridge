@@ -29,7 +29,6 @@ from udb.transport import (
 )
 
 
-
 def _result_payload(result: dict[str, Any]) -> dict[str, Any]:
     """Read a backend object once; malformed data never grants owner access."""
     if not isinstance(result, dict):
