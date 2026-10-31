@@ -151,7 +151,10 @@ class CDPChannel:
                 # ignored; this waiter never owns or replays that command.
 
     def call(self, method, params=None, session=None, timeout=10):
-        from websocket import WebSocketConnectionClosedException, WebSocketTimeoutException
+        from websocket import (
+            WebSocketConnectionClosedException,
+            WebSocketTimeoutException,
+        )
 
         with self._lock:
             if not self.process or not self.process.alive():
