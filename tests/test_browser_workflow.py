@@ -58,8 +58,21 @@ class Browser:
         self.calls.append((method, params))
         if method == "DOM.getDocument":
             return {"root": {"nodeId": 1}}
-        if method == "DOM.querySelectorAll":
-            return {"nodeIds": self.nodes}
+        if method == "Runtime.evaluate" and params.get("returnByValue") is False:
+            attributes = self.node.get("attributes", [])
+            valid = (
+                len(self.nodes) == 1
+                and self.node.get("nodeName") == "INPUT"
+                and dict(zip(attributes[::2], attributes[1::2])).get("type") == "file"
+                and "disabled" not in attributes[::2]
+            )
+            return (
+                {"result": {"subtype": "node", "objectId": "remote-file-input"}}
+                if valid
+                else {"result": {"subtype": "null"}}
+            )
+        if method == "DOM.requestNode":
+            return {"nodeId": 1}
         if method == "DOM.describeNode":
             return {"node": self.node}
         return {}
@@ -71,7 +84,12 @@ def test_upload_stages_exact_bytes_until_browser_closes_without_submission(tmp_p
     result = browser_files.upload(
         browser, "owned", "input[type=file]", source, b"fixture", browser.url
     )
-    staged = Path(browser.calls[-1][1]["files"][0])
+    staged_call = next(
+        params
+        for method, params in browser.calls
+        if method == "DOM.setFileInputFiles"
+    )
+    staged = Path(staged_call["files"][0])
     assert staged.read_bytes() == b"fixture" and staged.name == "invoice.xlsx"
     assert result["selected"] and result["submitted"] is False
     assert [method for method, _ in browser.calls].count("DOM.setFileInputFiles") == 1
