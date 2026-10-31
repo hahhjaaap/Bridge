@@ -15,7 +15,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .browser_cdp import CDPChannel
-from .browser_dom import CLICK_POINT_SCRIPT, LOCATOR_SCRIPT, SELECT_OPTION_SCRIPT
+from .browser_dom import (
+    CLICK_POINT_SCRIPT,
+    DOM_TRAVERSAL_SCRIPT,
+    LOCATOR_SCRIPT,
+    SELECT_OPTION_SCRIPT,
+)
 from .browser_identity import identity_script
 from .browser_input import BrowserInputMixin
 from .browser_input import parse_key as parse_key
@@ -153,6 +158,31 @@ def validate_locator(selector="", role="", name="", exact=True):
         raise PolicyError("Provide a CSS selector or an accessible role")
 
 
+def _browser_launch_args(exe, folder, visible=False):
+    """Build a minimal, compatibility-first command for an owned profile."""
+    if type(visible) is not bool:
+        raise PolicyError("Invalid browser presentation")
+    args = [str(exe)]
+    if not visible:
+        args.append("--headless=new")
+    args.extend(
+        [
+            "--remote-debugging-port=0",
+            "--remote-debugging-address=127.0.0.1",
+            "--user-data-dir=" + str(folder),
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            "--disable-sync",
+            "--disable-default-apps",
+            "--disk-cache-size=67108864",
+            "--mute-audio",
+            "about:blank",
+        ]
+    )
+    return args
+
+
 def find_browser():
     candidates = [
         Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
@@ -188,6 +218,7 @@ class Browser(BrowserInputMixin):
         self.proc = None
         self.ws = None
         self._cdp = None
+        self._identity_contexts = {}
         self.tabs = {}
         self.frozen = False
         self.freeze_errors = 0
@@ -198,27 +229,7 @@ class Browser(BrowserInputMixin):
             endpoint.unlink(missing_ok=True)
             exe = find_browser()
             self.proc = OwnedProcess(
-                [
-                    exe,
-                    *([] if visible else ["--headless=new"]),
-                    "--remote-debugging-port=0",
-                    "--remote-debugging-address=127.0.0.1",
-                    "--user-data-dir=" + str(self.folder),
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    "--disable-extensions",
-                    "--disable-sync",
-                    "--disable-background-networking",
-                    "--disable-default-apps",
-                    "--disable-component-update",
-                    "--disk-cache-size=67108864",
-                    "--media-cache-size=16777216",
-                    "--disable-gpu",
-                    "--mute-audio",
-                    "--renderer-process-limit=4",
-                    "--disable-features=Translate,MediaRouter",
-                    "about:blank",
-                ],
+                _browser_launch_args(exe, self.folder, visible),
                 self.folder,
                 LIMITS["browser_memory_mib"],
             )
@@ -271,7 +282,6 @@ class Browser(BrowserInputMixin):
                 dict(urls=list(_BLOCKED_URL_PATTERNS)),
                 session=sid,
             )
-            self.call("Emulation.setCPUThrottlingRate", dict(rate=2), sid)
             self.call("Page.setDownloadBehavior", dict(behavior="deny"), sid)
         except BaseException:
             self.tabs.pop(target, None)
@@ -287,13 +297,13 @@ class Browser(BrowserInputMixin):
             raise PolicyError("Unknown or foreign tab; use host browser list")
         return self.tabs[tab]
 
-    def evaluate(self, tab, expression, timeout=10):
+    def evaluate(self, tab, expression, timeout=10, *, await_promise=False):
         r = self.call(
             "Runtime.evaluate",
             dict(
                 expression=expression,
                 returnByValue=True,
-                awaitPromise=False,
+                awaitPromise=bool(await_promise),
                 timeout=max(100, min(10000, int(timeout * 1000))),
             ),
             self.sid(tab),
@@ -599,7 +609,8 @@ class Browser(BrowserInputMixin):
     ):
         validate_locator(selector, role, name, exact)
         return (
-            LOCATOR_SCRIPT.replace("__SELECTOR__", json.dumps(selector))
+            LOCATOR_SCRIPT.replace("__TRAVERSAL__", DOM_TRAVERSAL_SCRIPT)
+            .replace("__SELECTOR__", json.dumps(selector))
             .replace("__ROLE__", json.dumps(role))
             .replace("__NAME__", json.dumps(name))
             .replace("__EXACT__", "true" if exact else "false")
@@ -657,7 +668,7 @@ class Browser(BrowserInputMixin):
             matches = result.get("matches", 0)
             if error == "locator_not_unique" and matches > 1:
                 return result
-            if error == "invalid_selector":
+            if error in {"invalid_selector", "locator_search_truncated"}:
                 return result
             if error == "state_mismatch" and not retry_context:
                 return result  # An input/change handler already ran; never replay it.
@@ -682,17 +693,46 @@ class Browser(BrowserInputMixin):
         return identity_script(getattr(self, "visible", False))
 
     def _show_identity(self, tab, x=None, y=None):
-        """Decorate only our page in an isolated JS world; never use OS input.
-
-        Presentation failure must not replay or block an application action.
-        No privileged API is exposed to page scripts.
-        """
+        """Install identity once per document and cache its isolated-world context."""
         session = self.sid(tab)
+        contexts = getattr(self, "_identity_contexts", None)
+        if contexts is None:
+            contexts = {}
+            self._identity_contexts = contexts
+        context_id = contexts.get(tab)
+        if context_id is not None:
+            if x is None or y is None:
+                return True
+            try:
+                expression = (
+                    "globalThis.__udbMovePointer("
+                    + json.dumps(float(x))
+                    + ","
+                    + json.dumps(float(y))
+                    + ");"
+                )
+                result = self.call(
+                    "Runtime.evaluate",
+                    dict(
+                        expression=expression,
+                        contextId=context_id,
+                        returnByValue=True,
+                    ),
+                    session,
+                    timeout=2,
+                )
+                if result.get("exceptionDetails"):
+                    raise PolicyError("Browser identity context is unavailable")
+                return True
+            except PolicyError as exc:
+                if not self._is_transient_context_error(exc):
+                    return False
+                contexts.pop(tab, None)
         try:
             frame = self.call("Page.getFrameTree", session=session)["frameTree"][
                 "frame"
             ]["id"]
-            world = self.call(
+            context_id = self.call(
                 "Page.createIsolatedWorld",
                 dict(frameId=frame, worldName="UDBIdentity"),
                 session,
@@ -700,14 +740,25 @@ class Browser(BrowserInputMixin):
             expression = self.identity_script()
             if x is not None and y is not None:
                 expression += (
-                    f";globalThis.__udbMovePointer({float(x)!r},{float(y)!r});"
+                    ";globalThis.__udbMovePointer("
+                    + json.dumps(float(x))
+                    + ","
+                    + json.dumps(float(y))
+                    + ");"
                 )
-            self.call(
+            result = self.call(
                 "Runtime.evaluate",
-                dict(expression=expression, contextId=world, returnByValue=True),
+                dict(
+                    expression=expression,
+                    contextId=context_id,
+                    returnByValue=True,
+                ),
                 session,
                 timeout=2,
             )
+            if result.get("exceptionDetails"):
+                raise PolicyError("Browser identity installation failed")
+            contexts[tab] = context_id
         except (PolicyError, KeyError):
             return False
         return True
@@ -942,6 +993,7 @@ class Browser(BrowserInputMixin):
         result = self.call("Target.closeTarget", dict(targetId=tab))
         if result.get("success"):
             self.tabs.pop(tab)
+            getattr(self, "_identity_contexts", {}).pop(tab, None)
         return result
 
     def switch_presentation(self, visible):
@@ -1030,6 +1082,7 @@ class Browser(BrowserInputMixin):
                 pass  # The socket may already be closed; continue owned-process cleanup.
             self.ws = None
         self._cdp = None
+        getattr(self, "_identity_contexts", {}).clear()
         if self.proc:
             self.proc.close()
             self.proc = None
