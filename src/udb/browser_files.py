@@ -103,6 +103,11 @@ def upload(browser, tab, selector, source, data, expected_origin):
             staged.unlink(missing_ok=True)
             folder.rmdir()
             raise
+    finally:
+        try:
+            browser.call("Runtime.releaseObject", {"objectId": object_id}, session)
+        except Exception:
+            pass
     return dict(
         selected=True,
         submitted=False,
