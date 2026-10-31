@@ -204,7 +204,6 @@ def test_real_browser_background_click_identity_and_reload(live_browser):
     assert browser.evaluate(tab, "document.title") == "Ready"
 
 
-
 def test_real_browser_open_shadow_dom_locators_and_actions(live_browser):
     browser, tab, url, _ = live_browser
     browser.navigate(tab, url + "shadow")
@@ -250,9 +249,7 @@ def test_real_browser_uploads_to_file_input_inside_open_shadow_dom(live_browser)
 def test_real_browser_wait_for_observes_mutations_inside_open_shadow_dom(live_browser):
     browser, tab, url, _ = live_browser
     browser.navigate(tab, url + "shadow-delay")
-    result = browser.wait_for(
-        tab, role="button", name="Ready", timeout_ms=2000
-    )
+    result = browser.wait_for(tab, role="button", name="Ready", timeout_ms=2000)
     assert result["ok"] and result["state"] == "visible"
 
 def test_real_browser_cookie_download_and_redirect_rejection(live_browser):
