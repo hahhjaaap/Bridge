@@ -159,6 +159,39 @@ def test_failing_notification_observer_does_not_disconnect_backend(tmp_path):
     assert child.terminated.is_set()
 
 
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"jsonrpc": "2.0", "id": [], "result": {}},
+        {"jsonrpc": "2.0", "id": {"bad": "key"}, "result": {}},
+        {"jsonrpc": "2.0", "id": True, "result": {}},
+        {"jsonrpc": "2.0", "method": None},
+        {"jsonrpc": "2.0", "method": {"bad": "method"}},
+    ],
+)
+def test_invalid_child_frame_does_not_discard_another_rpc_reply(
+    tmp_path, malformed
+):
+    import queue
+
+    child = StdioChild("fixture", [], str(tmp_path), lambda _: None)
+    frames = [
+        malformed,
+        {"jsonrpc": "2.0", "id": 7, "result": {"ok": True}},
+    ]
+    child.process = SimpleNamespace(
+        stdout=SimpleNamespace(
+            readline=lambda limit: compact_json(frames.pop(0)) if frames else b""
+        )
+    )
+    waiter = queue.Queue(maxsize=1)
+    child.waiters[7] = waiter
+
+    child._read_loop()
+
+    assert waiter.get_nowait()["result"] == {"ok": True}
+
+
 @pytest.mark.parametrize("encoding", ["json", "wrapped_json", "structured"])
 @pytest.mark.parametrize(
     "report,expected",
