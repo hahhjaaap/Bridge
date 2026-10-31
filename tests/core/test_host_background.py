@@ -840,7 +840,6 @@ def test_click_without_navigation_does_not_wait_for_document_ready():
     assert result == {"navigation_completed": False}
 
 
-
 def test_browser_click_navigation_falls_back_when_frame_events_are_missing():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
@@ -868,9 +867,7 @@ def test_browser_click_navigation_falls_back_when_frame_events_are_missing():
             }
         if method == "Page.getFrameTree":
             return {
-                "frameTree": {
-                    "frame": {"id": "main-frame", "loaderId": "new-loader"}
-                }
+                "frameTree": {"frame": {"id": "main-frame", "loaderId": "new-loader"}}
             }
         pytest.fail(f"Unexpected CDP call: {method}")
 
