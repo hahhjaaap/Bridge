@@ -903,7 +903,7 @@ def test_browser_valid_css_selector_does_not_mask_page_errors():
     browser = Browser.__new__(Browser)
     calls = []
 
-    def evaluate(tab, expression, timeout=10):
+    def evaluate(tab, expression, timeout=10, **kwargs):
         calls.append(expression)
         if len(calls) == 1:
             raise PolicyError("Page operation failed; inspect page state")
