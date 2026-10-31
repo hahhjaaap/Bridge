@@ -9,7 +9,7 @@ _READ_SCRIPT = """(() => {
     return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)>0&&r.width>0&&r.height>0;};
   const all=queryAll('a[href],button,input:not([type="hidden"]),textarea,select,[role]');
   if(all===null)return {error:'observation_failed'};
-  const roots=collectOpenRoots().roots;
+  const roots=openShadowRoots;
   const shadowText=roots.slice(1).map(root=>String(root.textContent||'')).join(' ');
   const elements=all.filter(visible).slice(0,120).map(e=>{
     const type=(e.getAttribute('type')||'').toLowerCase();
