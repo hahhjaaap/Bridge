@@ -5,7 +5,7 @@ from collections import deque
 
 import pytest
 
-from udb.browser_cdp import CDPChannel, MAX_EVENT_MARKERS, MAX_REPLY_BYTES
+from udb.browser_cdp import MAX_EVENT_MARKERS, MAX_REPLY_BYTES, CDPChannel
 from udb.core import PolicyError
 from udb.host_browser import Browser
 
