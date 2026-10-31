@@ -322,8 +322,10 @@ class DesktopController:
             try:
                 self.agent.pump_sandbox_queue_local()
                 self.agent.pump_media_queue_local()
-            except Exception as e:
-                self.error = "Automation queue: " + str(e)
+            except Exception:
+                # Exception text can contain private paths or payloads from a
+                # failed automation job; status is visible outside that job.
+                self.error = "Automation queue failed; inspect redacted logs."
 
     def _monitor(self):
         from .owner_command import NoRedirect
