@@ -278,7 +278,6 @@ def inspect(home: Path, exe: Path, running=manager_running, ready=tunnel_ready) 
     )
 
 
-
 def remote_session_action(report: dict, *, offline: bool) -> str:
     """Guide remote troubleshooting without claiming to observe the ChatGPT UI."""
     if offline:
@@ -299,6 +298,7 @@ def remote_session_action(report: dict, *, offline: bool) -> str:
         "refresh the ChatGPT plugin/session and verify bridge_status again. "
         "Do not replay a command whose outcome is uncertain."
     )
+
 
 def doctor(home: Path, report: dict) -> list[dict]:
     from .config import effective
