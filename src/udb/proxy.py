@@ -338,6 +338,10 @@ class UnifiedProxy:
                 )
                 or (name == "terminal_interact" and not arguments.get("text"))
                 or (
+                    name == "file_upload"
+                    and arguments.get("action") in ("status", "abort")
+                )
+                or (
                     name == "virtual_pointer"
                     and arguments.get("action") in ("hide", "stop", "status")
                 )
