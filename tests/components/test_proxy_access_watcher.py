@@ -24,7 +24,9 @@ def test_access_watcher_survives_companion_disconnect():
     assert companion.request.call_args_list[0].args == ("udb/close-sessions",)
 
 
-@pytest.mark.parametrize("bad_resources", [[], {"at": "invalid", "admission_ready": True}])
+@pytest.mark.parametrize(
+    "bad_resources", [[], {"at": "invalid", "admission_ready": True}]
+)
 def test_corrupt_host_status_never_reaches_companion(bad_resources):
     primary = Mock()
     companion = Mock()
