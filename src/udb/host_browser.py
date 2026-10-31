@@ -474,7 +474,7 @@ class Browser(BrowserInputMixin):
         # frame trees every 50 ms. Event records contain IDs only, never URLs.
         channel = getattr(self, "_cdp", None)
         if previous_frame_id and hasattr(channel, "wait_for_event"):
-            event_deadline = min(deadline, time.monotonic() + 0.5)
+            event_deadline = min(deadline, time.monotonic() + 0.15)
             while time.monotonic() < event_deadline:
                 event = self._wait_for_cdp_event(
                     ("Page.frameNavigated", "Page.navigatedWithinDocument"),
@@ -517,7 +517,7 @@ class Browser(BrowserInputMixin):
                 try:
                     targets = self.call(
                         "Target.getTargets",
-                        timeout=max(0.01, min(0.5, remaining)),
+                        timeout=max(0.05, min(0.2, remaining)),
                     ).get("targetInfos", [])
                 except PolicyError as exc:
                     if (
