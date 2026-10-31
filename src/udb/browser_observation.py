@@ -62,4 +62,3 @@ def snapshot(browser, tab):
         })()""",
         timeout=5,
     )
-
