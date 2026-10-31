@@ -50,7 +50,7 @@ def upload(browser, tab, selector, source, data, expected_origin):
     if not isinstance(state, dict) or not state.get("ok"):
         raise PolicyError("Upload selector is not one enabled file input")
     session = browser.sid(tab)
-    browser.call("DOM.getDocument", {"depth": 0, "pierce": True}, session)
+    browser.call("DOM.getDocument", {"depth": 0}, session)
     expression = Browser._locator_expression(
         selector,
         "",
