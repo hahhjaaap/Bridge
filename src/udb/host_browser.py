@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .browser_cdp import CDPChannel
 from .browser_dom import CLICK_POINT_SCRIPT, LOCATOR_SCRIPT, SELECT_OPTION_SCRIPT
 from .browser_identity import identity_script
 from .core import PolicyError, reject_links
@@ -255,7 +256,7 @@ class Browser:
             shutil.rmtree(staged)
         self.proc = None
         self.ws = None
-        self.seq = 0
+        self._cdp = None
         self.tabs = {}
         self.frozen = False
         self.freeze_errors = 0
@@ -299,6 +300,7 @@ class Browser:
                 suppress_origin=True,
                 http_no_proxy=["127.0.0.1"],
             )
+            self._cdp = CDPChannel(self.ws, self.proc)
             self.call("Browser.setDownloadBehavior", dict(behavior="deny"))
             # Adopt only initial targets in THIS newly created browser/profile.
             for target in self.call("Target.getTargets")["targetInfos"]:
@@ -318,39 +320,7 @@ class Browser:
                 raise PolicyError(
                     "Browser action budget exceeded; inspect before retrying"
                 )
-        self.seq += 1
-        number = self.seq
-        msg = dict(id=number, method=method, params=params or {})
-        if session:
-            msg["sessionId"] = session
-        self.ws.send(json.dumps(msg))
-        deadline = time.monotonic() + timeout
-        self.ws.settimeout(min(1, timeout))
-        from websocket import WebSocketTimeoutException
-
-        while time.monotonic() < deadline:
-            if not self.proc or not self.proc.alive():
-                raise PolicyError("Owned browser was stopped")
-            try:
-                raw = self.ws.recv()
-            except WebSocketTimeoutException:
-                continue
-            if not raw:
-                raise PolicyError("Private browser connection closed")
-            if len(raw) > 12 * 1048576:
-                raise PolicyError("Browser reply exceeds limit")
-            reply = json.loads(raw)
-            if reply.get("id") != number:
-                continue
-            if "error" in reply:
-                raise PolicyError(
-                    "Browser operation failed: "
-                    + str(reply["error"].get("message", "unknown"))[:300]
-                )
-            return reply.get("result", {})
-        raise PolicyError(
-            "Browser operation timed out; outcome may be unknown, inspect before retrying"
-        )
+        return self._cdp.call(method, params, session, timeout)
 
     def attach(self, target):
         sid = self.call("Target.attachToTarget", dict(targetId=target, flatten=True))[
@@ -1261,6 +1231,7 @@ class Browser:
             except Exception:
                 pass  # The socket may already be closed; continue owned-process cleanup.
             self.ws = None
+        self._cdp = None
         if self.proc:
             self.proc.close()
             self.proc = None
