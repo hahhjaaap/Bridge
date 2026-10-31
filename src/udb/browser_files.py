@@ -36,19 +36,6 @@ def upload(browser, tab, selector, source, data, expected_origin):
         raise PolicyError("Upload exceeds the 8 MiB browser transfer limit")
     if not isinstance(selector, str) or not selector or len(selector) > 500:
         raise PolicyError("Upload requires one CSS file-input selector")
-    state = browser.evaluate(
-        tab,
-        Browser._locator_expression(
-            selector,
-            "",
-            "",
-            True,
-            "return {ok:e.tagName==='INPUT'&&e.type==='file'&&!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!isInert(e)};",
-            visible_only=False,
-        ),
-    )
-    if not isinstance(state, dict) or not state.get("ok"):
-        raise PolicyError("Upload selector is not one enabled file input")
     session = browser.sid(tab)
     browser.call("DOM.getDocument", {"depth": 0}, session)
     expression = Browser._locator_expression(
