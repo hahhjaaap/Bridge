@@ -63,7 +63,7 @@ class Browser:
             valid = (
                 len(self.nodes) == 1
                 and self.node.get("nodeName") == "INPUT"
-                and dict(zip(attributes[::2], attributes[1::2])).get("type") == "file"
+                and dict(zip(attributes[::2], attributes[1::2], strict=True)).get("type") == "file"
                 and "disabled" not in attributes[::2]
             )
             return (
