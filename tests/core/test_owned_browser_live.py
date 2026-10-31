@@ -252,6 +252,7 @@ def test_real_browser_wait_for_observes_mutations_inside_open_shadow_dom(live_br
     result = browser.wait_for(tab, role="button", name="Ready", timeout_ms=2000)
     assert result["ok"] and result["state"] == "visible"
 
+
 def test_real_browser_cookie_download_and_redirect_rejection(live_browser):
     from udb.browser_files import download
 
