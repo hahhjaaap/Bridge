@@ -98,14 +98,27 @@ class StdioChild:
                 if not isinstance(message, dict):
                     continue
                 if "id" in message:
+                    # UDB sends integer request IDs. A malformed child reply
+                    # must not terminate the reader or strand other callers.
+                    ident = message["id"]
+                    if type(ident) is not int:
+                        continue
                     with self.lock:
-                        waiter = self.waiters.pop(message["id"], None)
+                        waiter = self.waiters.pop(ident, None)
                     if waiter:
                         waiter.put(message)
                 elif "method" in message:
-                    # Never forward a child request unsolicited; only notifications.
-                    if message.get("method", "").startswith("notifications/"):
-                        self.notify(message)
+                    # Only string-valued MCP notifications may be forwarded.
+                    # Reject malformed frames without losing live RPC replies.
+                    method = message["method"]
+                    if isinstance(method, str) and method.startswith("notifications/"):
+                        try:
+                            self.notify(message)
+                        except Exception:
+                            # Notification delivery is best-effort. A failing
+                            # observer must not disconnect the backend or
+                            # discard replies to unrelated in-flight calls.
+                            pass
         except (OSError, ValueError) as e:
             self.stderr_tail.append(type(e).__name__)
         finally:
@@ -181,7 +194,9 @@ class StdioChild:
         try:
             if self.process.stdin:
                 self.process.stdin.close()
-        except OSError:
+        except (OSError, ValueError):
+            # A worker may already have closed this pipe during teardown.
+            # Closing a stopped backend must remain idempotent.
             pass
         if self.process.poll() is None:
             try:
