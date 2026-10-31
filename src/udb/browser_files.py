@@ -58,16 +58,16 @@ def upload(browser, tab, selector, source, data, expected_origin):
                 browser.call("Runtime.releaseObject", {"objectId": object_id}, session)
             except Exception:
                 pass
-        raise PolicyError("Upload selector must identify exactly one enabled file input")
+        raise PolicyError(
+            "Upload selector must identify exactly one enabled file input"
+        )
     try:
-        node_id = browser.call(
-            "DOM.requestNode", {"objectId": object_id}, session
-        ).get("nodeId")
+        node_id = browser.call("DOM.requestNode", {"objectId": object_id}, session).get(
+            "nodeId"
+        )
         if not isinstance(node_id, int) or node_id <= 0:
             raise PolicyError("Upload selector is not a live file input")
-        node = browser.call(
-            "DOM.describeNode", {"nodeId": node_id}, session
-        )["node"]
+        node = browser.call("DOM.describeNode", {"nodeId": node_id}, session)["node"]
         attributes = node.get("attributes", [])
         attrs = dict(zip(attributes[::2], attributes[1::2], strict=True))
         if (
