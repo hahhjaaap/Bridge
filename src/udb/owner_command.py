@@ -278,6 +278,28 @@ def inspect(home: Path, exe: Path, running=manager_running, ready=tunnel_ready) 
     )
 
 
+def remote_session_action(report: dict, *, offline: bool) -> str:
+    """Guide remote troubleshooting without claiming to observe the ChatGPT UI."""
+    if offline:
+        return (
+            "Local/offline mode: a ChatGPT remote session is not expected. "
+            "Use udb setup on the original computer to enable online mode."
+        )
+    if not report.get("local_tunnel_ready", False):
+        return (
+            "The local tunnel is not ready. Run udb status --json and "
+            "udb doctor --json on the original computer; resolve local "
+            "connection problems before retrying tools in ChatGPT."
+        )
+    return (
+        "Local tunnel is ready, but ChatGPT tool access is NOT verified. "
+        "From the other device call bridge_status. If the plugin shows "
+        "Connected yet calls fail with 'Session terminated', reconnect or "
+        "refresh the ChatGPT plugin/session and verify bridge_status again. "
+        "Do not replay a command whose outcome is uncertain."
+    )
+
+
 def doctor(home: Path, report: dict) -> list[dict]:
     from .config import effective
     from .onboarding import saved_mode
@@ -432,7 +454,7 @@ def doctor(home: Path, report: dict) -> list[dict]:
         dict(
             check="chatgpt_session",
             ok=None,
-            action="A successful bridge_status call is required; local checks cannot verify ChatGPT.",
+            action=remote_session_action(report, offline=offline),
         )
     )
     return checks
