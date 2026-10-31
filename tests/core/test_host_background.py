@@ -884,7 +884,6 @@ def test_browser_navigation_waits_for_lifecycle_event_before_polling_frame_tree(
     ]
 
 
-
 def test_browser_event_wait_respects_host_action_deadline():
     browser = Browser.__new__(Browser)
     browser.deadline = time.monotonic() - 0.01
