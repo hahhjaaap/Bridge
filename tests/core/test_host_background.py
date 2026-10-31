@@ -480,7 +480,9 @@ def test_browser_scroll_uses_actual_viewport_center():
 
     browser.call = call
     result = browser.scroll("owned-tab", 0, 500)
-    wheel = next(params for method, params in calls if method == "Input.dispatchMouseEvent")
+    wheel = next(
+        params for method, params in calls if method == "Input.dispatchMouseEvent"
+    )
     assert result["scrolled"] and wheel["x"] == 160 and wheel["y"] == 300
 
 
@@ -836,7 +838,6 @@ def test_click_without_navigation_does_not_wait_for_document_ready():
         "owned-tab", "https://same.example/", observe_ms=100
     )
     assert result == {"navigation_completed": False}
-
 
 
 def test_browser_navigation_waits_for_lifecycle_event_before_polling_frame_tree():
