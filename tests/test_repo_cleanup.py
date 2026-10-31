@@ -110,3 +110,29 @@ def test_repository_audit_identifies_only_high_confidence_junk(tmp_path):
     assert reason("src/udb/manager.py") == ""
     assert reason("src/udb/credentials.py") == ""
     assert reason("THIRD_PARTY_NOTICES/lib.dist-info/LICENSE") == ""
+
+
+
+def test_audit_separates_required_compatibility_shims_from_real_duplicates(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "udb_unified.py").write_text("from udb.proxy import run\n")
+    (tmp_path / "src" / "udb_unified.py").write_text(
+        "from udb.proxy import run\n"
+    )
+    (tmp_path / "src" / "one.py").write_text("x = 1\n")
+    (tmp_path / "src" / "two.py").write_text("x = 1\n")
+    report = audit(
+        tmp_path,
+        [
+            "udb_unified.py",
+            "src/udb_unified.py",
+            "src/one.py",
+            "src/two.py",
+        ],
+    )
+    assert report["intentional_compatibility_duplicates"] == [
+        ["src/udb_unified.py", "udb_unified.py"]
+    ]
+    assert report["identical_source_groups"] == [
+        ["src/one.py", "src/two.py"]
+    ]
