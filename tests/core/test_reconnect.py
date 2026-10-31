@@ -17,6 +17,22 @@ def controller(tmp_path):
     ctl.close()
 
 
+def test_automation_queue_failure_does_not_expose_private_exception(controller, monkeypatch):
+    from unittest.mock import Mock
+
+    secret = "PRIVATE_JOB_PAYLOAD"
+    controller.closed = Mock()
+    controller.closed.wait.side_effect = [False, True]
+
+    def fail():
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(controller.agent, "pump_sandbox_queue_local", fail)
+    controller._sandbox_monitor()
+    assert secret not in controller.error
+    assert "Automation queue failed" in controller.error
+
+
 def test_no_connection_without_user_intent(controller, monkeypatch):
     calls = []
     monkeypatch.setattr(
