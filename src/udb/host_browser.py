@@ -1025,7 +1025,7 @@ class Browser(BrowserInputMixin):
         validate_locator(selector, role, name, exact)
         body = """return new Promise(resolve => {
           const waitState=__STATE__, wantedText=__VALUE__, timeout=__TIMEOUT__;
-          let observer=null, interval=null, timer=null, finished=false;
+          let observer=null, interval=null, timer=null, scheduled=null, finished=false;
           const observed=new WeakSet();
           const finish=result=>{
             if(finished)return;
@@ -1033,6 +1033,7 @@ class Browser(BrowserInputMixin):
             if(observer)observer.disconnect();
             if(interval!==null)clearInterval(interval);
             if(timer!==null)clearTimeout(timer);
+            if(scheduled!==null)clearTimeout(scheduled);
             resolve(result);
           };
           const observeRoots=()=>{
@@ -1063,9 +1064,13 @@ class Browser(BrowserInputMixin):
               finish({ok:false,error:'locator_search_truncated',state:waitState});return;
             }
           };
-          observer=new MutationObserver(check);
+          const scheduleCheck=()=>{
+            if(finished||scheduled!==null)return;
+            scheduled=setTimeout(()=>{scheduled=null;if(!finished)check();},50);
+          };
+          observer=new MutationObserver(scheduleCheck);
           timer=setTimeout(()=>finish({ok:false,timed_out:true,state:waitState}),Math.max(1,timeout-50));
-          interval=setInterval(()=>{observeRoots();check();},200);
+          interval=setInterval(scheduleCheck,500);
           check();
         });"""
         body = (
