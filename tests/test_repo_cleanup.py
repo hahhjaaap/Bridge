@@ -112,7 +112,6 @@ def test_repository_audit_identifies_only_high_confidence_junk(tmp_path):
     assert reason("THIRD_PARTY_NOTICES/lib.dist-info/LICENSE") == ""
 
 
-
 def test_audit_separates_required_compatibility_shims_from_real_duplicates(tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "udb_unified.py").write_text("from udb.proxy import run\n")
@@ -133,6 +132,4 @@ def test_audit_separates_required_compatibility_shims_from_real_duplicates(tmp_p
     assert report["intentional_compatibility_duplicates"] == [
         ["src/udb_unified.py", "udb_unified.py"]
     ]
-    assert report["identical_source_groups"] == [
-        ["src/one.py", "src/two.py"]
-    ]
+    assert report["identical_source_groups"] == [["src/one.py", "src/two.py"]]
