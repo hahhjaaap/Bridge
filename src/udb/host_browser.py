@@ -153,8 +153,6 @@ def validate_locator(selector="", role="", name="", exact=True):
         raise PolicyError("Provide a CSS selector or an accessible role")
 
 
-
-
 def find_browser():
     candidates = [
         Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
