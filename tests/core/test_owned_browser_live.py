@@ -251,6 +251,10 @@ def test_real_browser_wait_for_observes_mutations_inside_open_shadow_dom(live_br
     browser.navigate(tab, url + "shadow-delay")
     result = browser.wait_for(tab, role="button", name="Ready", timeout_ms=2000)
     assert result["ok"] and result["state"] == "visible"
+    text_result = browser.wait_for(
+        tab, selector="body", state="text", value="Ready", timeout_ms=2000
+    )
+    assert text_result["ok"] and text_result["state"] == "text"
 
 
 def test_real_browser_cookie_download_and_redirect_rejection(live_browser):
