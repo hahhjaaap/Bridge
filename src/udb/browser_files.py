@@ -43,7 +43,7 @@ def upload(browser, tab, selector, source, data, expected_origin):
             "",
             "",
             True,
-            "return {ok:e.tagName==='INPUT'&&e.type==='file'&&!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!e.closest('[inert]')};",
+            "return {ok:e.tagName==='INPUT'&&e.type==='file'&&!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!isInert(e)};",
             visible_only=False,
         ),
     )
