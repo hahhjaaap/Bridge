@@ -63,7 +63,6 @@ def test_cdp_channel_retains_only_bounded_event_names():
     assert "secret" not in repr(channel.event_markers())
 
 
-
 def test_cdp_channel_waits_for_sanitized_main_frame_event():
     socket = Socket(
         [
@@ -173,10 +172,17 @@ def test_cdp_channel_does_not_hide_protocol_errors():
         channel.call("Page.navigate")
 
 
-
 def test_cdp_channel_enforces_timeout_type_and_upper_bound():
     channel = CDPChannel(Socket([]), Process())
-    for timeout in (True, float("nan"), float("inf"), 0, -1, MAX_COMMAND_TIMEOUT_SECONDS + 1, "1"):
+    for timeout in (
+        True,
+        float("nan"),
+        float("inf"),
+        0,
+        -1,
+        MAX_COMMAND_TIMEOUT_SECONDS + 1,
+        "1",
+    ):
         with pytest.raises(PolicyError, match="Invalid browser command timeout"):
             channel.call("Page.getFrameTree", timeout=timeout)
     assert channel.seq == 0
