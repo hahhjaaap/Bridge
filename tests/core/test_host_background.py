@@ -438,6 +438,7 @@ def test_browser_attach_does_not_emulate_a_slow_cpu():
     browser.identity_script = lambda: "/* UDB identity */"
     browser.attach("owned-target")
     assert "Page.setDownloadBehavior" in calls
+    assert "Page.setLifecycleEventsEnabled" in calls
     assert "Network.setBlockedURLs" in calls
     assert "Emulation.setCPUThrottlingRate" not in calls
 
