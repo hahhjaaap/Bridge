@@ -62,10 +62,12 @@ def proxy():
 @pytest.mark.parametrize("action", ["status", "abort"])
 def test_upload_cleanup_survives_resource_pause(proxy, action):
     unified, original, companion = proxy
-    result = unified.call_tool({
-        "name": "file_upload",
-        "arguments": {"action": action, "upload_id": "synthetic"},
-    })
+    result = unified.call_tool(
+        {
+            "name": "file_upload",
+            "arguments": {"action": action, "upload_id": "synthetic"},
+        }
+    )
     assert result.get("isError") is not True
     assert original.calls == ["computer_status"]
     assert len(companion.calls) == 1
@@ -76,9 +78,11 @@ def test_upload_cleanup_survives_resource_pause(proxy, action):
 def test_upload_mutations_still_require_resource_capacity(proxy, action):
     unified, original, companion = proxy
     with pytest.raises(RuntimeError, match="Machine busy"):
-        unified.call_tool({
-            "name": "file_upload",
-            "arguments": {"action": action, "upload_id": "synthetic"},
-        })
+        unified.call_tool(
+            {
+                "name": "file_upload",
+                "arguments": {"action": action, "upload_id": "synthetic"},
+            }
+        )
     assert original.calls == ["computer_status", "host_status"]
     assert companion.calls == []
