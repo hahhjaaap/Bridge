@@ -42,7 +42,9 @@ class CDPChannel:
             if not self.process or not self.process.alive():
                 raise PolicyError("Owned browser has exited")
             if timeout <= 0:
-                raise PolicyError("Browser action budget exceeded; inspect before retrying")
+                raise PolicyError(
+                    "Browser action budget exceeded; inspect before retrying"
+                )
             self.seq += 1
             request_id = self.seq
             message = dict(id=request_id, method=method, params=params or {})
@@ -53,7 +55,9 @@ class CDPChannel:
             while time.monotonic() < deadline:
                 if not self.process.alive():
                     raise PolicyError("Owned browser was stopped")
-                self.websocket.settimeout(min(1, max(0.01, deadline - time.monotonic())))
+                self.websocket.settimeout(
+                    min(1, max(0.01, deadline - time.monotonic()))
+                )
                 try:
                     raw = self.websocket.recv()
                 except WebSocketTimeoutException:
@@ -81,7 +85,11 @@ class CDPChannel:
                     continue
                 if "error" in reply:
                     error = reply["error"]
-                    detail = error.get("message", "unknown") if isinstance(error, dict) else "unknown"
+                    detail = (
+                        error.get("message", "unknown")
+                        if isinstance(error, dict)
+                        else "unknown"
+                    )
                     raise PolicyError("Browser operation failed: " + str(detail)[:300])
                 return reply.get("result", {})
             raise PolicyError(
