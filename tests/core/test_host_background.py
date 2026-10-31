@@ -838,6 +838,87 @@ def test_click_without_navigation_does_not_wait_for_document_ready():
     assert result == {"navigation_completed": False}
 
 
+
+def test_browser_navigation_waits_for_lifecycle_event_before_polling_frame_tree():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+
+    class EventChannel:
+        def __init__(self):
+            self.calls = []
+
+        def wait_for_event(self, methods, session=None, timeout=1, match=None):
+            self.calls.append((methods, session, match))
+            return {
+                "method": "Page.lifecycleEvent",
+                "sessionId": session,
+                "frameId": "main-frame",
+                "loaderId": "new-loader",
+                "name": "load",
+            }
+
+    channel = EventChannel()
+    browser._cdp = channel
+    browser.call = lambda *args, **kwargs: pytest.fail(
+        "A matching lifecycle event should avoid frame-tree polling"
+    )
+    browser.evaluate = lambda tab, expression, timeout=10, **kwargs: {
+        "readyState": "complete",
+        "href": "https://next.example/",
+    }
+    result = browser._wait_for_document_ready(
+        "owned-tab",
+        timeout_ms=1000,
+        previous_url="https://old.example/",
+        require_transition=True,
+        expected_loader_id="new-loader",
+    )
+    assert result["navigation_completed"]
+    assert channel.calls == [
+        (
+            "Page.lifecycleEvent",
+            "owned-session",
+            {"name": "load", "loaderId": "new-loader"},
+        )
+    ]
+
+
+def test_browser_click_navigation_uses_main_frame_events():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+
+    class EventChannel:
+        def wait_for_event(self, methods, session=None, timeout=1, match=None):
+            if methods == ("Page.frameNavigated", "Page.navigatedWithinDocument"):
+                return {
+                    "method": "Page.frameNavigated",
+                    "sessionId": session,
+                    "frameId": "main-frame",
+                    "loaderId": "new-loader",
+                }
+            return {
+                "method": "Page.lifecycleEvent",
+                "sessionId": session,
+                "frameId": "main-frame",
+                "loaderId": "new-loader",
+                "name": "load",
+            }
+
+    browser._cdp = EventChannel()
+    browser.evaluate = lambda tab, expression, timeout=10, **kwargs: {
+        "readyState": "complete",
+        "href": "https://next.example/",
+    }
+    result = browser._wait_for_click_navigation(
+        "owned-tab",
+        "https://old.example/",
+        previous_loader_id="old-loader",
+        previous_frame_id="main-frame",
+    )
+    assert result["navigation_completed"]
+    assert result["url"] == "https://next.example/"
+
+
 def test_browser_same_url_navigation_waits_for_new_loader():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
