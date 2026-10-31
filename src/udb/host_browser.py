@@ -1052,11 +1052,12 @@ class Browser(BrowserInputMixin):
             const visibleMatches=matches.filter(isVisible);
             const enabledMatches=visibleMatches.filter(e=>!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!isInert(e));
             const textMatches=matches.filter(e=>String(e.innerText||e.textContent||'').includes(wantedText));
+            const shadowTextMatch=waitState==='text'&&openShadowRoots.slice(1).some(root=>String(root.textContent||'').includes(wantedText));
             const ok=waitState==='attached'?matches.length>0:
               waitState==='visible'?visibleMatches.length>0:
               waitState==='hidden'?(matches.length===0||visibleMatches.length===0):
               waitState==='enabled'?enabledMatches.length>0:
-              waitState==='text'?textMatches.length>0:false;
+              waitState==='text'?textMatches.length>0||shadowTextMatch:false;
             if(ok){finish({ok:true,state:waitState,matches:matches.length,visible:visibleMatches.length,enabled:enabledMatches.length});return;}
             if(traversalTruncated&&(matches.length===0||waitState==='hidden')){
               finish({ok:false,error:'locator_search_truncated',state:waitState});return;
