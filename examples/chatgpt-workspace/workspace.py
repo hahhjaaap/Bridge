@@ -239,9 +239,13 @@ class Dashboard:
             text="Ctrl+Enter để gửi · chọn một tin để trả lời",
             style="Small.TLabel",
         ).pack(side="left")
-        ttk.Button(sendbar, text="Gửi tin", command=lambda: self.safe(self.send)).pack(
-            side="right"
+        self.send_button = ttk.Button(
+            sendbar, text="Gửi tin", command=lambda: self.safe(self.send)
         )
+        self.send_button.pack(side="right")
+        # Reserve the composer first; history scrolls within the remaining height.
+        for widget in (sendbar, self.editor, replybar, self.detail, self.history_note):
+            widget.pack_configure(before=self.message_list, side="bottom")
 
     def _task_board(self, page):
         bar = ttk.Frame(page)
@@ -832,12 +836,20 @@ def selftest():
             )
             dash.render_browser()
             assert dash.photo is not None
+            dash.app.geometry("960x680")
+            dash.app.deiconify()
             dash.app.update()
+            assert (
+                dash.send_button.winfo_rooty() + dash.send_button.winfo_height()
+                <= dash.app.winfo_rooty() + dash.app.winfo_height()
+            )
+            assert dash.message_list.winfo_height() > 50
             return {
                 "ok": True,
                 "checks": [
                     "full multiline messages without truncation",
                     "word wrapping",
+                    "composer visible at minimum window size",
                     "native UI sends message",
                     "reply-to preserved",
                     "task state update",
