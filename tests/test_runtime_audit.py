@@ -185,9 +185,7 @@ def test_failing_notification_observer_does_not_disconnect_backend(tmp_path):
         {"jsonrpc": "2.0", "method": {"bad": "method"}},
     ],
 )
-def test_invalid_child_frame_does_not_discard_another_rpc_reply(
-    tmp_path, malformed
-):
+def test_invalid_child_frame_does_not_discard_another_rpc_reply(tmp_path, malformed):
     import queue
 
     child = StdioChild("fixture", [], str(tmp_path), lambda _: None)
