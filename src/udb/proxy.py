@@ -232,7 +232,9 @@ class UnifiedProxy:
                     self.companion.request("udb/close-sessions", timeout=10)
                     self._pointer_presence_started = False
                 except (RuntimeError, TimeoutError, OSError):
-                    return
+                    # A transient companion failure must not permanently stop
+                    # monitoring owner grants. Recheck on the next interval.
+                    pass
 
     def tools_list(self) -> dict[str, Any]:
         # Backends advertise tools.listChanged=False. Discovery is immutable
