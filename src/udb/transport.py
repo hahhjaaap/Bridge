@@ -105,7 +105,13 @@ class StdioChild:
                 elif "method" in message:
                     # Never forward a child request unsolicited; only notifications.
                     if message.get("method", "").startswith("notifications/"):
-                        self.notify(message)
+                        try:
+                            self.notify(message)
+                        except Exception:
+                            # Notification delivery is best-effort. A failing
+                            # observer must not disconnect the backend or
+                            # discard replies to unrelated in-flight calls.
+                            pass
         except (OSError, ValueError) as e:
             self.stderr_tail.append(type(e).__name__)
         finally:
