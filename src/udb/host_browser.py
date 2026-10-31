@@ -336,9 +336,7 @@ class Browser(BrowserInputMixin):
         if deadline:
             timeout = min(timeout, deadline - time.monotonic())
         if timeout <= 0:
-            raise PolicyError(
-                "Browser action budget exceeded; inspect before retrying"
-            )
+            raise PolicyError("Browser action budget exceeded; inspect before retrying")
         return channel.wait_for_event(
             methods, session=session, timeout=timeout, match=match
         )
