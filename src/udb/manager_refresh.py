@@ -352,7 +352,7 @@ class ManagerRefreshMixin:
         alive = status["tunnel_running"]
         wanted = status["tunnel_wanted"]
         text = (
-            "Đã sẵn sàng"
+            "Tunnel đã kết nối"
             if ready
             else (
                 "Đang kết nối…"
@@ -378,7 +378,7 @@ class ManagerRefreshMixin:
             "Tắt MCP cục bộ" if status["local_running"] else "Bật MCP cục bộ"
         )
         self.connection_hint.setText(
-            "Sẵn sàng nhận yêu cầu từ ChatGPT Chat."
+            "Tunnel hoạt động; hãy kiểm tra ChatGPT có thấy và gọi được công cụ UDB."
             if ready
             else "Private MCP tunnel · không mở cổng công khai"
         )
@@ -412,7 +412,7 @@ class ManagerRefreshMixin:
             self.connection_signature = sig
             self.band.flash()
         self.footer_status.setText(
-            ("Tunnel sẵn sàng" if ready else "Chờ kết nối")
+            ("Tunnel đã kết nối" if ready else "Chờ kết nối")
             + " · "
             + ("AI tự sửa theo quyền" if source_auto_projects else "Chưa bật tự sửa")
             + " · Quyền do bạn cấp"
