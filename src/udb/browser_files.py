@@ -66,6 +66,11 @@ def upload(browser, tab, selector, source, data, expected_origin):
     ).get("result", {})
     object_id = remote.get("objectId")
     if remote.get("subtype") != "node" or not isinstance(object_id, str):
+        if isinstance(object_id, str):
+            try:
+                browser.call("Runtime.releaseObject", {"objectId": object_id}, session)
+            except Exception:
+                pass
         raise PolicyError("Upload selector must identify exactly one enabled file input")
     try:
         node_id = browser.call(
