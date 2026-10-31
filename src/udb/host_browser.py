@@ -514,9 +514,19 @@ class Browser(BrowserInputMixin):
             # fallback for the remaining observation budget.
             while not transitioned and time.monotonic() < deadline:
                 remaining = deadline - time.monotonic()
-                targets = self.call(
-                    "Target.getTargets", timeout=max(0.05, min(0.5, remaining))
-                ).get("targetInfos", [])
+                try:
+                    targets = self.call(
+                        "Target.getTargets",
+                        timeout=max(0.01, min(0.5, remaining)),
+                    ).get("targetInfos", [])
+                except PolicyError as exc:
+                    if (
+                        self._is_transient_context_error(exc)
+                        or "timed out" in str(exc).lower()
+                    ):
+                        time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+                        continue
+                    raise
                 target = next(
                     (item for item in targets if item.get("targetId") == tab), None
                 )
@@ -527,15 +537,26 @@ class Browser(BrowserInputMixin):
                     transitioned = True
                     break
                 if previous_loader_id:
-                    frame = (
-                        self.call(
-                            "Page.getFrameTree",
-                            session=self.sid(tab),
-                            timeout=max(0.05, min(0.5, remaining)),
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        frame = (
+                            self.call(
+                                "Page.getFrameTree",
+                                session=self.sid(tab),
+                                timeout=max(0.01, min(0.5, remaining)),
+                            )
+                            .get("frameTree", {})
+                            .get("frame", {})
                         )
-                        .get("frameTree", {})
-                        .get("frame", {})
-                    )
+                    except PolicyError as exc:
+                        if (
+                            self._is_transient_context_error(exc)
+                            or "timed out" in str(exc).lower()
+                        ):
+                            continue
+                        raise
                     loader = frame.get("loaderId")
                     if loader and loader != previous_loader_id:
                         next_loader_id = loader
