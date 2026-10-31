@@ -1,4 +1,10 @@
-"""Read-only bounded page observations for a UDB-owned browser.\n\nNo arbitrary caller JavaScript: these are fixed and data-redacting DOM programs.\n"""\n\ndef read(browser, tab):
+"""Read-only bounded page observations for a UDB-owned browser.
+
+No arbitrary caller JavaScript: these are fixed and data-redacting DOM programs.
+"""
+
+
+def read(browser, tab):
     return browser.evaluate(
         tab,
         """(() => {
@@ -22,6 +28,7 @@
         })()""",
         timeout=5,
     )
+
 
 def snapshot(browser, tab):
     return browser.evaluate(
