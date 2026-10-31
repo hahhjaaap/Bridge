@@ -476,6 +476,8 @@ class Browser(BrowserInputMixin):
                         current_url = self.evaluate(tab, "location.href", timeout=1)
                     except PolicyError:
                         current_url = ""
+                    if not current_url or current_url == previous_url:
+                        continue
                     safe_url = self._safe_page_url(current_url)
                     return dict(
                         navigation_completed=bool(safe_url),
