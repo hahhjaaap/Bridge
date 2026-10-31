@@ -39,15 +39,18 @@ def test_cdp_channel_retains_only_bounded_event_names():
                 "params": {"targetInfo": {"url": "https://example.com/?token=secret"}},
             }
         ),
-        json.dumps({"method": "Network.requestWillBeSent", "params": {"headers": {"Cookie": "secret"}}}),
+        json.dumps(
+            {
+                "method": "Network.requestWillBeSent",
+                "params": {"headers": {"Cookie": "secret"}},
+            }
+        ),
         json.dumps({"id": 1, "result": {"ok": True}}),
     ]
     socket = Socket(messages)
     channel = CDPChannel(socket, Process())
     assert channel.call("Browser.getVersion", timeout=1) == {"ok": True}
-    assert socket.sent == [
-        {"id": 1, "method": "Browser.getVersion", "params": {}}
-    ]
+    assert socket.sent == [{"id": 1, "method": "Browser.getVersion", "params": {}}]
     assert channel.event_markers() == (
         "Target.targetCreated",
         "Network.requestWillBeSent",
