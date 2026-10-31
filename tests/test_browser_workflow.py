@@ -63,7 +63,10 @@ class Browser:
             valid = (
                 len(self.nodes) == 1
                 and self.node.get("nodeName") == "INPUT"
-                and dict(zip(attributes[::2], attributes[1::2], strict=True)).get("type") == "file"
+                and dict(zip(attributes[::2], attributes[1::2], strict=True)).get(
+                    "type"
+                )
+                == "file"
                 and "disabled" not in attributes[::2]
             )
             return (
@@ -85,9 +88,7 @@ def test_upload_stages_exact_bytes_until_browser_closes_without_submission(tmp_p
         browser, "owned", "input[type=file]", source, b"fixture", browser.url
     )
     staged_call = next(
-        params
-        for method, params in browser.calls
-        if method == "DOM.setFileInputFiles"
+        params for method, params in browser.calls if method == "DOM.setFileInputFiles"
     )
     staged = Path(staged_call["files"][0])
     assert staged.read_bytes() == b"fixture" and staged.name == "invoice.xlsx"
