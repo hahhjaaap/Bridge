@@ -474,11 +474,12 @@ class Browser(BrowserInputMixin):
         # frame trees every 50 ms. Event records contain IDs only, never URLs.
         channel = getattr(self, "_cdp", None)
         if previous_frame_id and hasattr(channel, "wait_for_event"):
-            while time.monotonic() < deadline:
+            event_deadline = min(deadline, time.monotonic() + 0.5)
+            while time.monotonic() < event_deadline:
                 event = self._wait_for_cdp_event(
                     ("Page.frameNavigated", "Page.navigatedWithinDocument"),
                     session=self.sid(tab),
-                    timeout=max(0.05, deadline - time.monotonic()),
+                    timeout=max(0.01, event_deadline - time.monotonic()),
                     match={"frameId": previous_frame_id},
                 )
                 if event is None:
@@ -508,12 +509,14 @@ class Browser(BrowserInputMixin):
                     transitioned = True
                     break
 
-            if not transitioned:
-                # A single state read is the compatibility fallback for a
-                # browser build that omitted lifecycle events.
-                targets = self.call("Target.getTargets", timeout=1).get(
-                    "targetInfos", []
-                )
+            # Some Chromium builds do not emit a main-frame lifecycle event for
+            # every form/history navigation. Use a bounded, low-frequency state
+            # fallback for the remaining observation budget.
+            while not transitioned and time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                targets = self.call(
+                    "Target.getTargets", timeout=max(0.05, min(0.5, remaining))
+                ).get("targetInfos", [])
                 target = next(
                     (item for item in targets if item.get("targetId") == tab), None
                 )
@@ -522,12 +525,13 @@ class Browser(BrowserInputMixin):
                 current_url = str(target.get("url", ""))
                 if current_url and current_url != previous_url:
                     transitioned = True
-                elif previous_loader_id:
+                    break
+                if previous_loader_id:
                     frame = (
                         self.call(
                             "Page.getFrameTree",
                             session=self.sid(tab),
-                            timeout=1,
+                            timeout=max(0.05, min(0.5, remaining)),
                         )
                         .get("frameTree", {})
                         .get("frame", {})
@@ -536,6 +540,8 @@ class Browser(BrowserInputMixin):
                     if loader and loader != previous_loader_id:
                         next_loader_id = loader
                         transitioned = True
+                        break
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
         else:
             # Compatibility path for simple test adapters and older channels.
             while time.monotonic() < deadline:
@@ -693,7 +699,12 @@ class Browser(BrowserInputMixin):
             timeout_ms=timeout_ms,
             previous_url=previous_url,
             require_transition=bool(result.get("loaderId")),
-            expected_loader_id=result.get("loaderId"),
+            expected_loader_id=(
+                result.get("loaderId")
+                if previous_url == url
+                or hasattr(getattr(self, "_cdp", None), "wait_for_event")
+                else None
+            ),
         )
         return dict(tab_id=tab, navigation_started=True, **ready)
 
