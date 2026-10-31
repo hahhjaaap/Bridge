@@ -206,6 +206,7 @@ def test_cdp_channel_does_not_treat_boolean_id_as_integer_response_id():
     channel = CDPChannel(socket, Process())
     assert channel.call("Page.getFrameTree") == {"right": True}
 
+
 def test_browser_call_keeps_legacy_method_contract_and_deadline():
     browser = Browser.__new__(Browser)
     browser.proc = Process()
