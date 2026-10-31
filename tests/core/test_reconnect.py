@@ -17,7 +17,9 @@ def controller(tmp_path):
     ctl.close()
 
 
-def test_automation_queue_failure_does_not_expose_private_exception(controller, monkeypatch):
+def test_automation_queue_failure_does_not_expose_private_exception(
+    controller, monkeypatch
+):
     from unittest.mock import Mock
 
     secret = "PRIVATE_JOB_PAYLOAD"
