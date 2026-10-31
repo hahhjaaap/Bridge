@@ -25,7 +25,7 @@ _READ_SCRIPT = """(() => {
     title:String(document.title||'').slice(0,500),
     text:((document.body?.innerText||'')+' '+shadowText).replace(/\\s+/g,' ').trim().slice(0,20000),
     elements,elements_truncated:all.length>120||traversalTruncated,
-    shadow_roots:Math.max(0,roots.length-1),shadow_truncated:traversalTruncated};
+    shadow_roots:openShadowRootCount,shadow_truncated:traversalTruncated};
 })()"""
 
 _SNAPSHOT_SCRIPT = """(() => {
@@ -55,7 +55,6 @@ _SNAPSHOT_SCRIPT = """(() => {
       options_truncated:e.tagName==='SELECT'?e.options.length>20:undefined,
       checked:typeof e.checked==='boolean'?e.checked:null,selected:typeof e.selected==='boolean'?e.selected:null,
       value:secret?'[redacted]':String(e.value||'').slice(0,160),href};});
-  const roots=collectOpenRoots().roots;
   return {url:location.origin==='null'?'about:blank':location.origin+location.pathname,title:String(document.title||'').slice(0,500),
     count:all.length,truncated:all.length>160||traversalTruncated,
     shadow_roots:Math.max(0,roots.length-1),shadow_truncated:traversalTruncated,elements};
