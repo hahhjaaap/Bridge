@@ -526,6 +526,7 @@ class Browser(BrowserInputMixin):
         for tab in list(self.tabs):
             if tab not in valid:
                 self.tabs.pop(tab)
+                getattr(self, "_identity_contexts", {}).pop(tab, None)
         # Only HTTP(S) pages in our own profile are interactive. Do not adopt
         # browser-internal pages or targets with an unsupported destination URL.
         for target in page_targets:
@@ -533,6 +534,7 @@ class Browser(BrowserInputMixin):
             safe_url = self._safe_page_url(target.get("url", ""))
             if not safe_url:
                 self.tabs.pop(tab, None)
+                getattr(self, "_identity_contexts", {}).pop(tab, None)
                 try:
                     self.call("Target.closeTarget", dict(targetId=tab), timeout=2)
                 except Exception:
