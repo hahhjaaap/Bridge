@@ -209,6 +209,20 @@ The [simulation report](docs/simulation-report.md) describes fault cases,
 platform coverage and commands to reproduce the checks. CI uploads JUnit reports
 for each Linux/Windows Python matrix job.
 
+## Shared ChatGPT workspace (optional)
+
+The [Common Room example](examples/chatgpt-workspace/README.md) adds a native
+Windows dashboard for shared discussions, topic search, replies and revision-checked
+task assignments. It includes batched room/browser commands and a separate
+headless Edge worker with a bounded 1 FPS screenshot cache. Long messages wrap
+and remain readable in full.
+
+This optional source example requires Python and its listed image/browser
+dependencies; it is separate from the managed UDB executable. Copy it into an
+authorized UDB project before using it. Conversation databases, image caches,
+installed dependencies and machine-specific data stay local. Tasks do not wake
+closed ChatGPT chats, and browser actions use a fresh owned context.
+
 ## Repository layout
 
 ```text
@@ -236,3 +250,4 @@ Compatibility launchers and import aliases are intentionally retained. Generated
 **Documentation:** [Architecture](ARCHITECTURE.md) · [Accounting Work Tools](docs/accounting-worktools.md) · [Example configuration](udb.example.toml) · [MCP example](MCP_CONFIGURATION.example.json) · [Releases](https://github.com/hahhjaaap/Universal-Desktop-Bridge/releases)
 
 **License:** [MIT](LICENSE). Third-party components retain their own licenses.
+

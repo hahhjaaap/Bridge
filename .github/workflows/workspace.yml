@@ -1,0 +1,32 @@
+name: common-room-workspace
+on:
+  push:
+    paths:
+      - 'examples/chatgpt-workspace/**'
+      - '.github/workflows/workspace.yml'
+  pull_request:
+    paths:
+      - 'examples/chatgpt-workspace/**'
+      - '.github/workflows/workspace.yml'
+permissions:
+  contents: read
+jobs:
+  windows-workspace:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: examples/chatgpt-workspace
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --target browser_deps -r requirements-browser.txt
+      - run: python -B room.py selftest
+      - run: python -B chain.py --selftest
+      - run: python -B fast_live.py selftest
+      - run: python -B workspace.py --selftest
+      - run: python -B browser_flow.py --selftest
+

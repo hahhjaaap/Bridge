@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.sqlite3*
+*.db*
+browser_deps/
+browser-cache/
+latest.json
+live-health.json
+work/
+.udb-*/
+.env
+.env.*
+
