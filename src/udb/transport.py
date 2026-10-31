@@ -98,13 +98,22 @@ class StdioChild:
                 if not isinstance(message, dict):
                     continue
                 if "id" in message:
+                    # UDB sends integer request IDs. A malformed child reply
+                    # must not terminate the reader or strand other callers.
+                    ident = message["id"]
+                    if type(ident) is not int:
+                        continue
                     with self.lock:
-                        waiter = self.waiters.pop(message["id"], None)
+                        waiter = self.waiters.pop(ident, None)
                     if waiter:
                         waiter.put(message)
                 elif "method" in message:
-                    # Never forward a child request unsolicited; only notifications.
-                    if message.get("method", "").startswith("notifications/"):
+                    # Only string-valued MCP notifications may be forwarded.
+                    # Reject malformed frames without losing live RPC replies.
+                    method = message["method"]
+                    if isinstance(method, str) and method.startswith(
+                        "notifications/"
+                    ):
                         try:
                             self.notify(message)
                         except Exception:
