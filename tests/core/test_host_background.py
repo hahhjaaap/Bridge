@@ -401,9 +401,6 @@ def test_browser_wait_for_timeout_is_explicit():
     assert result["ok"] is False and result["timed_out"] is True
 
 
-@pytest.mark.parametrize(
-    "key", ["Enter", "Tab", "Escape", "ArrowDown", "Ctrl+A", "Shift+Tab"]
-)
 def test_browser_launch_flags_preserve_features_and_isolate_profile(tmp_path):
     args = _browser_launch_args("chrome.exe", tmp_path)
     assert args[0] == "chrome.exe"
@@ -486,6 +483,9 @@ def test_browser_scroll_uses_actual_viewport_center():
     assert result["scrolled"] and wheel["x"] == 160 and wheel["y"] == 300
 
 
+@pytest.mark.parametrize(
+    "key", ["Enter", "Tab", "Escape", "ArrowDown", "Ctrl+A", "Shift+Tab"]
+)
 def test_browser_key_allowlist_accepts_common_keys(key):
     assert parse_key(key)["code"]
 
