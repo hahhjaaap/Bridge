@@ -57,7 +57,7 @@ _SNAPSHOT_SCRIPT = """(() => {
       value:secret?'[redacted]':String(e.value||'').slice(0,160),href};});
   return {url:location.origin==='null'?'about:blank':location.origin+location.pathname,title:String(document.title||'').slice(0,500),
     count:all.length,truncated:all.length>160||traversalTruncated,
-    shadow_roots:Math.max(0,roots.length-1),shadow_truncated:traversalTruncated,elements};
+    shadow_roots:openShadowRootCount,shadow_truncated:traversalTruncated,elements};
 })()"""
 
 
