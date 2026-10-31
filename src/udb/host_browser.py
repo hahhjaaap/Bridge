@@ -272,6 +272,9 @@ class Browser(BrowserInputMixin):
         try:
             self.call("Page.enable", session=sid)
             self.call(
+                "Page.setLifecycleEventsEnabled", dict(enabled=True), sid
+            )
+            self.call(
                 "Page.addScriptToEvaluateOnNewDocument",
                 dict(source=self.identity_script(), worldName="UDBIdentity"),
                 session=sid,
@@ -349,8 +352,22 @@ class Browser(BrowserInputMixin):
                 raise PolicyError(
                     f"Navigation timed out after {timeout_ms} ms; inspect before retrying"
                 )
-            # Same-URL navigations cannot be detected by comparing href. CDP
-            # returns the new loaderId; wait until the main frame adopts it.
+            # Lifecycle events avoid repeatedly querying the frame tree while
+            # a navigation is in flight. Retain the bounded poll as a fallback.
+            if (
+                expected_loader_id
+                and not transition_seen
+                and hasattr(getattr(self, "_cdp", None), "wait_for_event")
+            ):
+                event = self._cdp.wait_for_event(
+                    "Page.lifecycleEvent",
+                    session=self.sid(tab),
+                    timeout=min(1.0, remaining),
+                    match={"name": "load", "loaderId": expected_loader_id},
+                )
+                if event:
+                    transition_seen = True
+                    continue
             if expected_loader_id and not transition_seen:
                 try:
                     tree = self.call(
@@ -432,57 +449,125 @@ class Browser(BrowserInputMixin):
         observe_ms=1000,
         timeout_ms=10000,
         previous_loader_id=None,
+        previous_frame_id=None,
     ):
         if not isinstance(previous_url, str) or not previous_url:
             return dict(navigation_completed=False)
         observation_ms = max(100, min(1000, int(observe_ms)))
         deadline = time.monotonic() + observation_ms / 1000
-        # Runtime.evaluate may lose its reply while a click destroys the old
-        # execution context. Observe navigation from the browser target instead.
         transitioned = False
         next_loader_id = None
-        while time.monotonic() < deadline:
-            remaining = deadline - time.monotonic()
-            try:
-                targets = self.call(
-                    "Target.getTargets",
-                    timeout=max(0.2, min(0.5, remaining)),
-                ).get("targetInfos", [])
-            except PolicyError as exc:
-                if "timed out" not in str(exc).lower():
-                    raise
-                continue
-            target = next((t for t in targets if t.get("targetId") == tab), None)
-            if target is None:
-                raise PolicyError("Owned browser tab closed during click")
-            current_url = str(target.get("url", ""))
-            if current_url and current_url != previous_url:
-                transitioned = True
-                break
-            if previous_loader_id:
-                try:
+
+        # Use the browser's own main-frame events instead of polling targets and
+        # frame trees every 50 ms. Event records contain IDs only, never URLs.
+        channel = getattr(self, "_cdp", None)
+        if previous_frame_id and hasattr(channel, "wait_for_event"):
+            while time.monotonic() < deadline:
+                event = channel.wait_for_event(
+                    ("Page.frameNavigated", "Page.navigatedWithinDocument"),
+                    session=self.sid(tab),
+                    timeout=max(0.05, deadline - time.monotonic()),
+                    match={"frameId": previous_frame_id},
+                )
+                if event is None:
+                    break
+                if event.get("method") == "Page.navigatedWithinDocument":
+                    try:
+                        current_url = self.evaluate(tab, "location.href", timeout=1)
+                    except PolicyError:
+                        current_url = ""
+                    safe_url = self._safe_page_url(current_url)
+                    return dict(
+                        navigation_completed=bool(safe_url),
+                        ready_state="complete" if safe_url else "",
+                        url=safe_url,
+                    )
+                if (
+                    event.get("method") == "Page.frameNavigated"
+                    and not event.get("parentId")
+                    and (
+                        not previous_loader_id
+                        or event.get("loaderId") != previous_loader_id
+                    )
+                ):
+                    next_loader_id = event.get("loaderId")
+                    transitioned = True
+                    break
+
+            if not transitioned:
+                # A single state read is the compatibility fallback for a
+                # browser build that omitted lifecycle events.
+                targets = self.call("Target.getTargets", timeout=1).get(
+                    "targetInfos", []
+                )
+                target = next(
+                    (item for item in targets if item.get("targetId") == tab), None
+                )
+                if target is None:
+                    raise PolicyError("Owned browser tab closed during click")
+                current_url = str(target.get("url", ""))
+                if current_url and current_url != previous_url:
+                    transitioned = True
+                elif previous_loader_id:
                     frame = (
                         self.call(
                             "Page.getFrameTree",
                             session=self.sid(tab),
-                            timeout=max(0.2, min(0.5, deadline - time.monotonic())),
+                            timeout=1,
                         )
                         .get("frameTree", {})
                         .get("frame", {})
                     )
+                    loader = frame.get("loaderId")
+                    if loader and loader != previous_loader_id:
+                        next_loader_id = loader
+                        transitioned = True
+        else:
+            # Compatibility path for simple test adapters and older channels.
+            while time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                try:
+                    targets = self.call(
+                        "Target.getTargets",
+                        timeout=max(0.2, min(0.5, remaining)),
+                    ).get("targetInfos", [])
                 except PolicyError as exc:
-                    if (
-                        self._is_transient_context_error(exc)
-                        or "timed out" in str(exc).lower()
-                    ):
-                        continue
-                    raise
-                loader = frame.get("loaderId")
-                if loader and loader != previous_loader_id:
-                    next_loader_id = loader
+                    if "timed out" not in str(exc).lower():
+                        raise
+                    continue
+                target = next((t for t in targets if t.get("targetId") == tab), None)
+                if target is None:
+                    raise PolicyError("Owned browser tab closed during click")
+                current_url = str(target.get("url", ""))
+                if current_url and current_url != previous_url:
                     transitioned = True
                     break
-            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+                if previous_loader_id:
+                    try:
+                        frame = (
+                            self.call(
+                                "Page.getFrameTree",
+                                session=self.sid(tab),
+                                timeout=max(
+                                    0.2, min(0.5, deadline - time.monotonic())
+                                ),
+                            )
+                            .get("frameTree", {})
+                            .get("frame", {})
+                        )
+                    except PolicyError as exc:
+                        if (
+                            self._is_transient_context_error(exc)
+                            or "timed out" in str(exc).lower()
+                        ):
+                            continue
+                        raise
+                    loader = frame.get("loaderId")
+                    if loader and loader != previous_loader_id:
+                        next_loader_id = loader
+                        transitioned = True
+                        break
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
         if not transitioned:
             return dict(navigation_completed=False)
         try:
@@ -596,9 +681,7 @@ class Browser(BrowserInputMixin):
             timeout_ms=timeout_ms,
             previous_url=previous_url,
             require_transition=bool(result.get("loaderId")),
-            expected_loader_id=(
-                result.get("loaderId") if previous_url == url else None
-            ),
+            expected_loader_id=result.get("loaderId"),
         )
         return dict(tab_id=tab, navigation_started=True, **ready)
 
@@ -794,18 +877,23 @@ class Browser(BrowserInputMixin):
             if not result.get("ok"):
                 return result
             previous_loader_id = None
+            previous_frame_id = None
             try:
-                previous_loader_id = (
+                frame = (
                     self.call("Page.getFrameTree", session=self.sid(tab), timeout=1)
                     .get("frameTree", {})
                     .get("frame", {})
-                    .get("loaderId")
                 )
+                previous_loader_id = frame.get("loaderId")
+                previous_frame_id = frame.get("id")
             except PolicyError:
                 pass  # URL observation is still available if a frame is transitioning.
             self._mouse_click(tab, result["x"], result["y"])
             navigation = self._wait_for_click_navigation(
-                tab, previous_url, previous_loader_id=previous_loader_id
+                tab,
+                previous_url,
+                previous_loader_id=previous_loader_id,
+                previous_frame_id=previous_frame_id,
             )
             return dict(ok=True, clicked=True, replay_safe=False, **navigation)
 
