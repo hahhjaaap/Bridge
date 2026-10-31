@@ -17,7 +17,8 @@ from urllib.parse import urlsplit
 from .browser_cdp import CDPChannel
 from .browser_dom import CLICK_POINT_SCRIPT, LOCATOR_SCRIPT, SELECT_OPTION_SCRIPT
 from .browser_identity import identity_script
-from .browser_input import BrowserInputMixin, parse_key as parse_key
+from .browser_input import BrowserInputMixin
+from .browser_input import parse_key as parse_key
 from .browser_observation import read as read_browser
 from .browser_observation import snapshot as snapshot_browser
 from .core import PolicyError, reject_links
