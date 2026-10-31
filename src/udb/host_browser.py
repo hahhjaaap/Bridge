@@ -784,7 +784,7 @@ class Browser(BrowserInputMixin):
                 previous_url = None
             body = (
                 """if(e.tagName==='OPTION')return {ok:false,error:'use_select_option',action:'select_option'};
-                if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+                if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||isInert(e))return {ok:false,error:'disabled'};
 """
                 + CLICK_POINT_SCRIPT
                 + """              return {ok:true,x:point[0],y:point[1]};"""
@@ -815,7 +815,7 @@ class Browser(BrowserInputMixin):
                 "if(e.tagName==='SELECT'){"
                 + select_body
                 + "}\n"
-                + """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+                + """if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||isInert(e))return {ok:false,error:'disabled'};
               if(e.readOnly)return {ok:false,error:'readonly'};
               if(e.isContentEditable){e.focus();e.textContent=__VALUE__;}else{
                 if(!['INPUT','TEXTAREA'].includes(e.tagName)||e.type==='file'||['button','submit','reset','checkbox','radio','hidden','image'].includes((e.type||'').toLowerCase()))return {ok:false,error:'unsupported_control'};
@@ -831,7 +831,7 @@ class Browser(BrowserInputMixin):
             body = (
                 """const native=e.tagName==='INPUT'&&['checkbox','radio'].includes((e.type||'').toLowerCase());const role=(e.getAttribute('role')||'').toLowerCase();
               if(!native&&!['checkbox','radio'].includes(role))return {ok:false,error:'unsupported_control'};
-              if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||e.closest('[inert]'))return {ok:false,error:'disabled'};
+              if(e.matches(':disabled')||e.getAttribute('aria-disabled')==='true'||isInert(e))return {ok:false,error:'disabled'};
               const current=native?!!e.checked:e.getAttribute('aria-checked')==='true';
               if(current===__DESIRED__)return {ok:true,checked:current,already_set:true};
               if((native&&e.type==='radio'||role==='radio')&&__DESIRED__===false)return {ok:false,error:'radio_cannot_be_unchecked'};
@@ -917,7 +917,7 @@ class Browser(BrowserInputMixin):
             matches=findMatches();
             if(matches===null){finish({ok:false,error:'invalid_selector',state:waitState});return;}
             const visibleMatches=matches.filter(isVisible);
-            const enabledMatches=visibleMatches.filter(e=>!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!e.closest('[inert]'));
+            const enabledMatches=visibleMatches.filter(e=>!e.matches(':disabled')&&e.getAttribute('aria-disabled')!=='true'&&!isInert(e));
             const textMatches=matches.filter(e=>String(e.innerText||e.textContent||'').includes(wantedText));
             const ok=waitState==='attached'?matches.length>0:
               waitState==='visible'?visibleMatches.length>0:
