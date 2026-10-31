@@ -8,6 +8,7 @@ Uncertain timed-out commands are never automatically replayed.
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from collections import deque
@@ -16,6 +17,7 @@ from .core import PolicyError
 
 MAX_REPLY_BYTES = 12 * 1048576
 MAX_EVENT_MARKERS = 128
+MAX_COMMAND_TIMEOUT_SECONDS = 60
 _EVENT_PREFIXES = ("Target.", "Page.", "Runtime.", "Network.")
 
 
@@ -36,21 +38,29 @@ class CDPChannel:
             return tuple(self._event_markers)
 
     def call(self, method, params=None, session=None, timeout=10):
-        from websocket import WebSocketTimeoutException
+        from websocket import WebSocketConnectionClosedException, WebSocketTimeoutException
 
         with self._lock:
             if not self.process or not self.process.alive():
                 raise PolicyError("Owned browser has exited")
-            if timeout <= 0:
-                raise PolicyError(
-                    "Browser action budget exceeded; inspect before retrying"
-                )
+            if (
+                isinstance(timeout, bool)
+                or not isinstance(timeout, (int, float))
+                or not math.isfinite(timeout)
+                or not 0 < timeout <= MAX_COMMAND_TIMEOUT_SECONDS
+            ):
+                raise PolicyError("Invalid browser command timeout")
             self.seq += 1
             request_id = self.seq
             message = dict(id=request_id, method=method, params=params or {})
             if session:
                 message["sessionId"] = session
-            self.websocket.send(json.dumps(message))
+            try:
+                self.websocket.send(
+                    json.dumps(message, separators=(",", ":"), ensure_ascii=False)
+                )
+            except (OSError, WebSocketConnectionClosedException) as exc:
+                raise PolicyError("Private browser connection closed") from exc
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if not self.process.alive():
@@ -62,9 +72,17 @@ class CDPChannel:
                     raw = self.websocket.recv()
                 except WebSocketTimeoutException:
                     continue
+                except (OSError, WebSocketConnectionClosedException) as exc:
+                    raise PolicyError("Private browser connection closed") from exc
                 if not raw:
                     raise PolicyError("Private browser connection closed")
-                if len(raw) > MAX_REPLY_BYTES:
+                if isinstance(raw, str):
+                    reply_size = len(raw.encode("utf-8"))
+                elif isinstance(raw, (bytes, bytearray)):
+                    reply_size = len(raw)
+                else:
+                    raise PolicyError("Invalid browser protocol reply")
+                if reply_size > MAX_REPLY_BYTES:
                     raise PolicyError("Browser reply exceeds limit")
                 try:
                     reply = json.loads(raw)
@@ -72,7 +90,7 @@ class CDPChannel:
                     raise PolicyError("Invalid browser protocol reply") from exc
                 if not isinstance(reply, dict):
                     raise PolicyError("Invalid browser protocol reply")
-                if reply.get("id") != request_id:
+                if type(reply.get("id")) is not int or reply.get("id") != request_id:
                     name = reply.get("method")
                     if (
                         isinstance(name, str)
