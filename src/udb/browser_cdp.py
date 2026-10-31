@@ -172,6 +172,10 @@ class CDPChannel:
                 self.websocket.send(
                     json.dumps(message, separators=(",", ":"), ensure_ascii=False)
                 )
+            except WebSocketTimeoutException as exc:
+                raise PolicyError(
+                    "Browser command send timed out; outcome may be unknown; inspect before retrying"
+                ) from exc
             except (OSError, WebSocketConnectionClosedException) as exc:
                 raise PolicyError("Private browser connection closed") from exc
             deadline = time.monotonic() + timeout
