@@ -132,10 +132,19 @@ def audit(root: Path, paths: list[str]) -> dict:
         if finding:
             problems.append({"path": path, "reason": finding})
     repeated = duplicates(root, paths)
+    # Root and installed-source compatibility modules deliberately share code.
+    # They serve different import paths and are not dead-file candidates.
+    alias_pairs = [
+        group
+        for group in repeated
+        if len(group) == 2
+        and any(set(group) == {name, "src/" + name} for name in ROOT_COMPAT)
+    ]
     return {
         "tracked_files": len(paths),
         "unsafe_files": problems,
-        "identical_source_groups": repeated,
+        "identical_source_groups": [group for group in repeated if group not in alias_pairs],
+        "intentional_compatibility_duplicates": alias_pairs,
         "compatibility_shims_retained": sorted(p for p in paths if p in ROOT_COMPAT),
         "third_party_notices_retained": sum(
             p.startswith("THIRD_PARTY_NOTICES/") for p in paths
