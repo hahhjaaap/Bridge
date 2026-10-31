@@ -265,6 +265,7 @@ class Browser(BrowserInputMixin):
         return self._cdp.call(method, params, session, timeout)
 
     def attach(self, target):
+        getattr(self, "_identity_contexts", {}).pop(target, None)
         sid = self.call("Target.attachToTarget", dict(targetId=target, flatten=True))[
             "sessionId"
         ]
