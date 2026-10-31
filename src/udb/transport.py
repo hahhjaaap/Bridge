@@ -196,7 +196,9 @@ class StdioChild:
         try:
             if self.process.stdin:
                 self.process.stdin.close()
-        except OSError:
+        except (OSError, ValueError):
+            # A worker may already have closed this pipe during teardown.
+            # Closing a stopped backend must remain idempotent.
             pass
         if self.process.poll() is None:
             try:
