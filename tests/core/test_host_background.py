@@ -840,6 +840,55 @@ def test_click_without_navigation_does_not_wait_for_document_ready():
     assert result == {"navigation_completed": False}
 
 
+
+def test_browser_click_navigation_falls_back_when_frame_events_are_missing():
+    browser = Browser.__new__(Browser)
+    browser.tabs = {"owned-tab": "owned-session"}
+
+    class EventChannel:
+        def wait_for_event(self, methods, session=None, timeout=1, match=None):
+            if isinstance(methods, tuple):
+                return None
+            return {
+                "method": "Page.lifecycleEvent",
+                "sessionId": session,
+                "frameId": "main-frame",
+                "loaderId": "new-loader",
+                "name": "load",
+            }
+
+    browser._cdp = EventChannel()
+
+    def call(method, params=None, session=None, timeout=10):
+        if method == "Target.getTargets":
+            return {
+                "targetInfos": [
+                    {"targetId": "owned-tab", "url": "https://same.example/forms"}
+                ]
+            }
+        if method == "Page.getFrameTree":
+            return {
+                "frameTree": {
+                    "frame": {"id": "main-frame", "loaderId": "new-loader"}
+                }
+            }
+        pytest.fail(f"Unexpected CDP call: {method}")
+
+    browser.call = call
+    browser.evaluate = lambda tab, expression, timeout=10, **kwargs: {
+        "readyState": "complete",
+        "href": "https://same.example/forms",
+    }
+    result = browser._wait_for_click_navigation(
+        "owned-tab",
+        "https://same.example/forms",
+        previous_loader_id="old-loader",
+        previous_frame_id="main-frame",
+    )
+    assert result["navigation_completed"]
+    assert result["url"] == "https://same.example/forms"
+
+
 def test_browser_navigation_waits_for_lifecycle_event_before_polling_frame_tree():
     browser = Browser.__new__(Browser)
     browser.tabs = {"owned-tab": "owned-session"}
