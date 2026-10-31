@@ -1017,7 +1017,7 @@ class Browser(BrowserInputMixin):
               waitState==='enabled'?enabledMatches.length>0:
               waitState==='text'?textMatches.length>0:false;
             if(ok){finish({ok:true,state:waitState,matches:matches.length,visible:visibleMatches.length,enabled:enabledMatches.length});return;}
-            if(traversalTruncated&&matches.length===0){
+            if(traversalTruncated&&(matches.length===0||waitState==='hidden')){
               finish({ok:false,error:'locator_search_truncated',state:waitState});return;
             }
           };
